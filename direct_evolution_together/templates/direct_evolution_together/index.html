@@ -1,0 +1,3145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>direct-evolution-together</title>
+    <style>
+      :root {
+        --bg: #09090b;
+        --surface: #0f0f12;
+        --surface-2: #17171c;
+        --surface-3: #1f1f26;
+        --border: rgba(255, 255, 255, 0.08);
+        --border-strong: rgba(255, 255, 255, 0.16);
+        --text: #fafafa;
+        --muted: #a1a1aa;
+        --dim: #71717a;
+        --accent: #fafafa;
+        --ok: #34d399;
+        --err: #fb7185;
+        --gold: #f59e0b;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+      body {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 1rem;
+        border-bottom: 1px solid var(--border);
+        background: rgba(9, 9, 11, 0.8);
+        backdrop-filter: blur(8px);
+      }
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        font-size: 0.88rem;
+        font-weight: 500;
+        letter-spacing: -0.015em;
+      }
+      .brand-mark {
+        width: 14px;
+        height: 14px;
+        color: var(--text);
+        opacity: 0.9;
+      }
+      .room-tag {
+        font-family: var(--mono);
+        font-size: 0.74rem;
+        color: var(--dim);
+      }
+      .private-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.28rem;
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        color: var(--ok);
+        background: rgba(52, 211, 153, 0.1);
+        border: 1px solid rgba(52, 211, 153, 0.28);
+        border-radius: 999px;
+        padding: 0.1rem 0.48rem;
+      }
+      .share-btn {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        background: transparent;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.2rem 0.5rem;
+      }
+      .share-btn:hover {
+        color: var(--text);
+        border-color: var(--border-strong);
+      }
+      .header-right {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.9rem;
+      }
+      .paper-link {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--muted);
+        text-decoration: none;
+        padding: 0.2rem 0.5rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        transition: color 0.15s ease, border-color 0.15s ease;
+      }
+      .paper-link:hover {
+        color: var(--text);
+        border-color: var(--border-strong);
+      }
+      .status {
+        font-size: 0.76rem;
+        font-family: var(--mono);
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        color: var(--muted);
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--err);
+      }
+      .dot.connected {
+        background: var(--ok);
+        box-shadow: 0 0 8px rgba(52, 211, 153, 0.45);
+      }
+      main {
+        flex: 1;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 330px;
+        align-items: start;
+        gap: 1rem;
+        max-width: 1400px;
+        width: 100%;
+        margin: 1rem auto;
+        padding: 0 1rem;
+      }
+      @media (max-width: 860px) {
+        main {
+          grid-template-columns: 1fr;
+          margin: 1rem auto;
+        }
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        display: flex;
+        flex-direction: column;
+      }
+      .evo-panel {
+        position: relative;
+        padding: 0;
+      }
+      .goal-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0 1rem;
+        border-bottom: 1px solid var(--border);
+        min-height: 44px;
+      }
+      .goal-tabs {
+        display: flex;
+        align-items: stretch;
+        gap: 0.15rem;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .goal-tab {
+        position: relative;
+        background: transparent;
+        color: var(--muted);
+        border: none;
+        border-radius: 0;
+        padding: 0.7rem 0.6rem;
+        font-size: 0.82rem;
+        font-weight: 500;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.38rem;
+        transition: color 0.15s ease;
+        white-space: nowrap;
+      }
+      .goal-tab:hover { color: var(--text); }
+      .goal-tab.active {
+        color: var(--text);
+      }
+      .goal-tab.active::after {
+        content: "";
+        position: absolute;
+        left: 0.45rem;
+        right: 0.45rem;
+        bottom: 0;
+        height: 1.5px;
+        background: var(--text);
+      }
+      .goal-tab .gen-pill {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--dim);
+      }
+      .goal-tab.active .gen-pill { color: var(--muted); }
+      .new-goal-form {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+      }
+      .new-goal-form input {
+        width: 108px;
+        padding: 0.26rem 0.5rem;
+        font-size: 0.76rem;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        color: var(--text);
+        transition: border-color 0.15s ease, background 0.15s ease, width 0.15s ease;
+      }
+      .new-goal-form input::placeholder { color: var(--dim); }
+      .new-goal-form input:hover { border-color: var(--border); }
+      .new-goal-form input:focus {
+        outline: none;
+        width: 132px;
+        background: var(--bg);
+        border-color: var(--border-strong);
+      }
+      .new-goal-form button {
+        padding: 0.26rem 0.52rem;
+        font-size: 0.76rem;
+        font-weight: 500;
+        background: transparent;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+      }
+      .new-goal-form button:hover {
+        color: var(--text);
+        border-color: var(--border-strong);
+      }
+      .evo-body {
+        padding: 0.9rem 1rem 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+      .controls-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.65rem;
+      }
+      .goal-meta {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5rem;
+      }
+      .goal-meta h2 {
+        margin: 0;
+        font-size: 0.95rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+      }
+      .gen-tag {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--dim);
+      }
+      .sigma-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        font-size: 0.75rem;
+        color: var(--dim);
+        font-family: var(--mono);
+      }
+      .sigma-label input[type="range"] {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 68px;
+        height: 3px;
+        background: var(--surface-3);
+        border-radius: 999px;
+        border: none;
+        outline: none;
+        cursor: pointer;
+      }
+      .sigma-label input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: var(--text);
+        border: none;
+        cursor: pointer;
+      }
+      .sigma-label input[type="range"]::-moz-range-thumb {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: var(--text);
+        border: none;
+        cursor: pointer;
+      }
+      .pop-input {
+        width: 44px;
+        background: var(--surface-2);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 0.14rem 0.25rem;
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        font-variant-numeric: tabular-nums;
+        text-align: center;
+      }
+      .pop-input:focus {
+        outline: none;
+        border-color: var(--border-strong);
+      }
+      .pop-input:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .inline-num-field {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.28rem;
+        padding: 0.14rem 0.28rem 0.14rem 0.42rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg);
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--dim);
+        cursor: help;
+        white-space: nowrap;
+      }
+      .inline-num-field:hover {
+        border-color: var(--border-strong);
+        color: var(--muted);
+      }
+      .inline-num-field .pop-input {
+        border: none;
+        background: transparent;
+        padding: 0.08rem 0.1rem;
+        width: 36px;
+      }
+      .vote-budget-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 0.12rem 0.48rem;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .vote-budget-pill.at-cap {
+        border-color: rgba(245, 196, 81, 0.45);
+        background: rgba(245, 196, 81, 0.1);
+        color: var(--gold);
+      }
+      .throttle-banner {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--gold);
+        background: rgba(245, 196, 81, 0.08);
+        border: 1px solid rgba(245, 196, 81, 0.28);
+        border-radius: 7px;
+        padding: 0.35rem 0.6rem;
+      }
+      .throttle-banner[hidden] { display: none; }
+      .lineage-panel {
+        grid-column: 1 / -1;
+        padding: 0;
+        overflow: hidden;
+      }
+      .lineage-panel[hidden] { display: none; }
+      .lineage-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        padding: 0.72rem 1rem;
+        border-bottom: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.015);
+      }
+      .lineage-title-group {
+        display: flex;
+        align-items: baseline;
+        gap: 0.55rem;
+      }
+      .lineage-title-group h3 {
+        margin: 0;
+        font-size: 0.88rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      .lineage-stats {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        color: var(--dim);
+      }
+      .lineage-controls {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+      }
+      .lineage-legend {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.65rem;
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--muted);
+      }
+      .legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+      }
+      .legend-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+      }
+      .legend-dot.elite { background: #f5c451; }
+      .legend-dot.crossover { background: #38bdf8; }
+      .legend-dot.mutation { background: #34d399; }
+      .legend-dot.random { background: #71717a; }
+      .lineage-viewport {
+        position: relative;
+        overflow-x: auto;
+        overflow-y: auto;
+        max-height: 440px;
+        background:
+          radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.04) 1px, transparent 0);
+        background-size: 20px 20px;
+      }
+      .lineage-canvas-wrap {
+        position: relative;
+        display: inline-flex;
+        min-width: 100%;
+        min-height: 180px;
+      }
+      .lineage-svg {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 1;
+        overflow: visible;
+      }
+      .lineage-edge {
+        fill: none;
+        stroke-width: 1.5;
+        opacity: 0.42;
+        transition: opacity 0.14s ease, stroke-width 0.14s ease;
+      }
+      .lineage-edge.op-elite { stroke: #f5c451; }
+      .lineage-edge.op-crossover { stroke: #38bdf8; }
+      .lineage-edge.op-mutation { stroke: #34d399; }
+      .lineage-edge.op-random { stroke: #71717a; }
+      .lineage-edge.highlighted {
+        opacity: 0.96;
+        stroke-width: 2.3;
+      }
+      .lineage-edge.dimmed {
+        opacity: 0.08;
+      }
+      .lineage-columns {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        align-items: flex-start;
+        gap: 34px;
+        padding: 12px 14px 14px;
+      }
+      .lineage-col {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+      .lineage-col-header {
+        font-family: var(--mono);
+        font-size: 0.64rem;
+        font-weight: 500;
+        color: var(--muted);
+        padding: 0.14rem 0.45rem;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(15, 15, 18, 0.9);
+      }
+      .lineage-col.current-gen .lineage-col-header {
+        color: var(--gold);
+        border-color: rgba(245, 196, 81, 0.35);
+      }
+      .lineage-node {
+        width: 46px;
+        padding: 2px;
+        border-radius: 5px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        cursor: pointer;
+        transition: transform 0.12s ease, border-color 0.14s ease, opacity 0.14s ease, box-shadow 0.14s ease;
+      }
+      .lineage-node:hover {
+        transform: translateY(-1px);
+        border-color: var(--border-strong);
+      }
+      .lineage-node.is-live {
+        border-color: rgba(255, 255, 255, 0.22);
+      }
+      .lineage-node.highlighted {
+        border-color: var(--text);
+        box-shadow: 0 0 0 2px rgba(244, 244, 245, 0.16);
+        opacity: 1;
+      }
+      .lineage-node.dimmed {
+        opacity: 0.22;
+      }
+      .lineage-node canvas {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border-radius: 3px;
+        display: block;
+        background: #000;
+      }
+      .lineage-node-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 1px;
+        font-family: var(--mono);
+        font-size: 0.54rem;
+        color: var(--dim);
+      }
+      .op-chip {
+        padding: 0 3px;
+        border-radius: 3px;
+        font-weight: 600;
+        font-size: 0.5rem;
+        letter-spacing: 0.02em;
+      }
+      .op-chip.op-elite { color: #f5c451; background: rgba(245, 196, 81, 0.14); }
+      .op-chip.op-crossover { color: #38bdf8; background: rgba(56, 189, 248, 0.14); }
+      .op-chip.op-mutation { color: #34d399; background: rgba(52, 211, 153, 0.14); }
+      .op-chip.op-random { color: #a1a1aa; background: rgba(113, 113, 122, 0.18); }
+      .round-banner {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+      }
+      .round-banner-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 0.74rem;
+        font-family: var(--mono);
+        color: var(--muted);
+      }
+      .round-timer {
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+        color: var(--gold);
+      }
+      .round-timer.waiting {
+        color: var(--dim);
+        font-weight: 400;
+      }
+      .progress-track {
+        height: 2px;
+        border-radius: 999px;
+        background: var(--surface-3);
+        overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%;
+        width: 0%;
+        background: rgba(255, 255, 255, 0.45);
+        transition: width 0.1s linear;
+      }
+      .progress-fill.counting {
+        background: var(--gold);
+      }
+      .grid-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+      .filter-tabs {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.2rem;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 2px;
+      }
+      .filter-tab {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.24rem 0.55rem;
+        border: none;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 0.74rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.12s ease, color 0.12s ease;
+      }
+      .filter-tab:hover {
+        color: var(--text);
+      }
+      .filter-tab.active {
+        background: var(--surface-3);
+        color: var(--text);
+      }
+      .filter-tab .tab-cnt {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--dim);
+      }
+      .filter-tab.active .tab-cnt {
+        color: var(--gold);
+      }
+      .next-unvoted-btn {
+        font-size: 0.72rem;
+        padding: 0.26rem 0.6rem;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
+        gap: 0.75rem;
+        padding: 0.15rem 4px 0.25rem 0;
+        max-height: 620px;
+        overflow-y: auto;
+        scroll-behavior: smooth;
+      }
+      @media (max-width: 500px) {
+        .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      .genome-card {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 4px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        transition: border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      .genome-card[hidden] {
+        display: none;
+      }
+      .genome-card.voted-done {
+        opacity: 0.45;
+      }
+      .genome-card.jump-focus {
+        border-color: var(--gold);
+        box-shadow: 0 0 0 2px rgba(245, 196, 81, 0.35);
+      }
+      .genome-card:hover {
+        border-color: var(--border-strong);
+      }
+      .genome-card.positive {
+        border-color: rgba(52, 211, 153, 0.55);
+        box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.12);
+      }
+      .genome-card.negative {
+        border-color: rgba(251, 113, 133, 0.35);
+        opacity: 0.58;
+      }
+      .genome-card canvas {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border-radius: 5px;
+        display: block;
+        background: #000;
+      }
+      .genome-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 1px 2px 2px;
+        font-size: 0.72rem;
+      }
+      .score-badge {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+        color: var(--dim);
+      }
+      .score-badge.pos { color: var(--ok); }
+      .score-badge.neg { color: var(--err); }
+      .vote-btns {
+        display: inline-flex;
+        gap: 3px;
+      }
+      .vote-btn {
+        position: relative;
+        background: transparent;
+        color: var(--muted);
+        border: 1px solid transparent;
+        border-radius: 5px;
+        padding: 2px 5px;
+        font-family: var(--mono);
+        font-size: 0.69rem;
+        font-weight: 500;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+      }
+      .vote-btn:hover:not(:disabled) {
+        background: var(--surface-3);
+        color: var(--text);
+      }
+      .vote-btn svg {
+        width: 11px;
+        height: 11px;
+        flex-shrink: 0;
+      }
+      .vote-btn[data-tooltip]:hover::after {
+        content: attr(data-tooltip);
+        position: absolute;
+        bottom: calc(100% + 7px);
+        left: 50%;
+        transform: translateX(-50%);
+        background: #18181b;
+        color: var(--text);
+        border: 1px solid var(--border-strong);
+        border-radius: 6px;
+        padding: 0.28rem 0.5rem;
+        font-family: Inter, system-ui, sans-serif;
+        font-size: 0.68rem;
+        font-weight: 500;
+        line-height: 1.35;
+        white-space: pre-wrap;
+        max-width: 185px;
+        width: max-content;
+        text-align: center;
+        z-index: 40;
+        pointer-events: none;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.55);
+      }
+      .vote-btn.active-up {
+        border-color: rgba(52, 211, 153, 0.35);
+        background: rgba(52, 211, 153, 0.12);
+        color: var(--ok);
+      }
+      .vote-btn.active-down {
+        border-color: rgba(251, 113, 133, 0.35);
+        background: rgba(251, 113, 133, 0.12);
+        color: var(--err);
+      }
+      .cursor-layer {
+        position: absolute;
+        inset: 0;
+        border-radius: 12px;
+        pointer-events: none;
+        overflow: hidden;
+        z-index: 20;
+      }
+      .remote-cursor {
+        position: absolute;
+        top: 0;
+        left: 0;
+        transform: translate3d(0, 0, 0);
+        transition: left 45ms linear, top 45ms linear, opacity 120ms ease;
+        display: inline-flex;
+        align-items: flex-start;
+        gap: 2px;
+        will-change: left, top;
+      }
+      .remote-cursor-arrow {
+        width: 13px;
+        height: 13px;
+        flex-shrink: 0;
+        filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.65));
+      }
+      .remote-cursor-label {
+        margin-top: 9px;
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        font-weight: 600;
+        color: #09090b;
+        white-space: nowrap;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+      }
+      .rail {
+        height: 552px;
+        overflow: hidden;
+      }
+      @media (max-width: 860px) {
+        .rail { height: 420px; }
+      }
+      .rail-section {
+        padding: 0.7rem 0.9rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .rail-label {
+        margin: 0 0 0.45rem;
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--dim);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .name-form {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+      }
+      .name-form input {
+        padding: 0.34rem 0.55rem;
+        font-size: 0.8rem;
+      }
+      .name-form button {
+        padding: 0.34rem 0.62rem;
+        font-size: 0.76rem;
+      }
+      ul.users {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem 0.65rem;
+      }
+      ul.users li {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.78rem;
+        color: var(--muted);
+      }
+      .user-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .chat-pane {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0.75rem 0.9rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.42rem;
+        font-size: 0.81rem;
+      }
+      .msg {
+        line-height: 1.42;
+        word-break: break-word;
+      }
+      .msg.system {
+        color: var(--dim);
+        font-size: 0.74rem;
+      }
+      .msg .time {
+        font-family: var(--mono);
+        color: var(--dim);
+        font-size: 0.68rem;
+        margin-right: 0.38rem;
+        font-variant-numeric: tabular-nums;
+      }
+      .msg .user {
+        font-weight: 500;
+        margin-right: 0.35rem;
+      }
+      form.composer {
+        display: flex;
+        gap: 0.4rem;
+        padding: 0.55rem 0.7rem;
+        border-top: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.015);
+      }
+      input, button {
+        font: inherit;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+      }
+      input[type="text"] {
+        flex: 1;
+        padding: 0.42rem 0.6rem;
+        font-size: 0.8rem;
+        background: var(--bg);
+        color: var(--text);
+        min-width: 0;
+        transition: border-color 0.15s ease;
+      }
+      input[type="text"]::placeholder { color: var(--dim); }
+      input[type="text"]:focus {
+        outline: none;
+        border-color: var(--border-strong);
+      }
+      button {
+        padding: 0.42rem 0.75rem;
+        font-size: 0.78rem;
+        background: var(--text);
+        color: var(--bg);
+        border-color: var(--text);
+        font-weight: 500;
+        cursor: pointer;
+        transition: opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+      }
+      button:hover:not(:disabled) { opacity: 0.9; }
+      button.ghost {
+        background: transparent;
+        color: var(--muted);
+        border-color: var(--border);
+        padding: 0.28rem 0.6rem;
+        font-size: 0.75rem;
+      }
+      button.ghost:hover:not(:disabled) {
+        opacity: 1;
+        color: var(--text);
+        border-color: var(--border-strong);
+      }
+      button:disabled {
+        opacity: 0.38;
+        cursor: not-allowed;
+      }
+      .toast {
+        position: fixed;
+        bottom: 1.25rem;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #141418;
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        padding: 0.5rem 0.75rem;
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        font-size: 0.76rem;
+        color: var(--muted);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+        z-index: 60;
+      }
+      .toast[hidden] { display: none; }
+      .toast code {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--text);
+        background: var(--bg);
+        border: 1px solid var(--border);
+        padding: 0.18rem 0.45rem;
+        border-radius: 5px;
+      }
+      .toast .close-toast {
+        background: transparent;
+        border: none;
+        color: var(--dim);
+        padding: 0.15rem 0.3rem;
+        font-size: 0.85rem;
+      }
+      .toast .close-toast:hover { color: var(--text); }
+      .reconnect-overlay {
+        position: fixed;
+        inset: 48px 0 0 0;
+        background: rgba(9, 9, 11, 0.72);
+        backdrop-filter: blur(6px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 80;
+        padding: 1rem;
+      }
+      .reconnect-overlay[hidden] { display: none; }
+      .reconnect-card {
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        padding: 1.1rem 1.35rem;
+        min-width: 280px;
+        max-width: 360px;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
+      }
+      .reconnect-head {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        font-size: 0.88rem;
+        font-weight: 500;
+      }
+      .reconnect-pulse {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--gold);
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6);
+        animation: pulse-ring 1.4s ease-out infinite;
+      }
+      @keyframes pulse-ring {
+        0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6); }
+        70% { box-shadow: 0 0 0 7px rgba(245, 158, 11, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+      }
+      .reconnect-sub {
+        font-family: var(--mono);
+        font-size: 0.74rem;
+        color: var(--muted);
+      }
+      .reconnect-actions {
+        display: flex;
+        justify-content: flex-end;
+      }
+      .loading-overlay {
+        position: absolute;
+        inset: 0;
+        border-radius: 12px;
+        background: rgba(15, 15, 18, 0.86);
+        backdrop-filter: blur(4px);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.65rem;
+        z-index: 35;
+        font-family: var(--mono);
+        font-size: 0.76rem;
+        color: var(--muted);
+      }
+      .loading-overlay[hidden] { display: none; }
+      .spinner {
+        width: 18px;
+        height: 18px;
+        border: 1.5px solid var(--border-strong);
+        border-top-color: var(--text);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      .evo-workspace[hidden] { display: none; }
+      .evo-workspace {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+      .private-empty {
+        min-height: 360px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 1rem;
+        padding: 1.5rem 1.25rem;
+        max-width: 580px;
+        margin: 0 auto;
+      }
+      .private-empty[hidden] { display: none; }
+      .private-empty h3 {
+        margin: 0;
+        font-size: 0.98rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+      }
+      .private-empty p {
+        margin: 0;
+        font-size: 0.82rem;
+        line-height: 1.55;
+        color: var(--muted);
+      }
+      .private-steps {
+        margin: 0;
+        padding-left: 1.15rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.42rem;
+        font-size: 0.79rem;
+        line-height: 1.48;
+        color: var(--muted);
+      }
+      .private-steps strong {
+        color: var(--text);
+        font-weight: 500;
+      }
+      .private-empty-form {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        margin-top: 0.2rem;
+      }
+      .private-goal-row {
+        display: flex;
+        gap: 0.45rem;
+      }
+      .ga-params-panel {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 0.75rem 0.85rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.55rem;
+      }
+      .ga-params-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-family: var(--mono);
+        font-size: 0.69rem;
+        color: var(--dim);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .ga-params-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+        gap: 0.55rem;
+      }
+      .ga-param-card {
+        display: flex;
+        flex-direction: column;
+        gap: 0.28rem;
+        padding: 0.48rem 0.58rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg);
+        cursor: help;
+      }
+      .ga-param-card:hover {
+        border-color: var(--border-strong);
+      }
+      .ga-param-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.35rem;
+        font-size: 0.73rem;
+        font-weight: 500;
+        color: var(--text);
+      }
+      .ga-param-range {
+        font-family: var(--mono);
+        font-size: 0.64rem;
+        color: var(--dim);
+      }
+      .ga-param-card .pop-input {
+        width: 100%;
+        text-align: left;
+        padding: 0.24rem 0.4rem;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+      }
+      .ga-param-hint {
+        font-size: 0.66rem;
+        line-height: 1.3;
+        color: var(--dim);
+      }
+      .ga-more-popover {
+        position: relative;
+      }
+      .ga-more-popover > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 0.24rem 0.48rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--muted);
+        background: var(--bg);
+        user-select: none;
+      }
+      .ga-more-popover > summary::-webkit-details-marker { display: none; }
+      .ga-more-popover[open] > summary,
+      .ga-more-popover > summary:hover {
+        color: var(--text);
+        border-color: var(--border-strong);
+      }
+      .ga-popover-body {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 6px);
+        z-index: 45;
+        width: 224px;
+        background: #141418;
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        padding: 0.65rem 0.75rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.48rem;
+        box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
+      }
+      .ga-popover-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        font-size: 0.72rem;
+        color: var(--muted);
+      }
+      .ga-popover-row .pop-input {
+        width: 64px;
+      }
+      .private-footnote {
+        font-family: var(--mono);
+        font-size: 0.69rem;
+        color: var(--dim);
+        text-align: center;
+        padding-top: 0.25rem;
+      }
+      .fs-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(9, 9, 11, 0.9);
+        backdrop-filter: blur(10px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.25rem;
+        z-index: 90;
+      }
+      .fs-overlay[hidden] { display: none; }
+      .fs-dialog {
+        width: min(740px, 100%);
+        max-height: 94vh;
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: 14px;
+        padding: 0.9rem 1rem 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65);
+      }
+      .fs-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+      }
+      .fs-title-wrap {
+        display: flex;
+        align-items: baseline;
+        gap: 0.55rem;
+        font-family: var(--mono);
+        font-size: 0.82rem;
+        color: var(--text);
+      }
+      .fs-sub {
+        color: var(--muted);
+        font-size: 0.75rem;
+      }
+      .fs-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+      }
+      .fs-stage {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.65rem;
+      }
+      #fs-canvas {
+        width: min(512px, 72vh, 100%);
+        aspect-ratio: 1 / 1;
+        border-radius: 10px;
+        background: #000;
+        border: 1px solid var(--border);
+        display: block;
+      }
+      .fs-nav-btn {
+        background: var(--surface-2);
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        width: 34px;
+        height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        font-size: 1rem;
+        flex-shrink: 0;
+      }
+      .fs-nav-btn:hover {
+        color: var(--text);
+        border-color: var(--border-strong);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="title">
+        <svg class="brand-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="1.5" y="1.5" width="5" height="5" rx="1" fill="currentColor" opacity="0.95" />
+          <rect x="9.5" y="1.5" width="5" height="5" rx="1" fill="currentColor" opacity="0.4" />
+          <rect x="1.5" y="9.5" width="5" height="5" rx="1" fill="currentColor" opacity="0.4" />
+          <rect x="9.5" y="9.5" width="5" height="5" rx="1" fill="currentColor" opacity="0.7" />
+        </svg>
+        <span>direct-evolution-together</span>
+        {% if is_private %}
+          <span class="private-badge">
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+              <rect x="3" y="7" width="10" height="7" rx="1.5" />
+              <path d="M5 7V5a3 3 0 0 1 6 0v2" />
+            </svg>
+            private
+          </span>
+          <button id="share-link-btn" type="button" class="share-btn" title="Copy private invite link">Share link</button>
+          <a class="paper-link" href="{{ base_path }}/" title="Return to public lobby">&larr; Lobby</a>
+        {% else %}
+          <span class="room-tag">/lobby</span>
+        {% endif %}
+      </div>
+      <div class="header-right">
+        <a
+          class="paper-link"
+          href="https://doi.org/10.1145/1357054.1357328"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Secretan et al. (2008) — Picbreeder: Evolving pictures collaboratively online (CHI '08)"
+        >Picbreeder ’08 &nearr;</a>
+        <div class="status">
+          <span id="status-dot" class="dot"></span>
+          <span id="status-text">connecting</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="card evo-panel" id="evo-panel">
+        <div id="cursor-layer" class="cursor-layer"></div>
+        <div id="loading-overlay" class="loading-overlay">
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Loading population...</span>
+        </div>
+        <div class="goal-bar">
+          <div id="goal-tabs" class="goal-tabs"></div>
+          <form id="new-goal-form" class="new-goal-form">
+            <input
+              id="new-goal-input"
+              type="text"
+              placeholder="{% if is_private %}Add private goal...{% else %}Private goal...{% endif %}"
+              maxlength="32"
+            />
+            <label class="inline-num-field" title="Population size per generation (3-64 individuals)">
+              <span>pop</span>
+              <input
+                id="new-goal-pop"
+                class="pop-input"
+                type="number"
+                min="3"
+                max="64"
+                step="1"
+                value="{{ initial_pop|default:30 }}"
+                aria-label="Population size"
+              />
+            </label>
+            <label class="inline-num-field" title="Max active votes allowed per person per round (1-20)">
+              <span>votes</span>
+              <input
+                id="new-goal-max-votes"
+                class="pop-input"
+                type="number"
+                min="1"
+                max="20"
+                step="1"
+                value="{{ initial_max_votes|default:5 }}"
+                aria-label="Max votes per user"
+              />
+            </label>
+            <details class="ga-more-popover">
+              <summary title="Configure mutation, elite fraction, and crossover rate">GA &darr;</summary>
+              <div class="ga-popover-body">
+                <label class="ga-popover-row" title="Constant mutation weight perturbation scale (0.05-1.00)">
+                  <span>Mutation &sigma;</span>
+                  <input id="new-goal-sigma" class="pop-input" type="number" min="0.05" max="1.0" step="0.05" value="{{ initial_mut_sigma|default:'0.35' }}" aria-label="Mutation sigma" />
+                </label>
+                <label class="ga-popover-row" title="Fraction of liked tops copied unchanged to the next generation (0.00-0.50)">
+                  <span>Elite frac</span>
+                  <input id="new-goal-elite" class="pop-input" type="number" min="0" max="0.5" step="0.05" value="{{ initial_elite_frac|default:'0.10' }}" aria-label="Elite fraction" />
+                </label>
+                <label class="ga-popover-row" title="Probability of neuron-unit parent crossover when breeding (0.00-1.00)">
+                  <span>Crossover</span>
+                  <input id="new-goal-crossover" class="pop-input" type="number" min="0" max="1" step="0.05" value="{{ initial_crossover_rate|default:'0.75' }}" aria-label="Crossover rate" />
+                </label>
+              </div>
+            </details>
+            {% if is_private %}
+              <button type="submit">+ Goal</button>
+            {% else %}
+              <button type="submit" title="Create a private goal room with a shareable link">+ Private</button>
+            {% endif %}
+          </form>
+        </div>
+
+        <div class="evo-body">
+          <div id="private-empty-state" class="private-empty" hidden>
+            <h3>Create Private Room</h3>
+            <p>
+              Think of a <strong>genetic algorithm</strong> as digital breeding: every image is drawn by a tiny neural network whose weights act like DNA.
+              Your likes select the best parents, mix their traits together (<em>crossover</em>), and add small random tweaks (<em>mutation</em>) each round.
+            </p>
+            <ol class="private-steps">
+              <li><strong>Customize the goal &amp; genetic algorithm parameters</strong> below (locked once evolution begins, isolated from <code>/lobby</code>).</li>
+              <li><strong>Share link</strong> from the top bar so teammates join the exact same private room.</li>
+              <li><strong>Vote together</strong> — 3 votes start the synchronized timer to breed the next generation.</li>
+            </ol>
+            <form id="empty-goal-form" class="private-empty-form">
+              <div class="private-goal-row">
+                <input id="empty-goal-input" type="text" placeholder="Goal e.g. Neon Orchid, Bioluminescent Coral..." maxlength="32" />
+                <button type="submit">Start Goal</button>
+              </div>
+              <div class="ga-params-panel">
+                <div class="ga-params-heading">
+                  <span>Genetic Algorithm Parameters</span>
+                  <span>constant during session</span>
+                </div>
+                <div class="ga-params-grid">
+                  <label class="ga-param-card" title="Number of CPPN individuals displayed and evolved every generation (3-64)">
+                    <span class="ga-param-top"><span>Population size</span><span class="ga-param-range">3–64</span></span>
+                    <input id="empty-pop-input" class="pop-input" type="number" min="3" max="64" step="1" value="{{ initial_pop|default:30 }}" aria-label="Population size" />
+                    <span class="ga-param-hint">Candidates per generation</span>
+                  </label>
+                  <label class="ga-param-card" title="Maximum active votes each participant can hold in a single round (1-20)">
+                    <span class="ga-param-top"><span>Votes / person</span><span class="ga-param-range">1–20</span></span>
+                    <input id="empty-max-votes-input" class="pop-input" type="number" min="1" max="20" step="1" value="{{ initial_max_votes|default:5 }}" aria-label="Max votes per user" />
+                    <span class="ga-param-hint">Active votes per round</span>
+                  </label>
+                  <label class="ga-param-card" title="Gaussian weight mutation step size applied to bred offspring (0.05-1.00)">
+                    <span class="ga-param-top"><span>Mutation &sigma;</span><span class="ga-param-range">0.05–1.00</span></span>
+                    <input id="empty-sigma-input" class="pop-input" type="number" min="0.05" max="1.0" step="0.05" value="{{ initial_mut_sigma|default:'0.35' }}" aria-label="Mutation sigma" />
+                    <span class="ga-param-hint">Weight perturbation scale</span>
+                  </label>
+                  <label class="ga-param-card" title="Share of highest-scored liked individuals preserved verbatim each generation (0.00-0.50)">
+                    <span class="ga-param-top"><span>Elite fraction</span><span class="ga-param-range">0.00–0.50</span></span>
+                    <input id="empty-elite-input" class="pop-input" type="number" min="0" max="0.5" step="0.05" value="{{ initial_elite_frac|default:'0.10' }}" aria-label="Elite fraction" />
+                    <span class="ga-param-hint">Unchanged top carry-overs</span>
+                  </label>
+                  <label class="ga-param-card" title="Probability of neuron-unit parent mixing vs asexual mutation (0.00-1.00)">
+                    <span class="ga-param-top"><span>Crossover rate</span><span class="ga-param-range">0.00–1.00</span></span>
+                    <input id="empty-crossover-input" class="pop-input" type="number" min="0" max="1" step="0.05" value="{{ initial_crossover_rate|default:'0.75' }}" aria-label="Crossover rate" />
+                    <span class="ga-param-hint">Two-parent neuron mixing</span>
+                  </label>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          <div id="evo-workspace" class="evo-workspace">
+            <div class="controls-bar">
+              <div class="goal-meta">
+                <h2 id="active-goal-title">Loading...</h2>
+                <span id="active-goal-gen" class="gen-tag">gen 0</span>
+              </div>
+            </div>
+
+            <div class="round-banner">
+              <div class="round-banner-top">
+                <span id="round-vote-text">Votes: 0 / 3</span>
+                <span id="user-vote-budget" class="vote-budget-pill" title="Active vote budget per person each round — click an active vote again to free a slot">Your votes: 0 / {{ initial_max_votes|default:5 }}</span>
+                <span id="round-timer" class="round-timer waiting">Need 3 more votes</span>
+              </div>
+              <div id="throttle-banner" class="throttle-banner" hidden></div>
+              <div class="progress-track">
+                <div id="round-progress" class="progress-fill"></div>
+              </div>
+            </div>
+
+            <div class="grid-toolbar">
+              <div class="filter-tabs" role="tablist" aria-label="Candidate filter">
+                <button id="tab-all" type="button" class="filter-tab active" data-filter="all">All <span id="tab-all-count" class="tab-cnt">{{ initial_pop|default:30 }}</span></button>
+                <button id="tab-unvoted" type="button" class="filter-tab" data-filter="unvoted">Needs vote <span id="tab-unvoted-count" class="tab-cnt">{{ initial_pop|default:30 }}</span></button>
+              </div>
+              <button id="next-unvoted-btn" type="button" class="ghost next-unvoted-btn">Next unvoted &darr;</button>
+            </div>
+
+            <div id="genome-grid" class="grid"></div>
+
+            {% if is_private %}
+              <div class="private-footnote">
+                Private room · Isolated from /lobby · Share URL in header to collaborate · Click ↓ to export .pt + uv runner
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </section>
+
+      <aside class="card rail">
+        <div class="rail-section">
+          <div class="rail-label">Handle</div>
+          <form id="name-form" class="name-form">
+            <input id="name-input" type="text" placeholder="Nickname" maxlength="24" />
+            <button type="submit" class="ghost">Set</button>
+          </form>
+        </div>
+
+        <div class="rail-section">
+          <div class="rail-label">Online · <span id="online-count">0</span></div>
+          <ul id="users-list" class="users"></ul>
+        </div>
+
+        <div class="chat-pane">
+          <div id="messages" class="messages"></div>
+          <form id="chat-form" class="composer">
+            <input id="chat-input" type="text" placeholder="Message..." autocomplete="off" maxlength="2000" />
+            <button id="send-btn" type="submit" disabled>Send</button>
+          </form>
+        </div>
+      </aside>
+
+      <section class="card lineage-panel" id="lineage-panel" hidden>
+        <div class="lineage-head">
+          <div class="lineage-title-group">
+            <h3>Lineage Tree</h3>
+            <span id="lineage-stats" class="lineage-stats">Gen 0 · 0 individuals</span>
+          </div>
+          <div class="lineage-controls">
+            <div class="lineage-legend" aria-label="Lineage operator legend">
+              <span class="legend-item"><span class="legend-dot elite"></span>Elite (E)</span>
+              <span class="legend-item"><span class="legend-dot crossover"></span>Crossover (X)</span>
+              <span class="legend-item"><span class="legend-dot mutation"></span>Mutation (M)</span>
+              <span class="legend-item"><span class="legend-dot random"></span>Random (R)</span>
+            </div>
+            <div class="filter-tabs" role="tablist" aria-label="Lineage tree filter">
+              <button id="lineage-mode-active" type="button" class="filter-tab active" data-lineage-mode="active">Active ancestry</button>
+              <button id="lineage-mode-all" type="button" class="filter-tab" data-lineage-mode="all">All nodes</button>
+            </div>
+            <button id="lineage-toggle-btn" type="button" class="ghost">Hide</button>
+          </div>
+        </div>
+        <div id="lineage-viewport" class="lineage-viewport">
+          <div id="lineage-canvas-wrap" class="lineage-canvas-wrap">
+            <svg id="lineage-svg" class="lineage-svg"></svg>
+            <div id="lineage-columns" class="lineage-columns"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div id="dl-toast" class="toast" hidden>
+      <span id="dl-toast-label"></span>
+      <code id="dl-toast-cmd"></code>
+      <button id="dl-toast-copy" type="button" class="ghost">Copy</button>
+      <button id="dl-toast-close" type="button" class="close-toast" aria-label="Dismiss">&times;</button>
+    </div>
+
+    <div id="reconnect-overlay" class="reconnect-overlay" hidden>
+      <div class="reconnect-card" role="status" aria-live="polite">
+        <div class="reconnect-head">
+          <span class="reconnect-pulse"></span>
+          <span>Offline · Reconnecting</span>
+        </div>
+        <div id="reconnect-sub" class="reconnect-sub">Waiting for connection...</div>
+        <div class="reconnect-actions">
+          <button id="reconnect-now-btn" type="button" class="ghost">Retry now</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="fullscreen-modal" class="fs-overlay" hidden>
+      <div class="fs-dialog" role="dialog" aria-modal="true" aria-label="Full screen individual view">
+        <div class="fs-head">
+          <div class="fs-title-wrap">
+            <span id="fs-title">Individual</span>
+            <span id="fs-sub" class="fs-sub">gen 0</span>
+            <span id="fs-score" class="score-badge">0</span>
+          </div>
+          <div class="fs-actions">
+            <button id="fs-up-btn" type="button" class="vote-btn up-btn" aria-label="Like">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7v6H2.5a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1H5Zm0 0 2.6-4.4a1.3 1.3 0 0 1 2.3.8V6h3.1a1.2 1.2 0 0 1 1.2 1.4l-.8 4.4a1.3 1.3 0 0 1-1.3 1.2H5"/></svg><span class="cnt">0</span>
+            </button>
+            <button id="fs-down-btn" type="button" class="vote-btn down-btn" aria-label="Dislike">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 9V3H2.5a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1H5Zm0 0 2.6 4.4a1.3 1.3 0 0 0 2.3-.8V10h3.1a1.2 1.2 0 0 0 1.2-1.4l-.8-4.4A1.3 1.3 0 0 0 12.1 3H5"/></svg><span class="cnt">0</span>
+            </button>
+            <button id="fs-dl-btn" type="button" class="ghost" title="Download weights + uv runner">Download .zip</button>
+            <button id="fs-close-btn" type="button" class="ghost" aria-label="Close full screen">Close</button>
+          </div>
+        </div>
+        <div class="fs-stage">
+          <button id="fs-prev-btn" type="button" class="fs-nav-btn" aria-label="Previous individual">&lsaquo;</button>
+          <canvas id="fs-canvas" width="512" height="512"></canvas>
+          <button id="fs-next-btn" type="button" class="fs-nav-btn" aria-label="Next individual">&rsaquo;</button>
+        </div>
+      </div>
+    </div>
+
+    {{ base_path|default:""|json_script:"det-base-path" }}
+    {{ ws_via_proxy|default:False|json_script:"det-ws-via-proxy" }}
+    {{ room_name|default:"lobby"|json_script:"det-room-name" }}
+    {{ is_private|default:False|json_script:"det-is-private" }}
+    {{ initial_goal|default:""|json_script:"det-initial-goal" }}
+    {{ initial_pop|default:30|json_script:"det-initial-pop" }}
+    {{ initial_max_votes|default:5|json_script:"det-initial-max-votes" }}
+    {{ initial_mut_sigma|default:"0.35"|json_script:"det-initial-sigma" }}
+    {{ initial_elite_frac|default:"0.10"|json_script:"det-initial-elite" }}
+    {{ initial_crossover_rate|default:"0.75"|json_script:"det-initial-crossover" }}
+    <script>
+      const basePath = JSON.parse(document.getElementById("det-base-path").textContent) || "";
+      const wsViaProxy = Boolean(JSON.parse(document.getElementById("det-ws-via-proxy").textContent));
+      const roomName = JSON.parse(document.getElementById("det-room-name").textContent);
+      const isPrivateRoom = Boolean(JSON.parse(document.getElementById("det-is-private").textContent));
+      const initialGoal = JSON.parse(document.getElementById("det-initial-goal").textContent);
+      const initialPop = Math.max(3, Math.min(64, Number(JSON.parse(document.getElementById("det-initial-pop").textContent)) || 30));
+      const initialMaxVotes = Math.max(1, Math.min(20, Number(JSON.parse(document.getElementById("det-initial-max-votes").textContent)) || 5));
+      const initialMutSigma = Math.max(0.05, Math.min(1.0, Number(JSON.parse(document.getElementById("det-initial-sigma").textContent)) || 0.35));
+      const initialEliteFrac = Math.max(0.0, Math.min(0.5, Number(JSON.parse(document.getElementById("det-initial-elite").textContent)) ?? 0.10));
+      const initialCrossoverRate = Math.max(0.0, Math.min(1.0, Number(JSON.parse(document.getElementById("det-initial-crossover").textContent)) ?? 0.75));
+      const csrfToken = "{{ csrf_token }}";
+      const CANVAS_SIZE = 64;
+      const FULLSCREEN_CANVAS_SIZE = 512;
+      const coordCache = new Map();
+
+      function getCoords(size) {
+        if (coordCache.has(size)) return coordCache.get(size);
+        const total = size * size;
+        const coordX = new Float32Array(total);
+        const coordY = new Float32Array(total);
+        const coordR = new Float32Array(total);
+        for (let py = 0; py < size; py++) {
+          const y = (py / (size - 1)) * 2 - 1;
+          for (let px = 0; px < size; px++) {
+            const x = (px / (size - 1)) * 2 - 1;
+            const idx = py * size + px;
+            coordX[idx] = x;
+            coordY[idx] = y;
+            coordR[idx] = Math.hypot(x, y);
+          }
+        }
+        const entry = { size, total, coordX, coordY, coordR };
+        coordCache.set(size, entry);
+        return entry;
+      }
+
+      function applyActivation(z, code) {
+        switch (code) {
+          case 0: return Math.tanh(z);
+          case 1: return Math.sin(z * 1.5);
+          case 2: return Math.exp(-z * z);
+          case 3: return Math.abs(z) - 0.5;
+          default: return z > 0 ? z : 0.1 * z;
+        }
+      }
+
+      function renderCppnToCanvas(genome, canvas, size = CANVAS_SIZE) {
+        const { total, coordX, coordY, coordR } = getCoords(size);
+        const ctx = canvas.getContext("2d");
+        const img = ctx.createImageData(size, size);
+        const data = img.data;
+        const w = genome.weights;
+        const b = genome.biases;
+        const acts = genome.activations;
+
+        const h1 = new Float32Array(12);
+        const h2 = new Float32Array(12);
+        const h3 = new Float32Array(12);
+
+        for (let p = 0; p < total; p++) {
+          const x = coordX[p];
+          const y = coordY[p];
+          const r = coordR[p];
+
+          for (let j = 0; j < 12; j++) {
+            const wo = j * 4;
+            const z = w[wo] * x + w[wo + 1] * y + w[wo + 2] * r + w[wo + 3] + b[j];
+            h1[j] = applyActivation(z, acts[j]);
+          }
+
+          for (let j = 0; j < 12; j++) {
+            const wo = 48 + j * 12;
+            let z = b[12 + j];
+            for (let i = 0; i < 12; i++) z += w[wo + i] * h1[i];
+            h2[j] = applyActivation(z, acts[12 + j]);
+          }
+
+          for (let j = 0; j < 12; j++) {
+            const wo = 192 + j * 12;
+            let z = b[24 + j];
+            for (let i = 0; i < 12; i++) z += w[wo + i] * h2[i];
+            h3[j] = applyActivation(z, acts[24 + j]);
+          }
+
+          const outIdx = p * 4;
+          for (let c = 0; c < 3; c++) {
+            const wo = 336 + c * 12;
+            let z = b[36 + c];
+            for (let i = 0; i < 12; i++) z += w[wo + i] * h3[i];
+            data[outIdx + c] = Math.round((0.5 + 0.5 * Math.tanh(z)) * 255);
+          }
+          data[outIdx + 3] = 255;
+        }
+
+        ctx.putImageData(img, 0, 0);
+      }
+
+      const storedName = localStorage.getItem("det_username") || "";
+      const nameInput = document.getElementById("name-input");
+      nameInput.value = storedName;
+
+      const messagesEl = document.getElementById("messages");
+      const chatForm = document.getElementById("chat-form");
+      const chatInput = document.getElementById("chat-input");
+      const sendBtn = document.getElementById("send-btn");
+      const nameForm = document.getElementById("name-form");
+      const usersList = document.getElementById("users-list");
+      const onlineCount = document.getElementById("online-count");
+      const statusDot = document.getElementById("status-dot");
+      const statusText = document.getElementById("status-text");
+
+      const evoPanelEl = document.getElementById("evo-panel");
+      const cursorLayerEl = document.getElementById("cursor-layer");
+      const loadingOverlayEl = document.getElementById("loading-overlay");
+      const goalTabsEl = document.getElementById("goal-tabs");
+      const newGoalForm = document.getElementById("new-goal-form");
+      const newGoalInput = document.getElementById("new-goal-input");
+      const newGoalPopInput = document.getElementById("new-goal-pop");
+      const newGoalMaxVotesInput = document.getElementById("new-goal-max-votes");
+      const newGoalSigmaInput = document.getElementById("new-goal-sigma");
+      const newGoalEliteInput = document.getElementById("new-goal-elite");
+      const newGoalCrossoverInput = document.getElementById("new-goal-crossover");
+      const activeGoalTitle = document.getElementById("active-goal-title");
+      const activeGoalGen = document.getElementById("active-goal-gen");
+      const roundVoteText = document.getElementById("round-vote-text");
+      const userVoteBudgetEl = document.getElementById("user-vote-budget");
+      const throttleBannerEl = document.getElementById("throttle-banner");
+      const roundTimerEl = document.getElementById("round-timer");
+      const roundProgressEl = document.getElementById("round-progress");
+      const tabAllBtn = document.getElementById("tab-all");
+      const tabUnvotedBtn = document.getElementById("tab-unvoted");
+      const tabAllCountEl = document.getElementById("tab-all-count");
+      const tabUnvotedCountEl = document.getElementById("tab-unvoted-count");
+      const nextUnvotedBtn = document.getElementById("next-unvoted-btn");
+      const genomeGridEl = document.getElementById("genome-grid");
+      const evoWorkspaceEl = document.getElementById("evo-workspace");
+      const privateEmptyStateEl = document.getElementById("private-empty-state");
+      const emptyGoalForm = document.getElementById("empty-goal-form");
+      const emptyGoalInput = document.getElementById("empty-goal-input");
+      const emptyPopInput = document.getElementById("empty-pop-input");
+      const emptyMaxVotesInput = document.getElementById("empty-max-votes-input");
+      const emptySigmaInput = document.getElementById("empty-sigma-input");
+      const emptyEliteInput = document.getElementById("empty-elite-input");
+      const emptyCrossoverInput = document.getElementById("empty-crossover-input");
+      const lineagePanelEl = document.getElementById("lineage-panel");
+      const lineageStatsEl = document.getElementById("lineage-stats");
+      const lineageViewportEl = document.getElementById("lineage-viewport");
+      const lineageCanvasWrapEl = document.getElementById("lineage-canvas-wrap");
+      const lineageSvgEl = document.getElementById("lineage-svg");
+      const lineageColumnsEl = document.getElementById("lineage-columns");
+      const lineageModeActiveBtn = document.getElementById("lineage-mode-active");
+      const lineageModeAllBtn = document.getElementById("lineage-mode-all");
+      const lineageToggleBtn = document.getElementById("lineage-toggle-btn");
+
+      function parseClampedInt(inputEl, minVal, maxVal, fallback) {
+        if (!inputEl) return Math.max(minVal, Math.min(maxVal, fallback));
+        const val = parseInt(inputEl.value, 10);
+        if (Number.isNaN(val)) return Math.max(minVal, Math.min(maxVal, fallback));
+        return Math.max(minVal, Math.min(maxVal, val));
+      }
+
+      function parsePopValue(inputEl, fallback = initialPop) {
+        return parseClampedInt(inputEl, 3, 64, fallback);
+      }
+
+      function parseMaxVotesValue(inputEl, fallback = initialMaxVotes) {
+        return parseClampedInt(inputEl, 1, 20, fallback);
+      }
+
+      function parseClampedFloat(inputEl, minVal, maxVal, fallback) {
+        if (!inputEl) return Math.max(minVal, Math.min(maxVal, fallback));
+        const val = parseFloat(inputEl.value);
+        if (Number.isNaN(val)) return Math.max(minVal, Math.min(maxVal, fallback));
+        return Math.round(Math.max(minVal, Math.min(maxVal, val)) * 100) / 100;
+      }
+
+      function parseSigmaValue(inputEl, fallback = initialMutSigma) {
+        return parseClampedFloat(inputEl, 0.05, 1.0, fallback);
+      }
+
+      function parseEliteValue(inputEl, fallback = initialEliteFrac) {
+        return parseClampedFloat(inputEl, 0.0, 0.5, fallback);
+      }
+
+      function parseCrossoverValue(inputEl, fallback = initialCrossoverRate) {
+        return parseClampedFloat(inputEl, 0.0, 1.0, fallback);
+      }
+
+      let socket = null;
+      let isConnected = false;
+      let goalsByName = new Map();
+      let goalOrder = [];
+      let activeGoalName = null;
+      let gridFilter = "all";
+      let lineageFilter = "active";
+      let lineageCollapsed = false;
+      let throttleTimer = null;
+      let lastJumpIdx = -1;
+      // Track local client's thumbs-up/down highlights per "goal:generation:index" -> -1|0|1
+      const myVotes = new Map();
+      // Track remote player cursors by username -> { el, goal, x, y, visible }
+      const remoteCursors = new Map();
+      let lastCursorSentAt = 0;
+      let lastLocalCursor = null;
+
+      function colorForUser(username) {
+        let hash = 2166136261;
+        for (let i = 0; i < username.length; i++) {
+          hash ^= username.charCodeAt(i);
+          hash = Math.imul(hash, 16777619);
+        }
+        const hue = Math.abs(hash) % 360;
+        return `hsl(${hue}, 82%, 66%)`;
+      }
+
+      function applyCursorPosition(entry) {
+        if (!entry.visible || (entry.goal && activeGoalName && entry.goal !== activeGoalName)) {
+          entry.el.style.display = "none";
+          return;
+        }
+        entry.el.style.display = "inline-flex";
+        entry.el.style.left = `${(entry.x * 100).toFixed(2)}%`;
+        entry.el.style.top = `${(entry.y * 100).toFixed(2)}%`;
+      }
+
+      function renderCursor(username, x, y, visible, goal) {
+        if (!username) return;
+        if (!visible) {
+          removeCursor(username);
+          return;
+        }
+        let entry = remoteCursors.get(username);
+        if (!entry) {
+          const color = colorForUser(username);
+          const el = document.createElement("div");
+          el.className = "remote-cursor";
+
+          const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+          svg.setAttribute("viewBox", "0 0 16 16");
+          svg.setAttribute("class", "remote-cursor-arrow");
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          path.setAttribute("d", "M1 1 L13 7.5 L7.5 9 L5.5 14.5 Z");
+          path.setAttribute("fill", color);
+          path.setAttribute("stroke", "#0b1120");
+          path.setAttribute("stroke-width", "1.2");
+          svg.appendChild(path);
+
+          const label = document.createElement("span");
+          label.className = "remote-cursor-label";
+          label.style.background = color;
+          label.textContent = username;
+
+          el.appendChild(svg);
+          el.appendChild(label);
+          cursorLayerEl.appendChild(el);
+          entry = { el, x, y, visible, goal: goal || "" };
+          remoteCursors.set(username, entry);
+        } else {
+          entry.x = x;
+          entry.y = y;
+          entry.visible = visible;
+          entry.goal = goal || "";
+        }
+        applyCursorPosition(entry);
+      }
+
+      function removeCursor(username) {
+        const entry = remoteCursors.get(username);
+        if (entry) {
+          entry.el.remove();
+          remoteCursors.delete(username);
+        }
+      }
+
+      function clearAllCursors() {
+        for (const entry of remoteCursors.values()) {
+          entry.el.remove();
+        }
+        remoteCursors.clear();
+      }
+
+      function refreshAllCursorsVisibility() {
+        for (const entry of remoteCursors.values()) {
+          applyCursorPosition(entry);
+        }
+      }
+
+      function sendCursor(x, y, visible) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({
+          type: "cursor",
+          x,
+          y,
+          visible,
+          goal: activeGoalName || "",
+        }));
+      }
+
+      function voteKey(goalName, generation, idx) {
+        return `${goalName}:${generation}:${idx}`;
+      }
+
+      function syncGoalDeadline(goal) {
+        if (goal.countdownMs > 0) {
+          goal._deadlinePerfMs = performance.now() + goal.countdownMs;
+        } else {
+          goal._deadlinePerfMs = 0;
+        }
+      }
+
+      function setConnected(connected) {
+        isConnected = connected;
+        statusDot.classList.toggle("connected", connected);
+        statusText.textContent = connected ? "live" : "offline";
+        sendBtn.disabled = !connected;
+      }
+
+      function renderGoalTabs() {
+        goalTabsEl.replaceChildren();
+        for (const name of goalOrder) {
+          const goal = goalsByName.get(name);
+          if (!goal) continue;
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "goal-tab" + (name === activeGoalName ? " active" : "");
+
+          const label = document.createElement("span");
+          label.textContent = name;
+          btn.appendChild(label);
+
+          const gen = document.createElement("span");
+          gen.className = "gen-pill";
+          gen.textContent = `g${goal.generation}`;
+          btn.appendChild(gen);
+
+          btn.addEventListener("click", () => {
+            activeGoalName = name;
+            renderGoalTabs();
+            renderActiveGoal(true);
+            refreshAllCursorsVisibility();
+            if (lastLocalCursor) {
+              sendCursor(lastLocalCursor.x, lastLocalCursor.y, true);
+            }
+          });
+          goalTabsEl.appendChild(btn);
+        }
+      }
+
+      function renderRoundStatus() {
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal) return;
+
+        const minVotes = goal.minVotes || 3;
+        const totalVotes = goal.totalVotes || 0;
+        const durMs = goal.countdownDurationMs || 8000;
+
+        if (goal.evolving) {
+          roundVoteText.textContent = `Votes: ${totalVotes} / ${minVotes}`;
+          roundTimerEl.textContent = "Evolving next generation...";
+          roundTimerEl.className = "round-timer";
+          roundProgressEl.style.width = "100%";
+          roundProgressEl.classList.add("counting");
+          return;
+        }
+
+        if (goal._deadlinePerfMs && goal._deadlinePerfMs > 0) {
+          const remMs = Math.max(0, goal._deadlinePerfMs - performance.now());
+          const pct = Math.max(0, Math.min(100, (remMs / durMs) * 100));
+          roundVoteText.textContent = `Countdown active (${totalVotes} votes)`;
+          roundTimerEl.textContent = `Advancing in ${(remMs / 1000).toFixed(1)}s`;
+          roundTimerEl.className = "round-timer";
+          roundProgressEl.style.width = `${pct}%`;
+          roundProgressEl.classList.add("counting");
+        } else {
+          const remaining = Math.max(0, minVotes - totalVotes);
+          const pct = Math.max(0, Math.min(100, (totalVotes / minVotes) * 100));
+          roundVoteText.textContent = `Votes: ${totalVotes} / ${minVotes}`;
+          roundTimerEl.textContent = remaining === 1
+            ? "Need 1 more vote"
+            : `Need ${remaining} more votes`;
+          roundTimerEl.className = "round-timer waiting";
+          roundProgressEl.style.width = `${pct}%`;
+          roundProgressEl.classList.remove("counting");
+        }
+      }
+
+      function hasMyVote(goal, idx) {
+        const mine = myVotes.get(voteKey(goal.name, goal.generation, idx)) || 0;
+        if (mine !== 0) return true;
+        const v = (goal.votes && goal.votes[idx]) || null;
+        const me = (nameInput.value || "").trim();
+        if (!v || !me) return false;
+        return (
+          (Array.isArray(v.upUsers) && v.upUsers.includes(me)) ||
+          (Array.isArray(v.downUsers) && v.downUsers.includes(me))
+        );
+      }
+
+      function applyCardFilter(refilter) {
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal) return;
+        const cards = genomeGridEl.querySelectorAll(".genome-card");
+        cards.forEach((card, idx) => {
+          const voted = hasMyVote(goal, idx);
+          if (gridFilter === "unvoted") {
+            if (refilter) {
+              card.hidden = voted;
+              card.classList.remove("voted-done");
+            } else {
+              card.classList.toggle("voted-done", voted && !card.hidden);
+            }
+          } else {
+            card.hidden = false;
+            card.classList.remove("voted-done");
+          }
+        });
+      }
+
+      function scrollToNextUnvoted() {
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal) return;
+        const cards = Array.from(genomeGridEl.querySelectorAll(".genome-card"));
+        if (gridFilter === "unvoted") {
+          applyCardFilter(true);
+        }
+        const unvotedIndices = [];
+        cards.forEach((_, idx) => {
+          if (!hasMyVote(goal, idx)) unvotedIndices.push(idx);
+        });
+        if (unvotedIndices.length === 0) return;
+
+        let targetIdx = unvotedIndices.find((idx) => idx > lastJumpIdx);
+        if (targetIdx === undefined) targetIdx = unvotedIndices[0];
+        lastJumpIdx = targetIdx;
+
+        const targetCard = cards[targetIdx];
+        if (!targetCard) return;
+        targetCard.hidden = false;
+        targetCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        cards.forEach((c) => c.classList.remove("jump-focus"));
+        targetCard.classList.add("jump-focus");
+        setTimeout(() => targetCard.classList.remove("jump-focus"), 1100);
+      }
+
+      function countMyActiveVotes(goal) {
+        if (!goal || !goal.genomes) return 0;
+        let cnt = 0;
+        for (let i = 0; i < goal.genomes.length; i++) {
+          if (hasMyVote(goal, i)) cnt += 1;
+        }
+        return cnt;
+      }
+
+      function showThrottleNotice(message) {
+        if (!throttleBannerEl) return;
+        throttleBannerEl.textContent = message;
+        throttleBannerEl.hidden = false;
+        if (throttleTimer) clearTimeout(throttleTimer);
+        throttleTimer = setTimeout(() => {
+          throttleBannerEl.hidden = true;
+        }, 3200);
+      }
+
+      function updateVoteCards() {
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal) return;
+        const maxVotesPerUser = goal.maxVotesPerUser || initialMaxVotes || 5;
+        const activeMine = countMyActiveVotes(goal);
+        const atLimit = activeMine >= maxVotesPerUser;
+        if (userVoteBudgetEl) {
+          userVoteBudgetEl.textContent = `Your votes: ${activeMine} / ${maxVotesPerUser}`;
+          userVoteBudgetEl.classList.toggle("at-cap", atLimit);
+        }
+
+        const cards = genomeGridEl.querySelectorAll(".genome-card");
+        let unvotedCount = 0;
+        cards.forEach((card, idx) => {
+          const v = goal.votes[idx] || { up: 0, down: 0, score: 0 };
+          const mine = myVotes.get(voteKey(goal.name, goal.generation, idx)) || 0;
+          const voted = hasMyVote(goal, idx);
+          if (!voted) unvotedCount += 1;
+
+          card.classList.toggle("positive", v.score > 0);
+          card.classList.toggle("negative", v.score < 0);
+          if (gridFilter === "unvoted") {
+            card.classList.toggle("voted-done", voted && !card.hidden);
+          } else {
+            card.classList.remove("voted-done");
+          }
+
+          const scoreEl = card.querySelector(".score-badge");
+          scoreEl.textContent = v.score > 0 ? `+${v.score}` : String(v.score);
+          scoreEl.className = "score-badge" + (v.score > 0 ? " pos" : v.score < 0 ? " neg" : "");
+
+          const upBtn = card.querySelector(".up-btn");
+          const downBtn = card.querySelector(".down-btn");
+          const upUsers = Array.isArray(v.upUsers) ? v.upUsers : [];
+          const downUsers = Array.isArray(v.downUsers) ? v.downUsers : [];
+          const capBlocked = !voted && atLimit;
+          const capNote = `Max ${maxVotesPerUser} active votes per round — unvote one to switch`;
+          const upTooltip = capBlocked
+            ? capNote
+            : (upUsers.length > 0 ? `Likes: ${upUsers.join(", ")}` : "Like (+1)");
+          const downTooltip = capBlocked
+            ? capNote
+            : (downUsers.length > 0 ? `Dislikes: ${downUsers.join(", ")}` : "Dislike (-1)");
+          upBtn.setAttribute("title", upTooltip);
+          upBtn.setAttribute("data-tooltip", upTooltip);
+          downBtn.setAttribute("title", downTooltip);
+          downBtn.setAttribute("data-tooltip", downTooltip);
+          upBtn.querySelector(".cnt").textContent = String(v.up);
+          downBtn.querySelector(".cnt").textContent = String(v.down);
+          upBtn.classList.toggle("active-up", mine === 1);
+          downBtn.classList.toggle("active-down", mine === -1);
+          upBtn.disabled = !isConnected || goal.evolving || capBlocked;
+          downBtn.disabled = !isConnected || goal.evolving || capBlocked;
+        });
+
+        tabAllCountEl.textContent = String(cards.length);
+        tabUnvotedCountEl.textContent = String(unvotedCount);
+        nextUnvotedBtn.disabled = unvotedCount === 0;
+
+        renderFullscreenVotes();
+        renderRoundStatus();
+      }
+
+      function sendVote(goal, idx, val) {
+        if (!socket || socket.readyState !== WebSocket.OPEN || goal.evolving) return;
+        const k = voteKey(goal.name, goal.generation, idx);
+        const prev = myVotes.get(k) || 0;
+        const maxVotesPerUser = goal.maxVotesPerUser || initialMaxVotes || 5;
+        if (prev === 0 && countMyActiveVotes(goal) >= maxVotesPerUser) {
+          showThrottleNotice(`Vote cap reached (${maxVotesPerUser} active votes/round) — click an existing vote to free a slot.`);
+          return;
+        }
+        myVotes.set(k, prev === val ? 0 : val);
+        updateVoteCards();
+        socket.send(JSON.stringify({
+          type: "cast_vote",
+          goal: goal.name,
+          index: idx,
+          vote: val,
+        }));
+      }
+
+      const dlToast = document.getElementById("dl-toast");
+      const dlToastLabel = document.getElementById("dl-toast-label");
+      const dlToastCmd = document.getElementById("dl-toast-cmd");
+      const dlToastCopy = document.getElementById("dl-toast-copy");
+      const dlToastClose = document.getElementById("dl-toast-close");
+
+      dlToastClose.addEventListener("click", () => {
+        dlToast.hidden = true;
+      });
+
+      dlToastCopy.addEventListener("click", async () => {
+        if (!dlToastCmd.textContent) return;
+        await navigator.clipboard.writeText(dlToastCmd.textContent);
+        dlToastCopy.textContent = "Copied";
+        setTimeout(() => { dlToastCopy.textContent = "Copy"; }, 1400);
+      });
+
+      async function downloadPolicy(goal, idx) {
+        const genome = goal.genomes && goal.genomes[idx];
+        if (!genome) return;
+        const res = await fetch(`${basePath}/export/bundle/`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrfToken,
+          },
+          body: JSON.stringify({
+            goal: goal.name,
+            generation: goal.generation,
+            index: idx,
+            genome,
+          }),
+        });
+        if (!res.ok) return;
+        const disp = res.headers.get("Content-Disposition") || "";
+        const match = /filename="([^"]+)"/.exec(disp);
+        const filename = match ? match[1] : `policy_g${goal.generation}_${idx}.zip`;
+        const stem = filename.replace(/\.zip$/i, "");
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        dlToastLabel.textContent = `${filename}:`;
+        dlToastCmd.textContent = `unzip ${filename} && cd ${stem} && uv run run.py`;
+        dlToastCopy.textContent = "Copy";
+        dlToast.hidden = false;
+      }
+
+      function renderActiveGoal(rerenderCanvases) {
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal) {
+          if (lineagePanelEl) lineagePanelEl.hidden = true;
+          if (isPrivateRoom) {
+            evoWorkspaceEl.hidden = true;
+            privateEmptyStateEl.hidden = false;
+            if (emptyGoalInput && document.activeElement !== emptyGoalInput) {
+              emptyGoalInput.focus();
+            }
+          }
+          return;
+        }
+        privateEmptyStateEl.hidden = true;
+        evoWorkspaceEl.hidden = false;
+        const popSize = typeof goal.populationSize === "number" ? goal.populationSize : goal.genomes.length;
+        const sigma = typeof goal.mutationSigma === "number" ? goal.mutationSigma.toFixed(2) : "0.35";
+        const elitePct = typeof goal.eliteFrac === "number" ? Math.round(goal.eliteFrac * 100) : Math.round(initialEliteFrac * 100);
+        const crossPct = typeof goal.crossoverRate === "number" ? Math.round(goal.crossoverRate * 100) : Math.round(initialCrossoverRate * 100);
+        activeGoalTitle.textContent = goal.name;
+        const mvLimit = goal.maxVotesPerUser || initialMaxVotes || 5;
+        activeGoalGen.textContent = `gen ${goal.generation} · pop ${popSize} · cap ${mvLimit}v · \u03c3 ${sigma} · elite ${elitePct}% · cross ${crossPct}%`;
+
+        if (rerenderCanvases) {
+          genomeGridEl.replaceChildren();
+          goal.genomes.forEach((genome, idx) => {
+            const card = document.createElement("div");
+            card.className = "genome-card";
+
+            const canvas = document.createElement("canvas");
+            canvas.width = CANVAS_SIZE;
+            canvas.height = CANVAS_SIZE;
+            canvas.style.cursor = "zoom-in";
+            canvas.title = "Click to open full screen";
+            renderCppnToCanvas(genome, canvas);
+            canvas.addEventListener("click", () => openFullscreen(idx));
+            card.appendChild(canvas);
+
+            const footer = document.createElement("div");
+            footer.className = "genome-footer";
+
+            const scoreSpan = document.createElement("span");
+            scoreSpan.className = "score-badge";
+            scoreSpan.textContent = "0";
+            footer.appendChild(scoreSpan);
+
+            const btns = document.createElement("div");
+            btns.className = "vote-btns";
+
+            const upBtn = document.createElement("button");
+            upBtn.type = "button";
+            upBtn.className = "vote-btn up-btn";
+            upBtn.innerHTML =
+              '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7v6H2.5a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1H5Zm0 0 2.6-4.4a1.3 1.3 0 0 1 2.3.8V6h3.1a1.2 1.2 0 0 1 1.2 1.4l-.8 4.4a1.3 1.3 0 0 1-1.3 1.2H5"/></svg><span class="cnt">0</span>';
+            upBtn.addEventListener("click", () => sendVote(goal, idx, 1));
+
+            const downBtn = document.createElement("button");
+            downBtn.type = "button";
+            downBtn.className = "vote-btn down-btn";
+            downBtn.innerHTML =
+              '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 9V3H2.5a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1H5Zm0 0 2.6 4.4a1.3 1.3 0 0 0 2.3-.8V10h3.1a1.2 1.2 0 0 0 1.2-1.4l-.8-4.4A1.3 1.3 0 0 0 12.1 3H5"/></svg><span class="cnt">0</span>';
+            downBtn.addEventListener("click", () => sendVote(goal, idx, -1));
+
+            const dlBtn = document.createElement("button");
+            dlBtn.type = "button";
+            dlBtn.className = "vote-btn dl-btn";
+            dlBtn.setAttribute("title", "Download weights + uv runner");
+            dlBtn.setAttribute("data-tooltip", "Download .zip (weights + run.py)");
+            dlBtn.innerHTML =
+              '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.5v8m0 0-3-3m3 3 3-3M2.5 13h11"/></svg>';
+            dlBtn.addEventListener("click", () => downloadPolicy(goal, idx));
+
+            const fsBtn = document.createElement("button");
+            fsBtn.type = "button";
+            fsBtn.className = "vote-btn fs-btn";
+            fsBtn.setAttribute("title", "Full screen");
+            fsBtn.setAttribute("data-tooltip", "Full screen");
+            fsBtn.innerHTML =
+              '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg>';
+            fsBtn.addEventListener("click", () => openFullscreen(idx));
+
+            btns.appendChild(upBtn);
+            btns.appendChild(downBtn);
+            btns.appendChild(fsBtn);
+            btns.appendChild(dlBtn);
+            footer.appendChild(btns);
+            card.appendChild(footer);
+
+            genomeGridEl.appendChild(card);
+          });
+          lastJumpIdx = -1;
+          applyCardFilter(true);
+          renderLineageTree(goal);
+        }
+        updateVoteCards();
+        if (fullscreenIdx !== null || fullscreenNode !== null) {
+          renderFullscreen();
+        }
+      }
+
+      const LINEAGE_OP_META = {
+        elite: { label: "E", title: "Elite carry-over" },
+        crossover: { label: "X", title: "Crossover + mutation" },
+        mutation: { label: "M", title: "Mutation" },
+        random: { label: "R", title: "Random founder / immigrant" },
+      };
+
+      let lastLineageEdges = [];
+      let lastLineageNodeEls = new Map();
+
+      function computeActiveLineageIds(nodes, currentGen) {
+        const byId = new Map(nodes.map((n) => [n.id, n]));
+        const keep = new Set();
+        const queue = [];
+        for (const n of nodes) {
+          if (n.gen === currentGen) {
+            keep.add(n.id);
+            queue.push(n.id);
+          }
+        }
+        for (let q = 0; q < queue.length; q++) {
+          const cur = byId.get(queue[q]);
+          if (!cur || !Array.isArray(cur.parents)) continue;
+          for (const pid of cur.parents) {
+            if (!keep.has(pid) && byId.has(pid)) {
+              keep.add(pid);
+              queue.push(pid);
+            }
+          }
+        }
+        return keep;
+      }
+
+      function highlightLineageChain(focusId, nodesById, childrenById) {
+        if (focusId === null) {
+          lastLineageNodeEls.forEach((el) => {
+            el.classList.remove("highlighted", "dimmed");
+          });
+          lineageSvgEl.querySelectorAll(".lineage-edge").forEach((p) => {
+            p.classList.remove("highlighted", "dimmed");
+          });
+          return;
+        }
+        const related = new Set([focusId]);
+        const upQueue = [focusId];
+        for (let i = 0; i < upQueue.length; i++) {
+          const n = nodesById.get(upQueue[i]);
+          if (!n || !Array.isArray(n.parents)) continue;
+          for (const pid of n.parents) {
+            if (!related.has(pid) && nodesById.has(pid)) {
+              related.add(pid);
+              upQueue.push(pid);
+            }
+          }
+        }
+        const downQueue = [focusId];
+        for (let i = 0; i < downQueue.length; i++) {
+          const kids = childrenById.get(downQueue[i]) || [];
+          for (const cid of kids) {
+            if (!related.has(cid)) {
+              related.add(cid);
+              downQueue.push(cid);
+            }
+          }
+        }
+        lastLineageNodeEls.forEach((el, gid) => {
+          const isRel = related.has(gid);
+          el.classList.toggle("highlighted", isRel);
+          el.classList.toggle("dimmed", !isRel);
+        });
+        lineageSvgEl.querySelectorAll(".lineage-edge").forEach((edgeEl) => {
+          const fromId = Number(edgeEl.dataset.fromId);
+          const toId = Number(edgeEl.dataset.toId);
+          const isRel = related.has(fromId) && related.has(toId);
+          edgeEl.classList.toggle("highlighted", isRel);
+          edgeEl.classList.toggle("dimmed", !isRel);
+        });
+      }
+
+      function drawLineageEdges() {
+        if (!lineageSvgEl || !lineageCanvasWrapEl || lineageCollapsed) return;
+        const wrapRect = lineageCanvasWrapEl.getBoundingClientRect();
+        const width = Math.max(lineageColumnsEl.scrollWidth, lineageCanvasWrapEl.clientWidth);
+        const height = Math.max(lineageColumnsEl.scrollHeight, 180);
+        lineageSvgEl.setAttribute("width", String(width));
+        lineageSvgEl.setAttribute("height", String(height));
+        lineageSvgEl.setAttribute("viewBox", `0 0 ${width} ${height}`);
+
+        const ns = "http://www.w3.org/2000/svg";
+        const defs = document.createElementNS(ns, "defs");
+        const opColors = {
+          elite: "#f5c451",
+          crossover: "#38bdf8",
+          mutation: "#34d399",
+          random: "#71717a",
+        };
+        for (const [op, color] of Object.entries(opColors)) {
+          const marker = document.createElementNS(ns, "marker");
+          marker.setAttribute("id", `lineage-arrow-${op}`);
+          marker.setAttribute("viewBox", "0 0 10 10");
+          marker.setAttribute("refX", "8.5");
+          marker.setAttribute("refY", "5");
+          marker.setAttribute("markerWidth", "5.5");
+          marker.setAttribute("markerHeight", "5.5");
+          marker.setAttribute("orient", "auto");
+          const arrowPath = document.createElementNS(ns, "path");
+          arrowPath.setAttribute("d", "M 0 1.5 L 9 5 L 0 8.5 z");
+          arrowPath.setAttribute("fill", color);
+          marker.appendChild(arrowPath);
+          defs.appendChild(marker);
+        }
+
+        const frag = document.createDocumentFragment();
+        frag.appendChild(defs);
+        for (const edge of lastLineageEdges) {
+          const fromEl = lastLineageNodeEls.get(edge.fromId);
+          const toEl = lastLineageNodeEls.get(edge.toId);
+          if (!fromEl || !toEl) continue;
+          const fromRect = fromEl.getBoundingClientRect();
+          const toRect = toEl.getBoundingClientRect();
+          const x1 = fromRect.right - wrapRect.left;
+          const y1 = fromRect.top + fromRect.height / 2 - wrapRect.top;
+          const x2 = toRect.left - wrapRect.left - 3;
+          const y2 = toRect.top + toRect.height / 2 - wrapRect.top;
+          const dx = Math.max(24, Math.abs(x2 - x1) * 0.5);
+          const path = document.createElementNS(ns, "path");
+          path.setAttribute(
+            "d",
+            `M ${x1.toFixed(1)} ${y1.toFixed(1)} C ${(x1 + dx).toFixed(1)} ${y1.toFixed(1)}, ${(x2 - dx).toFixed(1)} ${y2.toFixed(1)}, ${x2.toFixed(1)} ${y2.toFixed(1)}`
+          );
+          path.setAttribute("class", `lineage-edge op-${edge.op}`);
+          path.setAttribute("marker-end", `url(#lineage-arrow-${edge.op})`);
+          path.dataset.fromId = String(edge.fromId);
+          path.dataset.toId = String(edge.toId);
+          frag.appendChild(path);
+        }
+        lineageSvgEl.replaceChildren(frag);
+      }
+
+      function renderLineageTree(goal) {
+        if (!lineagePanelEl) return;
+        if (!goal || !Array.isArray(goal.lineage) || goal.lineage.length === 0) {
+          lineagePanelEl.hidden = true;
+          return;
+        }
+        lineagePanelEl.hidden = false;
+        lineageViewportEl.hidden = lineageCollapsed;
+        lineageToggleBtn.textContent = lineageCollapsed ? "Show" : "Hide";
+
+        const allNodes = goal.lineage;
+        const gensSet = new Set(allNodes.map((n) => n.gen));
+        lineageStatsEl.textContent = `${gensSet.size} gen${gensSet.size === 1 ? "" : "s"} · ${allNodes.length} nodes`;
+
+        if (lineageCollapsed) return;
+
+        const useActiveOnly = lineageFilter === "active" && goal.generation > 0;
+        const activeIds = useActiveOnly ? computeActiveLineageIds(allNodes, goal.generation) : null;
+        const visibleNodes = activeIds ? allNodes.filter((n) => activeIds.has(n.id)) : allNodes;
+
+        const byGen = new Map();
+        const nodesById = new Map();
+        const childrenById = new Map();
+        for (const n of visibleNodes) {
+          nodesById.set(n.id, n);
+          if (!byGen.has(n.gen)) byGen.set(n.gen, []);
+          byGen.get(n.gen).push(n);
+          for (const pid of (n.parents || [])) {
+            if (!childrenById.has(pid)) childrenById.set(pid, []);
+            childrenById.get(pid).push(n.id);
+          }
+        }
+
+        const liveIdToIdx = new Map();
+        (goal.genomes || []).forEach((g, idx) => {
+          liveIdToIdx.set(g.id, idx);
+        });
+
+        const sortedGens = Array.from(byGen.keys()).sort((a, b) => a - b);
+        const colFrag = document.createDocumentFragment();
+        const nodeEls = new Map();
+        const edges = [];
+
+        for (const gen of sortedGens) {
+          const col = document.createElement("div");
+          col.className = "lineage-col" + (gen === goal.generation ? " current-gen" : "");
+
+          const hdr = document.createElement("div");
+          hdr.className = "lineage-col-header";
+          hdr.textContent = gen === goal.generation ? `Gen ${gen} · live` : `Gen ${gen}`;
+          col.appendChild(hdr);
+
+          const colNodes = byGen.get(gen) || [];
+          for (const node of colNodes) {
+            const op = LINEAGE_OP_META[node.op] ? node.op : "random";
+            const opMeta = LINEAGE_OP_META[op];
+            const el = document.createElement("div");
+            el.className = "lineage-node" + (gen === goal.generation ? " is-live" : "");
+            el.title = `#${node.id} · Gen ${node.gen} · ${opMeta.title}` + (
+              Array.isArray(node.parents) && node.parents.length > 0
+                ? ` · parents: ${node.parents.map((p) => `#${p}`).join(", ")}`
+                : ""
+            );
+
+            const cvs = document.createElement("canvas");
+            cvs.width = 32;
+            cvs.height = 32;
+            renderCppnToCanvas(node, cvs, 32);
+            el.appendChild(cvs);
+
+            const meta = document.createElement("div");
+            meta.className = "lineage-node-meta";
+            const idSpan = document.createElement("span");
+            idSpan.textContent = `#${node.id}`;
+            const opSpan = document.createElement("span");
+            opSpan.className = `op-chip op-${op}`;
+            opSpan.textContent = opMeta.label;
+            meta.appendChild(idSpan);
+            meta.appendChild(opSpan);
+            el.appendChild(meta);
+
+            el.addEventListener("mouseenter", () => highlightLineageChain(node.id, nodesById, childrenById));
+            el.addEventListener("mouseleave", () => highlightLineageChain(null, nodesById, childrenById));
+            el.addEventListener("click", () => {
+              const liveIdx = liveIdToIdx.get(node.id);
+              if (liveIdx !== undefined && node.gen === goal.generation) {
+                openFullscreen(liveIdx);
+              } else {
+                openFullscreenNode(goal, node);
+              }
+            });
+
+            col.appendChild(el);
+            nodeEls.set(node.id, el);
+
+            for (const pid of (node.parents || [])) {
+              if (nodesById.has(pid)) {
+                edges.push({ fromId: pid, toId: node.id, op });
+              }
+            }
+          }
+          colFrag.appendChild(col);
+        }
+
+        lineageColumnsEl.replaceChildren(colFrag);
+        lastLineageEdges = edges;
+        lastLineageNodeEls = nodeEls;
+        requestAnimationFrame(() => {
+          drawLineageEdges();
+          if (lineageViewportEl.scrollWidth > lineageViewportEl.clientWidth) {
+            lineageViewportEl.scrollLeft = lineageViewportEl.scrollWidth;
+          }
+        });
+      }
+
+      setInterval(renderRoundStatus, 100);
+
+      function appendSystem(text, timestamp) {
+        const div = document.createElement("div");
+        div.className = "msg system";
+        if (timestamp) {
+          const t = document.createElement("span");
+          t.className = "time";
+          t.textContent = timestamp;
+          div.appendChild(t);
+        }
+        const body = document.createElement("span");
+        body.textContent = text;
+        div.appendChild(body);
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function appendChat(username, text, timestamp) {
+        const div = document.createElement("div");
+        div.className = "msg";
+
+        const t = document.createElement("span");
+        t.className = "time";
+        t.textContent = timestamp || "";
+        div.appendChild(t);
+
+        const u = document.createElement("span");
+        u.className = "user";
+        u.style.color = colorForUser(username || "");
+        u.textContent = username;
+        div.appendChild(u);
+
+        const body = document.createElement("span");
+        body.textContent = text;
+        div.appendChild(body);
+
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function renderUsers(users) {
+        usersList.replaceChildren();
+        onlineCount.textContent = String(users.length);
+        for (const user of users) {
+          const li = document.createElement("li");
+          const dot = document.createElement("span");
+          dot.className = "user-dot";
+          dot.style.background = colorForUser(user || "");
+          const label = document.createElement("span");
+          label.textContent = user;
+          li.appendChild(dot);
+          li.appendChild(label);
+          usersList.appendChild(li);
+        }
+      }
+
+      const reconnectOverlayEl = document.getElementById("reconnect-overlay");
+      const reconnectSubEl = document.getElementById("reconnect-sub");
+      const reconnectNowBtn = document.getElementById("reconnect-now-btn");
+      let reconnectAttempt = 0;
+      let reconnectTimer = null;
+      let reconnectTicker = null;
+      let reconnectAtMs = 0;
+
+      function clearReconnectTimers() {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        if (reconnectTicker) {
+          clearInterval(reconnectTicker);
+          reconnectTicker = null;
+        }
+      }
+
+      function showReconnectOverlay(delayMs) {
+        reconnectOverlayEl.hidden = false;
+        reconnectAtMs = performance.now() + delayMs;
+        const updateText = () => {
+          const remSec = Math.max(0, (reconnectAtMs - performance.now()) / 1000);
+          reconnectSubEl.textContent = `Retrying in ${remSec.toFixed(1)}s (attempt ${reconnectAttempt})`;
+        };
+        updateText();
+        if (reconnectTicker) clearInterval(reconnectTicker);
+        reconnectTicker = setInterval(updateText, 200);
+      }
+
+      function hideReconnectOverlay() {
+        clearReconnectTimers();
+        reconnectAttempt = 0;
+        reconnectOverlayEl.hidden = true;
+      }
+
+      function scheduleReconnect() {
+        clearReconnectTimers();
+        reconnectAttempt += 1;
+        const delayMs = Math.min(5000, Math.round(1000 * Math.pow(1.4, reconnectAttempt - 1)));
+        showReconnectOverlay(delayMs);
+        reconnectTimer = setTimeout(() => {
+          reconnectSubEl.textContent = `Connecting (attempt ${reconnectAttempt})...`;
+          connect();
+        }, delayMs);
+      }
+
+      reconnectNowBtn.addEventListener("click", () => {
+        clearReconnectTimers();
+        reconnectSubEl.textContent = "Reconnecting now...";
+        connect();
+      });
+
+      window.addEventListener("online", () => {
+        if (!isConnected) {
+          clearReconnectTimers();
+          reconnectSubEl.textContent = "Network back · reconnecting...";
+          connect();
+        }
+      });
+
+      window.addEventListener("offline", () => {
+        if (socket) socket.close();
+      });
+
+      function connect() {
+        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+          return;
+        }
+        const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const configuredHost = "{{ ws_host|default:'127.0.0.1' }}";
+        const wsHost = configuredHost === "0.0.0.0" ? window.location.hostname : configuredHost;
+        const wsPort = "{{ ws_port|default:8001 }}";
+        const currentName = (nameInput.value || "").trim();
+        const params = new URLSearchParams();
+        if (currentName) params.set("username", currentName);
+        if (isPrivateRoom && initialGoal) params.set("goal", initialGoal);
+        if (isPrivateRoom && initialPop) params.set("pop", String(initialPop));
+        if (isPrivateRoom && initialMaxVotes) params.set("max_votes", String(initialMaxVotes));
+        if (isPrivateRoom && initialMutSigma) params.set("sigma", initialMutSigma.toFixed(2));
+        if (isPrivateRoom) params.set("elite_frac", initialEliteFrac.toFixed(2));
+        if (isPrivateRoom) params.set("crossover", initialCrossoverRate.toFixed(2));
+        const qs = params.toString() ? `?${params.toString()}` : "";
+        const wsUrl = wsViaProxy
+          ? `${proto}//${window.location.host}${basePath}/ws/chat/${roomName}/${qs}`
+          : `${proto}//${wsHost}:${wsPort}/ws/chat/${roomName}/${qs}`;
+        socket = new WebSocket(wsUrl);
+
+        socket.addEventListener("open", () => {
+          hideReconnectOverlay();
+          setConnected(true);
+          updateVoteCards();
+        });
+
+        socket.addEventListener("close", () => {
+          socket = null;
+          setConnected(false);
+          loadingOverlayEl.hidden = true;
+          updateVoteCards();
+          clearAllCursors();
+          scheduleReconnect();
+        });
+
+        socket.addEventListener("message", (event) => {
+          const data = JSON.parse(event.data);
+          if (data.type === "identity") {
+            nameInput.value = data.username;
+            localStorage.setItem("det_username", data.username);
+          } else if (data.type === "history") {
+            messagesEl.replaceChildren();
+            for (const msg of data.messages || []) {
+              appendChat(msg.username, msg.message, msg.timestamp);
+            }
+          } else if (data.type === "evolution_state") {
+            loadingOverlayEl.hidden = true;
+            const goals = data.goals || [];
+            goalsByName = new Map();
+            goalOrder = [];
+            for (const g of goals) {
+              syncGoalDeadline(g);
+              goalsByName.set(g.name, g);
+              goalOrder.push(g.name);
+            }
+            if (!activeGoalName || !goalsByName.has(activeGoalName)) {
+              activeGoalName = goalOrder[0] || null;
+            }
+            renderGoalTabs();
+            renderActiveGoal(true);
+          } else if (data.type === "goal_updated") {
+            const g = data.goal;
+            if (g) {
+              syncGoalDeadline(g);
+              goalsByName.set(g.name, g);
+              if (!goalOrder.includes(g.name)) goalOrder.push(g.name);
+              renderGoalTabs();
+              if (g.name === activeGoalName) {
+                renderActiveGoal(true);
+              }
+            }
+          } else if (data.type === "votes_updated") {
+            const g = goalsByName.get(data.goal);
+            if (g) {
+              g.votes = data.votes || [];
+              g.totalVotes = data.totalVotes || 0;
+              g.minVotes = data.minVotes || 3;
+              g.countdownMs = data.countdownMs || 0;
+              g.countdownDurationMs = data.countdownDurationMs || 8000;
+              g.evolving = Boolean(data.evolving);
+              g.mutationSigma = data.mutationSigma;
+              if (typeof data.populationSize === "number") {
+                g.populationSize = data.populationSize;
+              }
+              if (typeof data.maxVotesPerUser === "number") {
+                g.maxVotesPerUser = data.maxVotesPerUser;
+              }
+              if (typeof data.eliteFrac === "number") {
+                g.eliteFrac = data.eliteFrac;
+              }
+              if (typeof data.crossoverRate === "number") {
+                g.crossoverRate = data.crossoverRate;
+              }
+              syncGoalDeadline(g);
+              if (data.goal === activeGoalName) {
+                updateVoteCards();
+              }
+            }
+          } else if (data.type === "vote_throttled") {
+            const g = goalsByName.get(data.goal);
+            if (g && typeof data.index === "number") {
+              const k = voteKey(g.name, g.generation, data.index);
+              const v = g.votes && g.votes[data.index];
+              const me = (nameInput.value || "").trim();
+              if (v && me && Array.isArray(v.upUsers) && v.upUsers.includes(me)) {
+                myVotes.set(k, 1);
+              } else if (v && me && Array.isArray(v.downUsers) && v.downUsers.includes(me)) {
+                myVotes.set(k, -1);
+              } else {
+                myVotes.set(k, 0);
+              }
+              if (data.goal === activeGoalName) updateVoteCards();
+            }
+            if (data.message) showThrottleNotice(data.message);
+          } else if (data.type === "chat") {
+            appendChat(data.username, data.message, data.timestamp);
+          } else if (data.type === "system") {
+            appendSystem(data.message, data.timestamp);
+          } else if (data.type === "cursor") {
+            renderCursor(
+              data.username,
+              Number(data.x || 0),
+              Number(data.y || 0),
+              Boolean(data.visible),
+              data.goal || ""
+            );
+          } else if (data.type === "cursor_leave") {
+            removeCursor(data.username);
+          } else if (data.type === "presence") {
+            const users = data.users || [];
+            renderUsers(users);
+            const activeSet = new Set(users);
+            for (const username of Array.from(remoteCursors.keys())) {
+              if (!activeSet.has(username)) {
+                removeCursor(username);
+              }
+            }
+          }
+        });
+      }
+
+      evoPanelEl.addEventListener("pointermove", (e) => {
+        if (!isConnected) return;
+        const rect = evoPanelEl.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return;
+        const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+        lastLocalCursor = { x, y };
+        const now = performance.now();
+        if (now - lastCursorSentAt < 33) return;
+        lastCursorSentAt = now;
+        sendCursor(x, y, true);
+      });
+
+      evoPanelEl.addEventListener("pointerleave", () => {
+        lastLocalCursor = null;
+        if (!isConnected) return;
+        sendCursor(0, 0, false);
+      });
+
+      function generatePrivateRoomSlug() {
+        const bytes = new Uint8Array(8);
+        crypto.getRandomValues(bytes);
+        const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+        return `p-${hex}`;
+      }
+
+      const shareLinkBtn = document.getElementById("share-link-btn");
+      if (shareLinkBtn) {
+        shareLinkBtn.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(window.location.href);
+            shareLinkBtn.textContent = "Copied link!";
+            setTimeout(() => { shareLinkBtn.textContent = "Share link"; }, 1600);
+          } catch (_) {
+            window.prompt("Copy private link:", window.location.href);
+          }
+        });
+      }
+
+      newGoalForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const goal = newGoalInput.value.trim();
+        const pop = parsePopValue(newGoalPopInput);
+        const mv = parseMaxVotesValue(newGoalMaxVotesInput);
+        const sigma = parseSigmaValue(newGoalSigmaInput);
+        const eliteFrac = parseEliteValue(newGoalEliteInput);
+        const crossoverRate = parseCrossoverValue(newGoalCrossoverInput);
+        if (newGoalPopInput) newGoalPopInput.value = String(pop);
+        if (newGoalMaxVotesInput) newGoalMaxVotesInput.value = String(mv);
+        if (newGoalSigmaInput) newGoalSigmaInput.value = sigma.toFixed(2);
+        if (newGoalEliteInput) newGoalEliteInput.value = eliteFrac.toFixed(2);
+        if (newGoalCrossoverInput) newGoalCrossoverInput.value = crossoverRate.toFixed(2);
+        if (!isPrivateRoom) {
+          const targetSlug = generatePrivateRoomSlug();
+          const params = new URLSearchParams();
+          if (goal) params.set("goal", goal);
+          if (pop !== initialPop) params.set("pop", String(pop));
+          if (mv !== initialMaxVotes) params.set("max_votes", String(mv));
+          if (Math.abs(sigma - initialMutSigma) > 1e-4) params.set("sigma", sigma.toFixed(2));
+          if (Math.abs(eliteFrac - initialEliteFrac) > 1e-4) params.set("elite_frac", eliteFrac.toFixed(2));
+          if (Math.abs(crossoverRate - initialCrossoverRate) > 1e-4) params.set("crossover", crossoverRate.toFixed(2));
+          const qs = params.toString() ? `?${params.toString()}` : "";
+          window.location.assign(`${basePath}/p/${targetSlug}/${qs}`);
+          return;
+        }
+        if (!goal || !socket || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({
+          type: "create_goal",
+          goal,
+          population_size: pop,
+          max_votes_per_user: mv,
+          mutation_sigma: sigma,
+          elite_frac: eliteFrac,
+          crossover_rate: crossoverRate,
+        }));
+        activeGoalName = goal;
+        newGoalInput.value = "";
+      });
+
+      if (emptyGoalForm) {
+        emptyGoalForm.addEventListener("submit", (e) => {
+          e.preventDefault();
+          const goal = emptyGoalInput.value.trim();
+          const pop = parsePopValue(emptyPopInput);
+          const mv = parseMaxVotesValue(emptyMaxVotesInput);
+          const sigma = parseSigmaValue(emptySigmaInput);
+          const eliteFrac = parseEliteValue(emptyEliteInput);
+          const crossoverRate = parseCrossoverValue(emptyCrossoverInput);
+          if (emptyPopInput) emptyPopInput.value = String(pop);
+          if (emptyMaxVotesInput) emptyMaxVotesInput.value = String(mv);
+          if (emptySigmaInput) emptySigmaInput.value = sigma.toFixed(2);
+          if (emptyEliteInput) emptyEliteInput.value = eliteFrac.toFixed(2);
+          if (emptyCrossoverInput) emptyCrossoverInput.value = crossoverRate.toFixed(2);
+          if (!goal || !socket || socket.readyState !== WebSocket.OPEN) return;
+          socket.send(JSON.stringify({
+            type: "create_goal",
+            goal,
+            population_size: pop,
+            max_votes_per_user: mv,
+            mutation_sigma: sigma,
+            elite_frac: eliteFrac,
+            crossover_rate: crossoverRate,
+          }));
+          activeGoalName = goal;
+          emptyGoalInput.value = "";
+        });
+      }
+
+      if (lineageModeActiveBtn && lineageModeAllBtn && lineageToggleBtn) {
+        lineageModeActiveBtn.addEventListener("click", () => {
+          lineageFilter = "active";
+          lineageModeActiveBtn.classList.add("active");
+          lineageModeAllBtn.classList.remove("active");
+          renderLineageTree(goalsByName.get(activeGoalName));
+        });
+        lineageModeAllBtn.addEventListener("click", () => {
+          lineageFilter = "all";
+          lineageModeAllBtn.classList.add("active");
+          lineageModeActiveBtn.classList.remove("active");
+          renderLineageTree(goalsByName.get(activeGoalName));
+        });
+        lineageToggleBtn.addEventListener("click", () => {
+          lineageCollapsed = !lineageCollapsed;
+          renderLineageTree(goalsByName.get(activeGoalName));
+        });
+        window.addEventListener("resize", () => drawLineageEdges());
+      }
+
+      function setGridFilter(nextFilter) {
+        gridFilter = nextFilter;
+        tabAllBtn.classList.toggle("active", gridFilter === "all");
+        tabUnvotedBtn.classList.toggle("active", gridFilter === "unvoted");
+        lastJumpIdx = -1;
+        applyCardFilter(true);
+        updateVoteCards();
+      }
+
+      tabAllBtn.addEventListener("click", () => setGridFilter("all"));
+      tabUnvotedBtn.addEventListener("click", () => setGridFilter("unvoted"));
+      nextUnvotedBtn.addEventListener("click", () => scrollToNextUnvoted());
+
+      chatForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const text = chatInput.value.trim();
+        if (!text || !socket || socket.readyState !== WebSocket.OPEN) return;
+        socket.send(JSON.stringify({ type: "chat", message: text }));
+        chatInput.value = "";
+      });
+
+      nameForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const newName = nameInput.value.trim();
+        if (!newName) return;
+        localStorage.setItem("det_username", newName);
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "rename", username: newName }));
+        }
+      });
+
+      const fullscreenModalEl = document.getElementById("fullscreen-modal");
+      const fsTitleEl = document.getElementById("fs-title");
+      const fsSubEl = document.getElementById("fs-sub");
+      const fsScoreEl = document.getElementById("fs-score");
+      const fsUpBtn = document.getElementById("fs-up-btn");
+      const fsDownBtn = document.getElementById("fs-down-btn");
+      const fsDlBtn = document.getElementById("fs-dl-btn");
+      const fsCloseBtn = document.getElementById("fs-close-btn");
+      const fsPrevBtn = document.getElementById("fs-prev-btn");
+      const fsNextBtn = document.getElementById("fs-next-btn");
+      const fsCanvasEl = document.getElementById("fs-canvas");
+      let fullscreenIdx = null;
+      let fullscreenNode = null;
+
+      function renderFullscreenVotes() {
+        if (fullscreenNode !== null) {
+          fsScoreEl.textContent = "archive";
+          fsScoreEl.className = "score-badge";
+          fsUpBtn.disabled = true;
+          fsDownBtn.disabled = true;
+          fsPrevBtn.style.visibility = "hidden";
+          fsNextBtn.style.visibility = "hidden";
+          return;
+        }
+        if (fullscreenIdx === null) return;
+        fsPrevBtn.style.visibility = "";
+        fsNextBtn.style.visibility = "";
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal || !goal.genomes || fullscreenIdx >= goal.genomes.length) return;
+        const v = goal.votes[fullscreenIdx] || { up: 0, down: 0, score: 0 };
+        const mine = myVotes.get(voteKey(goal.name, goal.generation, fullscreenIdx)) || 0;
+        const maxVotesPerUser = goal.maxVotesPerUser || initialMaxVotes || 5;
+        const capBlocked = mine === 0 && countMyActiveVotes(goal) >= maxVotesPerUser;
+        fsScoreEl.textContent = v.score > 0 ? `+${v.score}` : String(v.score);
+        fsScoreEl.className = "score-badge" + (v.score > 0 ? " pos" : v.score < 0 ? " neg" : "");
+        fsUpBtn.querySelector(".cnt").textContent = String(v.up);
+        fsDownBtn.querySelector(".cnt").textContent = String(v.down);
+        fsUpBtn.classList.toggle("active-up", mine === 1);
+        fsDownBtn.classList.toggle("active-down", mine === -1);
+        fsUpBtn.disabled = !isConnected || goal.evolving || capBlocked;
+        fsDownBtn.disabled = !isConnected || goal.evolving || capBlocked;
+      }
+
+      function renderFullscreen() {
+        if (fullscreenNode !== null) {
+          const { goalName, node } = fullscreenNode;
+          fsTitleEl.textContent = `${goalName} #${node.id}`;
+          fsSubEl.textContent = `lineage gen ${node.gen} (${node.op || "random"})`;
+          renderCppnToCanvas(node, fsCanvasEl, FULLSCREEN_CANVAS_SIZE);
+          renderFullscreenVotes();
+          return;
+        }
+        if (fullscreenIdx === null) return;
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal || !goal.genomes || goal.genomes.length === 0) {
+          closeFullscreen();
+          return;
+        }
+        if (fullscreenIdx >= goal.genomes.length) {
+          fullscreenIdx = goal.genomes.length - 1;
+        }
+        const genome = goal.genomes[fullscreenIdx];
+        fsTitleEl.textContent = `${goal.name} #${fullscreenIdx + 1}`;
+        fsSubEl.textContent = `gen ${goal.generation} (${fullscreenIdx + 1}/${goal.genomes.length})`;
+        renderCppnToCanvas(genome, fsCanvasEl, FULLSCREEN_CANVAS_SIZE);
+        renderFullscreenVotes();
+      }
+
+      function openFullscreen(idx) {
+        fullscreenNode = null;
+        fullscreenIdx = idx;
+        fullscreenModalEl.hidden = false;
+        renderFullscreen();
+      }
+
+      function openFullscreenNode(goal, node) {
+        fullscreenIdx = null;
+        fullscreenNode = { goalName: goal.name, node };
+        fullscreenModalEl.hidden = false;
+        renderFullscreen();
+      }
+
+      function closeFullscreen() {
+        fullscreenIdx = null;
+        fullscreenNode = null;
+        fullscreenModalEl.hidden = true;
+      }
+
+      fsCloseBtn.addEventListener("click", closeFullscreen);
+      fullscreenModalEl.addEventListener("click", (e) => {
+        if (e.target === fullscreenModalEl) closeFullscreen();
+      });
+      fsUpBtn.addEventListener("click", () => {
+        const goal = goalsByName.get(activeGoalName);
+        if (goal && fullscreenIdx !== null) sendVote(goal, fullscreenIdx, 1);
+      });
+      fsDownBtn.addEventListener("click", () => {
+        const goal = goalsByName.get(activeGoalName);
+        if (goal && fullscreenIdx !== null) sendVote(goal, fullscreenIdx, -1);
+      });
+      fsDlBtn.addEventListener("click", () => {
+        if (fullscreenNode !== null) {
+          downloadPolicy({
+            name: fullscreenNode.goalName,
+            generation: fullscreenNode.node.gen,
+            genomes: [fullscreenNode.node],
+          }, 0);
+          return;
+        }
+        const goal = goalsByName.get(activeGoalName);
+        if (goal && fullscreenIdx !== null) downloadPolicy(goal, fullscreenIdx);
+      });
+      fsPrevBtn.addEventListener("click", () => {
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal || !goal.genomes.length || fullscreenIdx === null || fullscreenNode !== null) return;
+        fullscreenIdx = (fullscreenIdx - 1 + goal.genomes.length) % goal.genomes.length;
+        renderFullscreen();
+      });
+      fsNextBtn.addEventListener("click", () => {
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal || !goal.genomes.length || fullscreenIdx === null || fullscreenNode !== null) return;
+        fullscreenIdx = (fullscreenIdx + 1) % goal.genomes.length;
+        renderFullscreen();
+      });
+      window.addEventListener("keydown", (e) => {
+        if (fullscreenIdx === null && fullscreenNode === null) return;
+        if (e.key === "Escape") closeFullscreen();
+        else if (e.key === "ArrowLeft" && fullscreenNode === null) fsPrevBtn.click();
+        else if (e.key === "ArrowRight" && fullscreenNode === null) fsNextBtn.click();
+      });
+
+      connect();
+    </script>
+  </body>
+</html>

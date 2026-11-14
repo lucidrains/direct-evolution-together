@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Admin Reset — direct-evolution-together</title>
+    <style>
+      :root {
+        --bg: #09090b;
+        --panel: #111115;
+        --border: rgba(255, 255, 255, 0.09);
+        --text: #f4f4f5;
+        --muted: #a1a1aa;
+        --accent: #f5c451;
+        --ok: #34d399;
+        --err: #fb7185;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .card {
+        width: 100%;
+        max-width: 420px;
+        padding: 24px;
+        border-radius: 12px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 1.05rem;
+        font-weight: 600;
+      }
+      p {
+        margin: 0 0 18px;
+        font-size: 0.85rem;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 0.8em;
+        color: var(--text);
+      }
+      label {
+        display: block;
+        margin-bottom: 12px;
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+      input {
+        width: 100%;
+        margin-top: 5px;
+        padding: 9px 11px;
+        border-radius: 7px;
+        border: 1px solid var(--border);
+        background: #09090c;
+        color: var(--text);
+        font-size: 0.9rem;
+      }
+      input:focus {
+        outline: none;
+        border-color: rgba(245, 196, 81, 0.55);
+      }
+      button {
+        width: 100%;
+        margin-top: 6px;
+        padding: 10px 14px;
+        border: 0;
+        border-radius: 7px;
+        background: var(--accent);
+        color: #111;
+        font-weight: 600;
+        font-size: 0.9rem;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .alert {
+        margin-bottom: 16px;
+        padding: 10px 12px;
+        border-radius: 7px;
+        font-size: 0.82rem;
+        border: 1px solid var(--border);
+      }
+      .alert.ok {
+        color: var(--ok);
+        border-color: rgba(52, 211, 153, 0.3);
+        background: rgba(52, 211, 153, 0.08);
+      }
+      .alert.err {
+        color: var(--err);
+        border-color: rgba(251, 113, 133, 0.3);
+        background: rgba(251, 113, 133, 0.08);
+      }
+      .footer {
+        margin-top: 16px;
+        font-size: 0.78rem;
+        text-align: center;
+      }
+      .footer a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+      .footer a:hover {
+        color: var(--text);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Admin Goal Reset</h1>
+      <p>
+        Protected by <code>DET_ADMIN_PASSWORD</code> (from environment or <code>.env</code>).
+        Leave goal blank (or <code>*</code>) to reset all goals in the room to generation 0.
+      </p>
+
+      {% if not configured %}
+      <div class="alert err">
+        <code>DET_ADMIN_PASSWORD</code> is not set. Set it in your environment or <code>.env</code> and restart to enable admin resets.
+      </div>
+      {% endif %}
+
+      {% if status_msg %}
+      <div class="alert {% if ok %}ok{% else %}err{% endif %}">
+        {{ status_msg }}
+      </div>
+      {% endif %}
+
+      <form method="post">
+        {% csrf_token %}
+        <label>
+          Room
+          <input name="room" type="text" value="{{ room }}" placeholder="lobby" required />
+        </label>
+        <label>
+          Goal (blank = all goals in room)
+          <input name="goal" type="text" value="{{ goal }}" placeholder="Butterfly" />
+        </label>
+        <label>
+          Admin Password
+          <input name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <button type="submit" {% if not configured %}disabled{% endif %}>Reset to Gen 0</button>
+      </form>
+
+      <div class="footer">
+        <a href="{{ base_path }}/">← Back to lobby</a>
+      </div>
+    </main>
+  </body>
+</html>

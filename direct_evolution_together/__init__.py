@@ -1,1 +1,1 @@
-from direct_evolution_together.direct_evolution_together import hamming_distance
+import nimporter_plus  # noqa: F401 - registers Nim import hook

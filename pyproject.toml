@@ -23,11 +23,17 @@ classifiers=[
 ]
 
 dependencies = [
-    "einops>=0.8.1",
+    "django>=5.1",
     "nimporter-plus>=0.0.10",
+    "numpy>=2.2.6",
+    "packaging>=26.3",
     "torch>=2.5",
-    "torch-einops-utils>=0.2.5"
+    "torch-einops-utils>=0.2.6",
+    "uvicorn>=0.34",
 ]
+
+[project.scripts]
+direct-evolution-together = "direct_evolution_together.cli:main"
 
 [project.urls]
 Homepage = "https://pypi.org/project/direct-evolution-together/"
@@ -40,6 +46,7 @@ test = [
 ]
 
 [tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "direct_evolution_together.settings"
 pythonpath = [
     "."
 ]
@@ -65,11 +72,42 @@ include = [
     "README.md",
     "LICENSE"
 ]
+exclude = [
+    "**/__pycache__",
+    "*.so",
+    "*.pyd",
+    "*.dylib",
+    "*.dll",
+    "**/nimble.paths",
+    "**/nimble.develop",
+    "**/nimbledeps",
+    "**/nimcache",
+    "*.sqlite3",
+    "*.sqlite3-*",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["direct_evolution_together"]
+exclude = [
+    "**/__pycache__",
+    "*.so",
+    "*.pyd",
+    "*.dylib",
+    "*.dll",
+    "**/nimble.paths",
+    "**/nimble.develop",
+    "**/nimbledeps",
+    "**/nimcache",
+    "*.sqlite3",
+    "*.sqlite3-*",
+]
 
 [dependency-groups]
 dev = [
-    "pytest"
+    "pytest",
+    "pytest-django",
+    "websockets",
+]
+deploy = [
+    "fabric>=3.2",
 ]

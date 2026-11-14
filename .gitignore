@@ -148,6 +148,8 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.sample
 .envrc
 .venv
 env/
@@ -155,6 +157,20 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Deploy / local generated files
+justfile
+uv_publish.sh
+.pypi
+deploy/*.rendered*
+deploy/*.local*
+*.secret*
+*.bak
+db.sqlite3-*
+nimcache/
+direct_evolution_together/nimble.paths
+direct_evolution_together/nimble.develop
+direct_evolution_together/nimbledeps
 
 # Spyder project settings
 .spyderproject
