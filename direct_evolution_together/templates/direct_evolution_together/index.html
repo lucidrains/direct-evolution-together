@@ -1449,19 +1449,19 @@
                     <input id="empty-pop-input" class="pop-input" type="number" min="3" max="64" step="1" value="{{ initial_pop|default:30 }}" aria-label="Population size" />
                     <span class="ga-param-hint">Candidates per generation</span>
                   </label>
-                  <label class="ga-param-card" title="Maximum active votes each participant can hold in a single round (1-20)">
-                    <span class="ga-param-top"><span>Votes / person</span><span class="ga-param-range">1–20</span></span>
-                    <input id="empty-max-votes-input" class="pop-input" type="number" min="1" max="20" step="1" value="{{ initial_max_votes|default:5 }}" aria-label="Max votes per user" />
+                  <label class="ga-param-card" title="Maximum active votes each participant can hold in a single round (1-64)">
+                    <span class="ga-param-top"><span>Votes / person</span><span class="ga-param-range">1–64</span></span>
+                    <input id="empty-max-votes-input" class="pop-input" type="number" min="1" max="64" step="1" value="{{ initial_max_votes|default:20 }}" aria-label="Max votes per user" />
                     <span class="ga-param-hint">Active votes per round</span>
                   </label>
                   <label class="ga-param-card" title="Gaussian weight mutation step size applied to bred offspring (0.05-1.00)">
                     <span class="ga-param-top"><span>Mutation &sigma;</span><span class="ga-param-range">0.05–1.00</span></span>
-                    <input id="empty-sigma-input" class="pop-input" type="number" min="0.05" max="1.0" step="0.05" value="{{ initial_mut_sigma|default:'0.35' }}" aria-label="Mutation sigma" />
+                    <input id="empty-sigma-input" class="pop-input" type="number" min="0.05" max="1.0" step="0.05" value="{{ initial_mut_sigma|default:'0.30' }}" aria-label="Mutation sigma" />
                     <span class="ga-param-hint">Weight perturbation scale</span>
                   </label>
                   <label class="ga-param-card" title="Share of highest-scored liked individuals preserved verbatim each generation (0.00-0.50)">
                     <span class="ga-param-top"><span>Elite fraction</span><span class="ga-param-range">0.00–0.50</span></span>
-                    <input id="empty-elite-input" class="pop-input" type="number" min="0" max="0.5" step="0.05" value="{{ initial_elite_frac|default:'0.10' }}" aria-label="Elite fraction" />
+                    <input id="empty-elite-input" class="pop-input" type="number" min="0" max="0.5" step="0.05" value="{{ initial_elite_frac|default:'0.20' }}" aria-label="Elite fraction" />
                     <span class="ga-param-hint">Unchanged top carry-overs</span>
                   </label>
                   <label class="ga-param-card" title="Probability of neuron-unit parent mixing vs asexual mutation (0.00-1.00)">
@@ -1484,9 +1484,9 @@
 
             <div class="round-banner">
               <div class="round-banner-top">
-                <span id="round-vote-text">Votes: 0 / 3</span>
-                <span id="user-vote-budget" class="vote-budget-pill" title="Active vote budget per person each round — click an active vote again to free a slot">Your votes: 0 / {{ initial_max_votes|default:5 }}</span>
-                <span id="round-timer" class="round-timer waiting">Need 3 more votes</span>
+                <span id="round-vote-text">Voted: 0 / 15</span>
+                <span id="user-vote-budget" class="vote-budget-pill" title="Active vote budget per person each round — click an active vote again to free a slot">Your votes: 0 / {{ initial_max_votes|default:20 }}</span>
+                <span id="round-timer" class="round-timer waiting">Need 15 more votes</span>
               </div>
               <div id="throttle-banner" class="throttle-banner" hidden></div>
               <div class="progress-track">
@@ -1640,9 +1640,9 @@
     {{ is_private|default:False|json_script:"det-is-private" }}
     {{ initial_goal|default:""|json_script:"det-initial-goal" }}
     {{ initial_pop|default:30|json_script:"det-initial-pop" }}
-    {{ initial_max_votes|default:5|json_script:"det-initial-max-votes" }}
-    {{ initial_mut_sigma|default:"0.35"|json_script:"det-initial-sigma" }}
-    {{ initial_elite_frac|default:"0.10"|json_script:"det-initial-elite" }}
+    {{ initial_max_votes|default:20|json_script:"det-initial-max-votes" }}
+    {{ initial_mut_sigma|default:"0.30"|json_script:"det-initial-sigma" }}
+    {{ initial_elite_frac|default:"0.20"|json_script:"det-initial-elite" }}
     {{ initial_crossover_rate|default:"0.75"|json_script:"det-initial-crossover" }}
     <script>
       const basePath = JSON.parse(document.getElementById("det-base-path").textContent) || "";
@@ -1651,9 +1651,9 @@
       const isPrivateRoom = Boolean(JSON.parse(document.getElementById("det-is-private").textContent));
       const initialGoal = JSON.parse(document.getElementById("det-initial-goal").textContent);
       const initialPop = Math.max(3, Math.min(64, Number(JSON.parse(document.getElementById("det-initial-pop").textContent)) || 30));
-      const initialMaxVotes = Math.max(1, Math.min(20, Number(JSON.parse(document.getElementById("det-initial-max-votes").textContent)) || 5));
-      const initialMutSigma = Math.max(0.05, Math.min(1.0, Number(JSON.parse(document.getElementById("det-initial-sigma").textContent)) || 0.35));
-      const initialEliteFrac = Math.max(0.0, Math.min(0.5, Number(JSON.parse(document.getElementById("det-initial-elite").textContent)) ?? 0.10));
+      const initialMaxVotes = Math.max(1, Math.min(64, Number(JSON.parse(document.getElementById("det-initial-max-votes").textContent)) || 20));
+      const initialMutSigma = Math.max(0.05, Math.min(1.0, Number(JSON.parse(document.getElementById("det-initial-sigma").textContent)) || 0.30));
+      const initialEliteFrac = Math.max(0.0, Math.min(0.5, Number(JSON.parse(document.getElementById("det-initial-elite").textContent)) ?? 0.20));
       const initialCrossoverRate = Math.max(0.0, Math.min(1.0, Number(JSON.parse(document.getElementById("det-initial-crossover").textContent)) ?? 0.75));
       const csrfToken = "{{ csrf_token }}";
       const CANVAS_SIZE = 64;
@@ -2059,7 +2059,7 @@
       }
 
       function parseMaxVotesValue(inputEl, fallback = initialMaxVotes) {
-        return parseClampedInt(inputEl, 1, 20, fallback);
+        return parseClampedInt(inputEl, 1, 64, fallback);
       }
 
       function parseClampedFloat(inputEl, minVal, maxVal, fallback) {
@@ -2246,12 +2246,14 @@
         const goal = goalsByName.get(activeGoalName);
         if (!goal) return;
 
-        const minVotes = goal.minVotes || 3;
+        const minVotes = goal.minVotes || 15;
         const totalVotes = goal.totalVotes || 0;
+        const votedCandidates = typeof goal.votedCandidates === "number" ? goal.votedCandidates : totalVotes;
+        const likedCandidates = typeof goal.likedCandidates === "number" ? goal.likedCandidates : 1;
         const durMs = goal.countdownDurationMs || 8000;
 
         if (goal.evolving) {
-          roundVoteText.textContent = `Votes: ${totalVotes} / ${minVotes}`;
+          roundVoteText.textContent = `Voted: ${votedCandidates} / ${minVotes} (${totalVotes} votes)`;
           roundTimerEl.textContent = "Evolving next generation...";
           roundTimerEl.className = "round-timer";
           roundProgressEl.style.width = "100%";
@@ -2262,18 +2264,22 @@
         if (goal._deadlinePerfMs && goal._deadlinePerfMs > 0) {
           const remMs = Math.max(0, goal._deadlinePerfMs - performance.now());
           const pct = Math.max(0, Math.min(100, (remMs / durMs) * 100));
-          roundVoteText.textContent = `Countdown active (${totalVotes} votes)`;
+          roundVoteText.textContent = `Countdown active (${votedCandidates} cards, ${totalVotes} votes)`;
           roundTimerEl.textContent = `Advancing in ${(remMs / 1000).toFixed(1)}s`;
           roundTimerEl.className = "round-timer";
           roundProgressEl.style.width = `${pct}%`;
           roundProgressEl.classList.add("counting");
         } else {
-          const remaining = Math.max(0, minVotes - totalVotes);
-          const pct = Math.max(0, Math.min(100, (totalVotes / minVotes) * 100));
-          roundVoteText.textContent = `Votes: ${totalVotes} / ${minVotes}`;
-          roundTimerEl.textContent = remaining === 1
-            ? "Need 1 more vote"
-            : `Need ${remaining} more votes`;
+          const remaining = Math.max(0, minVotes - votedCandidates);
+          const pct = Math.max(0, Math.min(100, (votedCandidates / minVotes) * 100));
+          roundVoteText.textContent = `Voted: ${votedCandidates} / ${minVotes} (${totalVotes} votes)`;
+          if (remaining === 0 && likedCandidates < 1) {
+            roundTimerEl.textContent = "Need at least 1 positive vote";
+          } else {
+            roundTimerEl.textContent = remaining === 1
+              ? "Need 1 more card voted"
+              : `Need ${remaining} more cards voted`;
+          }
           roundTimerEl.className = "round-timer waiting";
           roundProgressEl.style.width = `${pct}%`;
           roundProgressEl.classList.remove("counting");
@@ -2434,6 +2440,7 @@
         socket.send(JSON.stringify({
           type: "cast_vote",
           goal: goal.name,
+          generation: goal.generation,
           index: idx,
           vote: val,
         }));
@@ -3105,7 +3112,9 @@
           if (g) {
             g.votes = data.votes || [];
             g.totalVotes = data.totalVotes || 0;
-            g.minVotes = data.minVotes || 3;
+            g.votedCandidates = typeof data.votedCandidates === "number" ? data.votedCandidates : g.totalVotes;
+            g.likedCandidates = typeof data.likedCandidates === "number" ? data.likedCandidates : 1;
+            g.minVotes = data.minVotes || 15;
             g.countdownMs = data.countdownMs || 0;
             g.countdownDurationMs = data.countdownDurationMs || 8000;
             g.evolving = Boolean(data.evolving);
@@ -3204,7 +3213,14 @@
         socket.addEventListener("close", () => {
           socket = null;
           setConnected(false);
+          myVotes.clear();
+          for (const g of goalsByName.values()) {
+            g.countdownMs = 0;
+            g.countdownDeadlineMs = 0;
+            g.evolving = false;
+          }
           loadingOverlayEl.hidden = true;
+          renderRoundStatus();
           updateVoteCards();
           clearAllCursors();
           scheduleReconnect();

@@ -13,5 +13,6 @@ urlpatterns = [
     path("export/script/", views.export_script, name="export_script"),
     path("reset/", views.admin_reset_page, name="admin_reset"),
     path("api/reset/", views.api_reset, name="api_reset"),
+    path("api/clear/", views.api_clear, name="api_clear"),
     path("admin/", admin.site.urls),
 ]

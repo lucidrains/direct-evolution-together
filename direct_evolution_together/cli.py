@@ -104,20 +104,20 @@ def main() -> None:
     parser.add_argument(
         "--max-votes-per-user",
         type=int,
-        default=int(os.getenv("MUMMY_MAX_VOTES", "5")),
-        help="Max active votes per user per round in public rooms and default for private rooms (1-20, default: 5)",
+        default=int(os.getenv("MUMMY_MAX_VOTES", "20")),
+        help="Max active votes per user per round in public rooms and default for private rooms (1-64, default: 20)",
     )
     parser.add_argument(
         "--mutation-sigma",
         type=float,
-        default=float(os.getenv("MUMMY_MUT_SIGMA", "0.35")),
-        help="Constant GA mutation sigma for public rooms and default for private rooms (0.05-1.0, default: 0.35)",
+        default=float(os.getenv("MUMMY_MUT_SIGMA", "0.30")),
+        help="Constant GA mutation sigma for public rooms and default for private rooms (0.05-1.0, default: 0.30)",
     )
     parser.add_argument(
         "--elite-frac",
         type=float,
-        default=float(os.getenv("MUMMY_ELITE_FRAC", "0.10")),
-        help="Elite fraction carried over per generation for public rooms and default for private rooms (0.0-0.5, default: 0.10)",
+        default=float(os.getenv("MUMMY_ELITE_FRAC", "0.20")),
+        help="Elite fraction carried over per generation for public rooms and default for private rooms (0.0-0.5, default: 0.20)",
     )
     parser.add_argument(
         "--crossover-rate",
@@ -147,7 +147,7 @@ def main() -> None:
             return
 
     pop_size = max(3, min(64, args.population_size))
-    max_votes = max(1, min(20, args.max_votes_per_user))
+    max_votes = max(1, min(64, args.max_votes_per_user))
     mut_sigma = max(0.05, min(1.0, float(args.mutation_sigma)))
     elite_frac = max(0.0, min(0.5, float(args.elite_frac)))
     crossover_rate = max(0.0, min(1.0, float(args.crossover_rate)))

@@ -103,6 +103,60 @@
         border-color: rgba(251, 113, 133, 0.3);
         background: rgba(251, 113, 133, 0.08);
       }
+      .btn-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 6px;
+      }
+      .btn-row button {
+        margin-top: 0;
+      }
+      button.danger {
+        background: transparent;
+        color: var(--err);
+        border: 1px solid rgba(251, 113, 133, 0.45);
+      }
+      .targets {
+        margin: 0 0 16px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: #09090c;
+        max-height: 180px;
+        overflow-y: auto;
+      }
+      .targets-title {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+      .room-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+        font-size: 0.78rem;
+      }
+      .room-row:last-child { margin-bottom: 0; }
+      .chip {
+        width: auto;
+        margin: 0;
+        padding: 3px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: #141419;
+        color: var(--text);
+        font-size: 0.74rem;
+        font-weight: 500;
+      }
+      .chip.room-chip {
+        border-color: rgba(245, 196, 81, 0.35);
+        color: var(--accent);
+      }
       .footer {
         margin-top: 16px;
         font-size: 0.78rem;
@@ -139,20 +193,42 @@
 
       <form method="post">
         {% csrf_token %}
+        {% if room_summaries %}
+        <div class="targets">
+          <div class="targets-title">Quick Select Room / Goal</div>
+          {% for r in room_summaries %}
+          <div class="room-row">
+            <button type="button" class="chip room-chip" onclick="pickTarget('{{ r.slug|escapejs }}', '')">{{ r.label }} (all)</button>
+            {% for g in r.goals %}
+            <button type="button" class="chip" onclick="pickTarget('{{ r.slug|escapejs }}', '{{ g.name|escapejs }}')">{{ g.name }} · g{{ g.gen }}</button>
+            {% endfor %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
         <label>
           Room
-          <input name="room" type="text" value="{{ room }}" placeholder="lobby" required />
+          <input id="reset-room-input" name="room" type="text" value="{{ room }}" placeholder="lobby" required />
         </label>
         <label>
           Goal (blank = all goals in room)
-          <input name="goal" type="text" value="{{ goal }}" placeholder="Butterfly" />
+          <input id="reset-goal-input" name="goal" type="text" value="{{ goal }}" placeholder="Butterfly" />
         </label>
         <label>
           Admin Password
           <input name="password" type="password" autocomplete="current-password" required />
         </label>
-        <button type="submit" {% if not configured %}disabled{% endif %}>Reset to Gen 0</button>
+        <div class="btn-row">
+          <button type="submit" name="action" value="reset" {% if not configured %}disabled{% endif %}>Reset to Gen 0</button>
+          <button type="submit" name="action" value="clear" class="danger" {% if not configured %}disabled{% endif %}>Clear Room State</button>
+        </div>
       </form>
+      <script>
+        function pickTarget(roomSlug, goalName) {
+          document.getElementById("reset-room-input").value = roomSlug;
+          document.getElementById("reset-goal-input").value = goalName;
+        }
+      </script>
 
       <div class="footer">
         <a href="{{ base_path }}/">← Back to lobby</a>

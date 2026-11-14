@@ -2,6 +2,7 @@ import itertools
 from pathlib import Path
 import re
 import tempfile
+import threading
 from typing import Iterable
 
 import torch
@@ -13,11 +14,31 @@ LAYER_DIMS = (4, 12, 12, 12, 3)
 NUM_HIDDEN = sum(LAYER_DIMS[1:-1])  # 36
 NUM_ACTIVATIONS = 5  # 0=tanh, 1=sin, 2=gauss, 3=abs, 4=leaky_relu
 POPULATION_SIZE = 30
-DEFAULT_MUT_SIGMA = 0.35
-DEFAULT_ELITE_FRAC = 0.10
+DEFAULT_MUT_SIGMA = 0.30
+DEFAULT_ELITE_FRAC = 0.20
 DEFAULT_CROSSOVER_RATE = 0.75
 
+_counter_lock = threading.Lock()
 _genome_counter = itertools.count(1)
+
+
+def _alloc_genome_id() -> int:
+    with _counter_lock:
+        return next(_genome_counter)
+
+
+def sync_genome_counter(max_existing_id: int) -> None:
+    """Advance the global genome ID counter past any restored IDs."""
+    global _genome_counter
+    if max_existing_id <= 0:
+        return
+    with _counter_lock:
+        nxt = next(_genome_counter)
+        if nxt <= max_existing_id:
+            _genome_counter = itertools.count(max_existing_id + 1)
+        else:
+            # Keep nxt unused or step back 1 cleanly
+            _genome_counter = itertools.count(nxt)
 
 
 def _apply_mixed_activations(z: torch.Tensor, act_codes: torch.Tensor) -> torch.Tensor:
@@ -53,7 +74,7 @@ class CPPN(nn.Module):
         op: str = "random",
     ) -> None:
         super().__init__()
-        self.genome_id = genome_id if genome_id is not None else next(_genome_counter)
+        self.genome_id = genome_id if genome_id is not None else _alloc_genome_id()
         self.parents: list[int] = list(parents) if parents else []
         self.op: str = op
         self.layers = nn.ModuleList(
@@ -273,19 +294,30 @@ def evolve_population(
     clamped_crossover = max(0.0, min(1.0, float(crossover_rate)))
 
     next_gen: list[CPPN] = []
+    if clamped_elite_frac <= 0.0 or pop_size <= 1:
+        target_elites = 0
+    else:
+        target_elites = min(max(1, round(pop_size * clamped_elite_frac)), pop_size - 1)
+
+    def _clone_elite(src: CPPN) -> CPPN:
+        elite = CPPN.from_dict(src.to_dict())
+        elite.genome_id = _alloc_genome_id()
+        elite.parents = [src.genome_id]
+        elite.op = "elite"
+        return elite
+
     if liked:
-        # Preserve configurable fraction of liked top individuals as elites
-        if clamped_elite_frac <= 0.0 or pop_size <= 1:
-            target_elites = 0
-        else:
-            target_elites = min(max(1, round(pop_size * clamped_elite_frac)), pop_size - 1)
-        num_elites = min(len(liked), target_elites)
+        # Keep at least target_elites, and avoid dropping tied top-scorers by index bias.
+        top_key = (scores[liked[0]], up_counts[liked[0]])
+        top_tied_count = sum(1 for i in liked if (scores[i], up_counts[i]) == top_key)
+        max_tie_elites = max(target_elites, pop_size // 2)
+        num_elites = (
+            min(len(liked), max(target_elites, min(top_tied_count, max_tie_elites)))
+            if target_elites > 0
+            else 0
+        )
         for e_idx in range(num_elites):
-            elite_src = parents[liked[e_idx]]
-            elite = CPPN.from_dict(elite_src.to_dict())
-            elite.parents = [elite_src.genome_id]
-            elite.op = "elite"
-            next_gen.append(elite)
+            next_gen.append(_clone_elite(parents[liked[e_idx]]))
 
         num_immigrants = min(2, max(0, (pop_size - num_elites) // 10))
         num_breed = max(0, pop_size - num_elites - num_immigrants)
@@ -326,9 +358,13 @@ def evolve_population(
             else:
                 next_gen.append(CPPN.random())
     elif neutral_or_better:
-        # Only dislikes were cast: steer away by breeding neutral survivors + fresh explorers
-        num_immigrants = min(3, max(1, pop_size // 8))
-        for _ in range(max(0, pop_size - num_immigrants)):
+        # Only dislikes or 0-ties were cast: preserve top non-disliked elites before breeding away.
+        num_elites = min(len(neutral_or_better), target_elites) if target_elites > 0 else 0
+        for e_idx in range(num_elites):
+            next_gen.append(_clone_elite(parents[neutral_or_better[e_idx]]))
+        num_immigrants = min(3, max(0, (pop_size - num_elites) // 8))
+        num_breed = max(0, pop_size - num_elites - num_immigrants)
+        for _ in range(num_breed):
             idx_a, idx_b, use_cross = _sample_parents(
                 neutral_or_better,
                 scores,

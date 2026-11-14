@@ -38,3 +38,14 @@ class ChatMessage(models.Model):
 
     def __str__(self) -> str:
         return f"[{self.room}] {self.username}: {self.message[:40]}"
+
+
+class RoomEvolutionState(models.Model):
+    """Persisted room evolution state so server restarts/deploys resume cleanly."""
+
+    room = models.CharField(max_length=64, unique=True)
+    state_json = models.TextField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"EvolutionState({self.room})"

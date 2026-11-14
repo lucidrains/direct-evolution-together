@@ -29,7 +29,7 @@ def main() -> None:
         port=settings.WS_PORT,
         seed=True,
         pop_size=settings.POPULATION_SIZE,
-        min_votes=settings.MIN_VOTES,
+        min_votes=settings.MIN_VOTES if settings.MIN_VOTES_EXPLICIT else None,
         max_votes=settings.MAX_VOTES_PER_USER,
         mut_sigma=settings.MUTATION_SIGMA,
         elite_frac=settings.ELITE_FRAC,

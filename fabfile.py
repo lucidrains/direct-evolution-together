@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import shlex
 import subprocess
@@ -62,7 +63,7 @@ class DeployConfig:
     allowed_hosts: str
     csrf_trusted_origins: str
     pop_size: int
-    min_votes: int
+    min_votes: str
     max_votes: int
     mut_sigma: str
     elite_frac: str
@@ -113,10 +114,10 @@ class DeployConfig:
             allowed_hosts=allowed_hosts,
             csrf_trusted_origins=csrf_origins,
             pop_size=int(os.getenv("MUMMY_POP_SIZE", "30")),
-            min_votes=int(os.getenv("MUMMY_MIN_VOTES", "3")),
-            max_votes=int(os.getenv("MUMMY_MAX_VOTES", "5")),
-            mut_sigma=os.getenv("MUMMY_MUT_SIGMA", "0.35"),
-            elite_frac=os.getenv("MUMMY_ELITE_FRAC", "0.10"),
+            min_votes=os.getenv("MUMMY_MIN_VOTES", "").strip(),
+            max_votes=int(os.getenv("MUMMY_MAX_VOTES", "20")),
+            mut_sigma=os.getenv("MUMMY_MUT_SIGMA", "0.30"),
+            elite_frac=os.getenv("MUMMY_ELITE_FRAC", "0.20"),
             crossover_rate=os.getenv("MUMMY_CROSSOVER_RATE", "0.75"),
         )
 
@@ -170,7 +171,7 @@ def _render_runtime_env(cfg: DeployConfig) -> str:
         f"DET_ADMIN_PASSWORD={cfg.admin_password}",
         f"CUDA_VISIBLE_DEVICES={cfg.cuda_visible_devices}",
         f"MUMMY_POP_SIZE={cfg.pop_size}",
-        f"MUMMY_MIN_VOTES={cfg.min_votes}",
+        *([f"MUMMY_MIN_VOTES={cfg.min_votes}"] if cfg.min_votes else []),
         f"MUMMY_MAX_VOTES={cfg.max_votes}",
         f"MUMMY_MUT_SIGMA={cfg.mut_sigma}",
         f"MUMMY_ELITE_FRAC={cfg.elite_frac}",
@@ -582,4 +583,21 @@ def logs(c, lines: int = 80):
     with cfg.connect() as conn:
         conn.run(
             f"journalctl -u {shlex.quote(cfg.ws_service)} -u {shlex.quote(cfg.uvicorn_service)} -n {int(lines)} --no-pager"
+        )
+
+
+@task
+def clear(c, room: str = "lobby", goal: str = ""):
+    """Clear evolution state in production for a lobby goal, the whole lobby, or a private room."""
+    cfg = DeployConfig.from_env()
+    payload = json.dumps({
+        "password": cfg.admin_password,
+        "room": (room or "lobby").strip() or "lobby",
+        "goal": (goal or "").strip(),
+        "action": "clear",
+    })
+    url = shlex.quote(f"http://127.0.0.1:{cfg.http_port}/api/clear/")
+    with cfg.connect() as conn:
+        conn.run(
+            f"curl -fsS -X POST -H 'Content-Type: application/json' -d {shlex.quote(payload)} {url}"
         )

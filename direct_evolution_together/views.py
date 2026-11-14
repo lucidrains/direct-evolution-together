@@ -22,7 +22,7 @@ from direct_evolution_together.cppn import (
     save_cppn_bytes,
     slugify_policy_name,
 )
-from direct_evolution_together.models import Room
+from direct_evolution_together.models import Room, RoomEvolutionState
 
 
 def _resolve_base_path(request: HttpRequest) -> str:
@@ -68,7 +68,7 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
     raw_max_votes = request.GET.get("max_votes", "").strip()
     if raw_max_votes:
         try:
-            initial_max_votes = max(1, min(20, int(raw_max_votes)))
+            initial_max_votes = max(1, min(64, int(raw_max_votes)))
         except ValueError:
             initial_max_votes = settings.MAX_VOTES_PER_USER
     initial_mut_sigma = settings.MUTATION_SIGMA
@@ -269,6 +269,61 @@ def _apply_goal_reset_dispatch(room: str, goal_name: str, genomes: list[dict], c
     )
 
 
+def _apply_room_clear_dispatch(room: str, goals_payload: list[dict], goal: str, configured: str) -> tuple[int, str]:
+    goals_json = json.dumps(goals_payload)
+    if ws_bridge.is_running():
+        mummy_ws.clear_room_evolution(room, goals_json, goal, "admin")
+        return 200, ""
+    return _ws_internal_request(
+        "POST",
+        "/internal/room-clear",
+        configured,
+        {"room": room, "goal": goal, "username": "admin", "goals": goals_payload},
+    )
+
+
+def _db_room_goal_names(room: str) -> list[str]:
+    row = RoomEvolutionState.objects.filter(room=room).first()
+    if row is None:
+        return []
+    try:
+        parsed = json.loads(row.state_json)
+    except ValueError:
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    return [
+        str(g.get("name"))
+        for g in parsed.get("goals", [])
+        if isinstance(g, dict) and g.get("name")
+    ]
+
+
+def _clear_persisted_room_state(room: str, goal: str) -> None:
+    if not goal or goal == "*":
+        RoomEvolutionState.objects.filter(room=room).delete()
+        return
+    row = RoomEvolutionState.objects.filter(room=room).first()
+    if row is None:
+        return
+    try:
+        parsed = json.loads(row.state_json)
+    except ValueError:
+        RoomEvolutionState.objects.filter(room=room).delete()
+        return
+    if not isinstance(parsed, dict):
+        return
+    remaining = [
+        g for g in parsed.get("goals", []) if isinstance(g, dict) and g.get("name") != goal
+    ]
+    if not remaining and room != "lobby":
+        row.delete()
+        return
+    parsed["goals"] = remaining
+    row.state_json = json.dumps(parsed)
+    row.save(update_fields=["state_json", "updated_at"])
+
+
 def _perform_admin_reset(room: str, goal: str, configured: str) -> tuple[bool, int, str, list[str]]:
     room = (room or "lobby").strip() or "lobby"
     goal = (goal or "").strip()
@@ -296,9 +351,95 @@ def _perform_admin_reset(room: str, goal: str, configured: str) -> tuple[bool, i
     return True, 200, f"Reset {', '.join(reset_goals)} in '{room}' to gen 0.", reset_goals
 
 
+def _perform_admin_clear(room: str, goal: str, configured: str) -> tuple[bool, int, str, list[str]]:
+    room = (room or "lobby").strip() or "lobby"
+    goal = (goal or "").strip()
+    is_all = not goal or goal == "*"
+
+    status, pop_map, err = _fetch_room_pop_sizes(room, configured)
+    if status != 200:
+        return False, status, err, []
+
+    if room == "lobby":
+        known_goals = list(pop_map.keys()) if pop_map else list(ws_bridge.DEFAULT_GOALS)
+        if is_all:
+            goals_payload = [
+                {
+                    "name": g_name,
+                    "genomes": create_random_population(
+                        pop_size=int(pop_map.get(g_name, settings.POPULATION_SIZE))
+                    ),
+                }
+                for g_name in known_goals
+            ]
+            _clear_persisted_room_state(room, "")
+            c_status, c_err = _apply_room_clear_dispatch(room, goals_payload, "", configured)
+            if c_status != 200:
+                return False, c_status, c_err or "Failed to clear lobby room state.", []
+            return True, 200, f"Cleared {', '.join(known_goals)} in '{room}' to fresh gen 0.", known_goals
+
+        if goal not in known_goals:
+            available = ", ".join(known_goals)
+            return False, 404, f"Goal '{goal}' not found in room '{room}' (available: {available}).", []
+        genomes = create_random_population(
+            pop_size=int(pop_map.get(goal, settings.POPULATION_SIZE))
+        )
+        _clear_persisted_room_state(room, goal)
+        c_status, c_err = _apply_room_clear_dispatch(room, genomes, goal, configured)
+        if c_status != 200:
+            return False, c_status, c_err or "Failed to clear lobby goal.", []
+        return True, 200, f"Cleared '{goal}' in '{room}' to fresh gen 0.", [goal]
+
+    db_goals = _db_room_goal_names(room)
+    all_goals = list(dict.fromkeys(list(pop_map.keys()) + db_goals))
+    if not is_all and goal not in all_goals:
+        if all_goals:
+            return False, 404, f"Goal '{goal}' not found in room '{room}' (available: {', '.join(all_goals)}).", []
+        return False, 404, f"Room '{room}' has no initialized or persisted goals.", []
+
+    cleared = list(all_goals) if is_all else [goal]
+    _clear_persisted_room_state(room, "" if is_all else goal)
+    c_status, c_err = _apply_room_clear_dispatch(room, [], "" if is_all else goal, configured)
+    if c_status != 200:
+        return False, c_status, c_err or "Failed to clear private room state.", []
+    if is_all:
+        label = ", ".join(cleared) if cleared else "(empty)"
+        return True, 200, f"Cleared evolution state for room '{room}' ({label}).", cleared
+    return True, 200, f"Cleared goal '{goal}' from room '{room}'.", cleared
+
+
+def _collect_room_summaries() -> list[dict]:
+    meta_by_slug = {r.slug: r.name for r in Room.objects.all()}
+    saved_by_room: dict[str, list[dict]] = {}
+    for row in RoomEvolutionState.objects.order_by("room"):
+        try:
+            parsed = json.loads(row.state_json)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            saved_by_room[row.room] = [
+                {"name": str(g.get("name", "")), "gen": int(g.get("generation", 0))}
+                for g in parsed.get("goals", [])
+                if isinstance(g, dict) and g.get("name")
+            ]
+
+    ordered_rooms = list(dict.fromkeys(["lobby"] + list(meta_by_slug.keys()) + list(saved_by_room.keys())))
+    summaries = []
+    for slug in ordered_rooms:
+        goals = saved_by_room.get(slug, [])
+        if slug == "lobby" and not goals:
+            goals = [{"name": g, "gen": 0} for g in ws_bridge.DEFAULT_GOALS]
+        summaries.append({
+            "slug": slug,
+            "label": "Front Lobby" if slug == "lobby" else meta_by_slug.get(slug, slug),
+            "goals": goals,
+        })
+    return summaries
+
+
 @require_http_methods(["GET", "POST"])
 def admin_reset_page(request: HttpRequest) -> HttpResponse:
-    """Unlinked admin-only page for resetting a room's goal(s) with DET_ADMIN_PASSWORD."""
+    """Unlinked admin-only page for resetting or clearing room evolution state."""
     configured = _configured_admin_password()
     room = "lobby"
     goal = ""
@@ -309,10 +450,13 @@ def admin_reset_page(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         room = request.POST.get("room", "lobby").strip() or "lobby"
         goal = request.POST.get("goal", "").strip()
+        action = request.POST.get("action", "reset").strip().lower()
         password = request.POST.get("password", "")
         authed, status_code, err = _verify_admin_password(password)
         if not authed:
             status_msg = err
+        elif action == "clear":
+            ok, status_code, status_msg, _ = _perform_admin_clear(room, goal, configured)
         else:
             ok, status_code, status_msg, _ = _perform_admin_reset(room, goal, configured)
 
@@ -326,15 +470,13 @@ def admin_reset_page(request: HttpRequest) -> HttpResponse:
             "goal": goal,
             "status_msg": status_msg,
             "ok": ok,
+            "room_summaries": _collect_room_summaries(),
         },
         status=status_code,
     )
 
 
-@csrf_exempt
-@require_POST
-def api_reset(request: HttpRequest) -> JsonResponse:
-    """Admin JSON endpoint to reset goal(s) to gen 0 via DET_ADMIN_PASSWORD."""
+def _handle_admin_json_action(request: HttpRequest, default_action: str) -> JsonResponse:
     try:
         payload = json.loads(request.body.decode("utf-8") or "{}")
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -351,9 +493,29 @@ def api_reset(request: HttpRequest) -> JsonResponse:
 
     room = str(payload.get("room") or "lobby")
     goal = str(payload.get("goal") or "")
-    ok, status_code, msg, reset_goals = _perform_admin_reset(
-        room, goal, _configured_admin_password()
-    )
+    action = str(payload.get("action") or default_action).strip().lower()
+    if action == "clear":
+        ok, status_code, msg, affected = _perform_admin_clear(
+            room, goal, _configured_admin_password()
+        )
+    else:
+        ok, status_code, msg, affected = _perform_admin_reset(
+            room, goal, _configured_admin_password()
+        )
     if not ok:
         return JsonResponse({"ok": False, "error": msg}, status=status_code)
-    return JsonResponse({"ok": True, "room": room, "reset": reset_goals, "message": msg})
+    return JsonResponse({"ok": True, "room": room, "reset": affected, "cleared": affected, "message": msg})
+
+
+@csrf_exempt
+@require_POST
+def api_reset(request: HttpRequest) -> JsonResponse:
+    """Admin JSON endpoint to reset or clear goal(s)/room state via DET_ADMIN_PASSWORD."""
+    return _handle_admin_json_action(request, "reset")
+
+
+@csrf_exempt
+@require_POST
+def api_clear(request: HttpRequest) -> JsonResponse:
+    """Admin JSON endpoint to clear room/goal evolution state via DET_ADMIN_PASSWORD."""
+    return _handle_admin_json_action(request, "clear")

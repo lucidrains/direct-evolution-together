@@ -333,3 +333,263 @@ def test_cli_and_dotenv(tmp_path, monkeypatch):
     load_dotenv()
     assert os.environ.pop("DET_TEST_K", None) == "from_file"
     assert os.environ["DET_TEST_E"] == "yes"
+
+
+def test_cppn_no_regression_on_ties_and_empty_likes():
+    torch.manual_seed(7)
+    pop = create_random_population(pop_size=12)
+    parent_ids = {g["id"] for g in pop}
+
+    # 4 candidates tied at top score (+1, 1 up) even though elite_frac=0.20 -> target_elites=2
+    scores = [1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0]
+    ups = [1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0]
+    next_pop, top_score = evolve_population(pop, scores, ups, pop_size=12, elite_frac=0.20)
+    assert top_score == 1 and len(next_pop) == 12
+    for slot, src_idx in enumerate((0, 1, 5, 8)):
+        assert next_pop[slot]["op"] == "elite"
+        assert next_pop[slot]["weights"] == pop[src_idx]["weights"]
+        assert next_pop[slot]["id"] != pop[src_idx]["id"]
+        assert next_pop[slot]["id"] not in parent_ids
+
+    # Empty-liked round (only downvotes + neutral zeros) must still preserve neutral elites
+    neg_scores = [-2, -1, 0, 0, -1, -3, -1, -2, -1, -1, -2, -1]
+    neg_ups = [0] * 12
+    after_neg, neg_top = evolve_population(pop, neg_scores, neg_ups, pop_size=12, elite_frac=0.20)
+    assert neg_top == 0 and len(after_neg) == 12
+    assert after_neg[0]["op"] == "elite" and after_neg[0]["weights"] == pop[2]["weights"]
+    assert after_neg[1]["op"] == "elite" and after_neg[1]["weights"] == pop[3]["weights"]
+
+    # Multi-generation deterministic vision-style scorer must have 0 top-score regressions
+    def vision_score(genome_dict):
+        rgb = CPPN.from_dict(genome_dict).render(16).float() / 255.0
+        sym = 1.0 - float(torch.abs(rgb - torch.flip(rgb, dims=[1])).mean())
+        contrast = float(rgb.std())
+        return sym + 0.5 * contrast
+
+    torch.manual_seed(11)
+    cur = create_random_population(pop_size=16)
+    best_history = []
+    for _ in range(15):
+        vscores = [vision_score(g) for g in cur]
+        best_now = max(vscores)
+        if best_history:
+            assert best_now >= best_history[-1] - 1e-6
+        best_history.append(best_now)
+        ranked = sorted(range(len(cur)), key=lambda i: -vscores[i])
+        disc_scores = [0] * len(cur)
+        disc_ups = [0] * len(cur)
+        for i in ranked[:4]:
+            disc_scores[i] = 1
+            disc_ups[i] = 1
+        for i in ranked[-6:]:
+            disc_scores[i] = -1
+        cur, _ = evolve_population(cur, disc_scores, disc_ups, pop_size=16)
+
+
+def test_ws_voting_threshold_and_generation_guard():
+    with _ws_server(seed=False, pop_size=10, max_votes=20) as port:
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice") as ws:
+            evo = _recv_until(ws, "evolution_state")
+            butterfly = next(g for g in evo["goals"] if g["name"] == "Butterfly")
+            assert butterfly["minVotes"] == 5
+            assert butterfly["maxVotesPerUser"] == 20
+
+            # 5 downvotes alone meet candidate count (5/10) but NOT likedCandidates >= 1
+            for idx in range(5):
+                ws.send(json.dumps({
+                    "type": "cast_vote",
+                    "goal": "Butterfly",
+                    "generation": 0,
+                    "index": idx,
+                    "vote": -1,
+                }))
+                upd = _recv_until(ws, "votes_updated")
+            assert upd["votedCandidates"] == 5
+            assert upd["likedCandidates"] == 0
+            assert upd["countdownMs"] == 0
+
+            # Flipping 1 downvote to an upvote triggers countdown
+            ws.send(json.dumps({
+                "type": "cast_vote",
+                "goal": "Butterfly",
+                "generation": 0,
+                "index": 0,
+                "vote": 1,
+            }))
+            started = _recv_until(ws, "votes_updated")
+            assert started["votedCandidates"] == 5
+            assert started["likedCandidates"] == 1
+            assert started["countdownMs"] > 0
+
+        # Fast countdown run to verify generation evolution + stale-generation vote guard
+        mummy_ws.set_round_config(5, 80)
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=bob") as bob:
+            _recv_until(bob, "evolution_state")
+            for idx in range(5):
+                bob.send(json.dumps({
+                    "type": "cast_vote",
+                    "goal": "Butterfly",
+                    "generation": 0,
+                    "index": idx,
+                    "vote": 1 if idx == 0 else -1,
+                }))
+            ev1 = _recv_until(bob, "goal_updated", timeout=3.0)
+            assert ev1["goal"]["generation"] == 1
+
+            # Stale generation=0 vote must be dropped cleanly
+            bob.send(json.dumps({
+                "type": "cast_vote",
+                "goal": "Butterfly",
+                "generation": 0,
+                "index": 1,
+                "vote": 1,
+            }))
+            with pytest.raises(TimeoutError):
+                _recv_until(bob, "votes_updated", timeout=0.2)
+
+            # Matching generation=1 vote succeeds
+            bob.send(json.dumps({
+                "type": "cast_vote",
+                "goal": "Butterfly",
+                "generation": 1,
+                "index": 1,
+                "vote": 1,
+            }))
+            v_ok = _recv_until(bob, "votes_updated")
+            assert v_ok["totalVotes"] == 1 and v_ok["likedCandidates"] == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_deploy_restart_restores_and_rebroadcasts_state():
+    mummy_ws.clear_state()
+    port1 = _free_port()
+    ws_bridge.start_ws_server(host="127.0.0.1", port=port1, seed=True, pop_size=8, max_votes=4)
+    try:
+        mummy_ws.set_round_config(1, 60)
+        with (
+            connect(f"ws://127.0.0.1:{port1}/ws/chat/lobby/?username=alice") as lob1,
+            connect(f"ws://127.0.0.1:{port1}/ws/chat/p-deploy1/?username=bob&goal=Orchid&pop=6&sigma=0.45") as priv1,
+        ):
+            _recv_until(lob1, "evolution_state")
+            _recv_until(priv1, "evolution_state")
+            lob1.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 0, "index": 0, "vote": 1}))
+            lob_ev1 = _recv_until(lob1, "goal_updated", timeout=3.0)["goal"]
+            assert lob_ev1["generation"] == 1
+
+            priv1.send(json.dumps({"type": "cast_vote", "goal": "Orchid", "generation": 0, "index": 1, "vote": 1}))
+            priv_ev1 = _recv_until(priv1, "goal_updated", timeout=3.0)["goal"]
+            assert priv_ev1["generation"] == 1
+            saved_bfly_id = lob_ev1["genomes"][0]["id"]
+            saved_bfly_weights = lob_ev1["genomes"][0]["weights"]
+            saved_orchid_id = priv_ev1["genomes"][0]["id"]
+            saved_orchid_weights = priv_ev1["genomes"][0]["weights"]
+    finally:
+        ws_bridge.stop_ws_server()
+        mummy_ws.clear_state()
+
+    # Boot fresh server instance (simulating post-deploy restart)
+    port2 = _free_port()
+    ws_bridge.start_ws_server(host="127.0.0.1", port=port2, seed=True, pop_size=8, max_votes=4)
+    try:
+        with (
+            connect(f"ws://127.0.0.1:{port2}/ws/chat/lobby/?username=alice") as lob2,
+            connect(f"ws://127.0.0.1:{port2}/ws/chat/p-deploy1/?username=bob&goal=Orchid&pop=6&sigma=0.45") as priv2,
+        ):
+            lob_evo = _recv_until(lob2, "evolution_state")
+            bfly2 = next(g for g in lob_evo["goals"] if g["name"] == "Butterfly")
+            assert bfly2["generation"] == 1
+            assert bfly2["lineageTotal"] == 16
+            assert bfly2["genomes"][0]["id"] == saved_bfly_id
+            assert bfly2["genomes"][0]["weights"] == saved_bfly_weights
+
+            priv_evo = _recv_until(priv2, "evolution_state")
+            orchid2 = next(g for g in priv_evo["goals"] if g["name"] == "Orchid")
+            assert orchid2["generation"] == 1
+            assert orchid2["lineageTotal"] == 12
+            assert abs(orchid2["mutationSigma"] - 0.45) < 1e-6
+            assert orchid2["genomes"][0]["id"] == saved_orchid_id
+            assert orchid2["genomes"][0]["weights"] == saved_orchid_weights
+
+            # Evolve gen 1 -> gen 2 after restart and verify genome IDs never collide
+            mummy_ws.set_round_config(1, 60)
+            lob2.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 1, "index": 0, "vote": 1}))
+            lob_ev2 = _recv_until(lob2, "goal_updated", timeout=3.0)["goal"]
+            assert lob_ev2["generation"] == 2
+            assert lob_ev2["genomes"][0]["id"] > max(saved_bfly_id, saved_orchid_id)
+    finally:
+        ws_bridge.stop_ws_server()
+        mummy_ws.clear_state()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_admin_clear_lobby_goal_and_private_room(client, monkeypatch, settings):
+    from direct_evolution_together.models import RoomEvolutionState
+
+    mummy_ws.clear_state()
+    port = _free_port()
+    ws_bridge.start_ws_server(
+        host="127.0.0.1",
+        port=port,
+        seed=True,
+        pop_size=6,
+        max_votes=4,
+        admin_password="pw-clear",
+    )
+    try:
+        settings.WS_HOST = "127.0.0.1"
+        settings.WS_PORT = port
+        monkeypatch.setenv("DET_ADMIN_PASSWORD", "pw-clear")
+        mummy_ws.set_round_config(1, 50)
+
+        with (
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice") as lob,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/p-clr1/?username=bob&goal=Lotus&pop=5") as priv,
+        ):
+            _recv_until(lob, "evolution_state")
+            _recv_until(priv, "evolution_state")
+
+            # Evolve Butterfly and Galaxy on lobby to gen 1, plus Lotus in private room to gen 1
+            for gname in ("Butterfly", "Galaxy"):
+                lob.send(json.dumps({"type": "cast_vote", "goal": gname, "generation": 0, "index": 0, "vote": 1}))
+                assert _recv_until(lob, "goal_updated", timeout=3.0)["goal"]["generation"] == 1
+            priv.send(json.dumps({"type": "cast_vote", "goal": "Lotus", "generation": 0, "index": 0, "vote": 1}))
+            assert _recv_until(priv, "goal_updated", timeout=3.0)["goal"]["generation"] == 1
+
+            # Clear ONLY Butterfly on lobby; Galaxy remains at gen 1
+            resp = client.post(
+                "/api/clear/",
+                data=json.dumps({"password": "pw-clear", "room": "lobby", "goal": "Butterfly"}),
+                content_type="application/json",
+            )
+            assert resp.status_code == 200
+            upd = _recv_until(lob, "goal_updated", timeout=3.0)["goal"]
+            assert upd["name"] == "Butterfly" and upd["generation"] == 0
+
+            # Clear entire lobby via /api/clear/ (room="lobby", goal="")
+            resp_all = client.post(
+                "/api/clear/",
+                data=json.dumps({"password": "pw-clear", "room": "lobby"}),
+                content_type="application/json",
+            )
+            assert resp_all.status_code == 200
+            lob_cleared = _recv_until(lob, "evolution_state", timeout=3.0)
+            assert all(g["generation"] == 0 for g in lob_cleared["goals"])
+
+            # Clear private room state via separate-process loopback HTTP path
+            monkeypatch.setattr(ws_bridge, "is_running", lambda: False)
+            resp_priv = client.post(
+                "/api/clear/",
+                data=json.dumps({"password": "pw-clear", "room": "p-clr1"}),
+                content_type="application/json",
+            )
+            assert resp_priv.status_code == 200
+            priv_cleared = _recv_until(priv, "evolution_state", timeout=3.0)
+            assert priv_cleared["goals"] == []
+            assert not RoomEvolutionState.objects.filter(room="p-clr1").exists()
+
+            # Reset page renders quick-select room target
+            reset_html = client.get("/reset/").content.decode()
+            assert "Front Lobby" in reset_html and "Clear Room State" in reset_html
+    finally:
+        ws_bridge.stop_ws_server()
+        mummy_ws.clear_state()
