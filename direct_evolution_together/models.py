@@ -3,6 +3,21 @@ from datetime import timezone
 from django.db import models
 
 
+class Room(models.Model):
+    """Metadata for a named private room."""
+
+    slug = models.SlugField(max_length=64, unique=True)
+    name = models.CharField(max_length=64)
+    description = models.CharField(max_length=280, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.name} (/p/{self.slug}/)"
+
+
 class ChatMessage(models.Model):
     """Persisted room chat message."""
 

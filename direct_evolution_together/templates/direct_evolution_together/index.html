@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>direct-evolution-together</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%AC%3C/text%3E%3C/svg%3E" />
     <style>
       :root {
         --bg: #09090b;
@@ -36,11 +37,12 @@
         flex-direction: column;
       }
       header {
-        height: 48px;
+        min-height: 48px;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 0 1rem;
+        gap: 0.75rem;
+        padding: 0.38rem 1rem;
         border-bottom: 1px solid var(--border);
         background: rgba(9, 9, 11, 0.8);
         backdrop-filter: blur(8px);
@@ -49,9 +51,58 @@
         display: flex;
         align-items: center;
         gap: 0.65rem;
+        min-width: 0;
         font-size: 0.88rem;
         font-weight: 500;
         letter-spacing: -0.015em;
+      }
+      .title-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 0.08rem;
+        min-width: 0;
+      }
+      .title-line {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.82rem;
+        font-weight: 500;
+        letter-spacing: -0.015em;
+      }
+      .room-heading {
+        display: flex;
+        flex-direction: column;
+        gap: 0.02rem;
+        min-width: 0;
+      }
+      .room-name {
+        max-width: 48vw;
+        overflow: hidden;
+        color: var(--text);
+        font-size: 0.9rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .room-desc {
+        max-width: 48vw;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 0.72rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      @media (max-width: 720px) {
+        header { flex-wrap: wrap; }
+        .title-line > span:first-child { display: none; }
+        .room-name, .room-desc { max-width: 70vw; }
+        .header-right {
+          width: 100%;
+          justify-content: flex-end;
+        }
+        .header-right .paper-link[href^="https://doi.org"] { display: none; }
       }
       .brand-mark {
         width: 14px;
@@ -205,41 +256,9 @@
         color: var(--dim);
       }
       .goal-tab.active .gen-pill { color: var(--muted); }
-      .new-goal-form {
-        display: flex;
-        align-items: center;
-        gap: 0.25rem;
-      }
-      .new-goal-form input {
-        width: 108px;
-        padding: 0.26rem 0.5rem;
-        font-size: 0.76rem;
-        background: transparent;
-        border: 1px solid transparent;
-        border-radius: 6px;
-        color: var(--text);
-        transition: border-color 0.15s ease, background 0.15s ease, width 0.15s ease;
-      }
-      .new-goal-form input::placeholder { color: var(--dim); }
-      .new-goal-form input:hover { border-color: var(--border); }
-      .new-goal-form input:focus {
-        outline: none;
-        width: 132px;
-        background: var(--bg);
-        border-color: var(--border-strong);
-      }
-      .new-goal-form button {
-        padding: 0.26rem 0.52rem;
-        font-size: 0.76rem;
-        font-weight: 500;
-        background: transparent;
-        color: var(--muted);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-      }
-      .new-goal-form button:hover {
-        color: var(--text);
-        border-color: var(--border-strong);
+      .new-room-btn {
+        flex-shrink: 0;
+        white-space: nowrap;
       }
       .evo-body {
         padding: 0.9rem 1rem 1rem;
@@ -326,30 +345,6 @@
       .pop-input:disabled {
         opacity: 0.45;
         cursor: not-allowed;
-      }
-      .inline-num-field {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.28rem;
-        padding: 0.14rem 0.28rem 0.14rem 0.42rem;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        background: var(--bg);
-        font-family: var(--mono);
-        font-size: 0.68rem;
-        color: var(--dim);
-        cursor: help;
-        white-space: nowrap;
-      }
-      .inline-num-field:hover {
-        border-color: var(--border-strong);
-        color: var(--muted);
-      }
-      .inline-num-field .pop-input {
-        border: none;
-        background: transparent;
-        padding: 0.08rem 0.1rem;
-        width: 36px;
       }
       .vote-budget-pill {
         display: inline-flex;
@@ -1184,53 +1179,6 @@
         line-height: 1.3;
         color: var(--dim);
       }
-      .ga-more-popover {
-        position: relative;
-      }
-      .ga-more-popover > summary {
-        list-style: none;
-        cursor: pointer;
-        padding: 0.24rem 0.48rem;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        font-family: var(--mono);
-        font-size: 0.68rem;
-        color: var(--muted);
-        background: var(--bg);
-        user-select: none;
-      }
-      .ga-more-popover > summary::-webkit-details-marker { display: none; }
-      .ga-more-popover[open] > summary,
-      .ga-more-popover > summary:hover {
-        color: var(--text);
-        border-color: var(--border-strong);
-      }
-      .ga-popover-body {
-        position: absolute;
-        right: 0;
-        top: calc(100% + 6px);
-        z-index: 45;
-        width: 224px;
-        background: #141418;
-        border: 1px solid var(--border-strong);
-        border-radius: 10px;
-        padding: 0.65rem 0.75rem;
-        display: flex;
-        flex-direction: column;
-        gap: 0.48rem;
-        box-shadow: 0 14px 36px rgba(0, 0, 0, 0.65);
-      }
-      .ga-popover-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.5rem;
-        font-size: 0.72rem;
-        color: var(--muted);
-      }
-      .ga-popover-row .pop-input {
-        width: 64px;
-      }
       .private-footnote {
         font-family: var(--mono);
         font-size: 0.69rem;
@@ -1319,6 +1267,95 @@
         color: var(--text);
         border-color: var(--border-strong);
       }
+      .room-modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(9, 9, 11, 0.82);
+        backdrop-filter: blur(8px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        z-index: 95;
+      }
+      .room-modal-overlay[hidden] { display: none; }
+      .room-modal {
+        width: min(440px, 100%);
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: 14px;
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.8rem;
+        box-shadow: 0 24px 64px rgba(0, 0, 0, 0.65);
+      }
+      .room-modal-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+      }
+      .room-modal-head h3 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+      }
+      .room-modal-close {
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        color: var(--muted);
+        border-color: transparent;
+        font-size: 1.1rem;
+        line-height: 1;
+      }
+      .room-modal-close:hover:not(:disabled) {
+        color: var(--text);
+        border-color: var(--border);
+      }
+      .room-field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+      .room-field input,
+      .room-field textarea {
+        width: 100%;
+        padding: 0.48rem 0.6rem;
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font: inherit;
+        font-size: 0.82rem;
+      }
+      .room-field textarea {
+        min-height: 58px;
+        resize: vertical;
+      }
+      .room-field input:focus,
+      .room-field textarea:focus {
+        outline: none;
+        border-color: var(--border-strong);
+      }
+      .room-field-hint { color: var(--dim); }
+      .room-modal-error {
+        color: var(--err);
+        font-size: 0.76rem;
+      }
+      .room-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+      }
     </style>
   </head>
   <body>
@@ -1330,22 +1367,34 @@
           <rect x="1.5" y="9.5" width="5" height="5" rx="1" fill="currentColor" opacity="0.4" />
           <rect x="9.5" y="9.5" width="5" height="5" rx="1" fill="currentColor" opacity="0.7" />
         </svg>
-        <span>direct-evolution-together</span>
-        {% if is_private %}
-          <span class="private-badge">
-            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-              <rect x="3" y="7" width="10" height="7" rx="1.5" />
-              <path d="M5 7V5a3 3 0 0 1 6 0v2" />
-            </svg>
-            private
-          </span>
-          <button id="share-link-btn" type="button" class="share-btn" title="Copy private invite link">Share link</button>
-          <a class="paper-link" href="{{ base_path }}/" title="Return to public lobby">&larr; Lobby</a>
-        {% else %}
-          <span class="room-tag">/lobby</span>
-        {% endif %}
+        <div class="title-stack">
+          <div class="title-line">
+            <span>direct-evolution-together</span>
+            {% if is_private %}
+              <span class="private-badge">
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                  <rect x="3" y="7" width="10" height="7" rx="1.5" />
+                  <path d="M5 7V5a3 3 0 0 1 6 0v2" />
+                </svg>
+                private
+              </span>
+            {% else %}
+              <span class="room-tag">/lobby</span>
+            {% endif %}
+          </div>
+          {% if is_private %}
+            <div class="room-heading">
+              <span class="room-name" title="{{ room_title }}">{{ room_title }}</span>
+              {% if room_description %}<span class="room-desc" title="{{ room_description }}">{{ room_description }}</span>{% endif %}
+            </div>
+          {% endif %}
+        </div>
       </div>
       <div class="header-right">
+        {% if is_private %}
+          <button id="share-link-btn" type="button" class="share-btn" title="Copy private invite link">Share link</button>
+          <a class="paper-link" href="{{ base_path }}/" title="Return to public lobby">&larr; Lobby</a>
+        {% endif %}
         <a
           class="paper-link"
           href="https://doi.org/10.1145/1357054.1357328"
@@ -1369,73 +1418,18 @@
         </div>
         <div class="goal-bar">
           <div id="goal-tabs" class="goal-tabs"></div>
-          <form id="new-goal-form" class="new-goal-form">
-            <input
-              id="new-goal-input"
-              type="text"
-              placeholder="{% if is_private %}Add private goal...{% else %}Private goal...{% endif %}"
-              maxlength="32"
-            />
-            <label class="inline-num-field" title="Population size per generation (3-64 individuals)">
-              <span>pop</span>
-              <input
-                id="new-goal-pop"
-                class="pop-input"
-                type="number"
-                min="3"
-                max="64"
-                step="1"
-                value="{{ initial_pop|default:30 }}"
-                aria-label="Population size"
-              />
-            </label>
-            <label class="inline-num-field" title="Max active votes allowed per person per round (1-20)">
-              <span>votes</span>
-              <input
-                id="new-goal-max-votes"
-                class="pop-input"
-                type="number"
-                min="1"
-                max="20"
-                step="1"
-                value="{{ initial_max_votes|default:5 }}"
-                aria-label="Max votes per user"
-              />
-            </label>
-            <details class="ga-more-popover">
-              <summary title="Configure mutation, elite fraction, and crossover rate">GA &darr;</summary>
-              <div class="ga-popover-body">
-                <label class="ga-popover-row" title="Constant mutation weight perturbation scale (0.05-1.00)">
-                  <span>Mutation &sigma;</span>
-                  <input id="new-goal-sigma" class="pop-input" type="number" min="0.05" max="1.0" step="0.05" value="{{ initial_mut_sigma|default:'0.35' }}" aria-label="Mutation sigma" />
-                </label>
-                <label class="ga-popover-row" title="Fraction of liked tops copied unchanged to the next generation (0.00-0.50)">
-                  <span>Elite frac</span>
-                  <input id="new-goal-elite" class="pop-input" type="number" min="0" max="0.5" step="0.05" value="{{ initial_elite_frac|default:'0.10' }}" aria-label="Elite fraction" />
-                </label>
-                <label class="ga-popover-row" title="Probability of neuron-unit parent crossover when breeding (0.00-1.00)">
-                  <span>Crossover</span>
-                  <input id="new-goal-crossover" class="pop-input" type="number" min="0" max="1" step="0.05" value="{{ initial_crossover_rate|default:'0.75' }}" aria-label="Crossover rate" />
-                </label>
-              </div>
-            </details>
-            {% if is_private %}
-              <button type="submit">+ Goal</button>
-            {% else %}
-              <button type="submit" title="Create a private goal room with a shareable link">+ Private</button>
-            {% endif %}
-          </form>
+          <button id="new-room-btn" type="button" class="ghost new-room-btn" title="Create a new named room">New room</button>
         </div>
 
         <div class="evo-body">
           <div id="private-empty-state" class="private-empty" hidden>
-            <h3>Create Private Room</h3>
+            <h3>Start a goal</h3>
             <p>
               Think of a <strong>genetic algorithm</strong> as digital breeding: every image is drawn by a tiny neural network whose weights act like DNA.
               Your likes select the best parents, mix their traits together (<em>crossover</em>), and add small random tweaks (<em>mutation</em>) each round.
             </p>
             <ol class="private-steps">
-              <li><strong>Customize the goal &amp; genetic algorithm parameters</strong> below (locked once evolution begins, isolated from <code>/lobby</code>).</li>
+              <li><strong>Name the goal &amp; tune the genetic algorithm parameters</strong> below (locked once evolution begins, isolated from <code>/lobby</code>).</li>
               <li><strong>Share link</strong> from the top bar so teammates join the exact same private room.</li>
               <li><strong>Vote together</strong> — 3 votes start the synchronized timer to breed the next generation.</li>
             </ol>
@@ -1618,6 +1612,28 @@
       </div>
     </div>
 
+    <div id="new-room-modal" class="room-modal-overlay" hidden>
+      <form id="new-room-form" class="room-modal" role="dialog" aria-modal="true" aria-labelledby="new-room-title">
+        <div class="room-modal-head">
+          <h3 id="new-room-title">New room</h3>
+          <button id="new-room-close" type="button" class="room-modal-close" aria-label="Close">&times;</button>
+        </div>
+        <label class="room-field">
+          <span>Room name</span>
+          <input id="new-room-name" type="text" maxlength="64" placeholder="e.g. Neon Orchid" required />
+        </label>
+        <label class="room-field">
+          <span>Description <span class="room-field-hint">optional</span></span>
+          <textarea id="new-room-description" maxlength="280" rows="2" placeholder="What is this room exploring?"></textarea>
+        </label>
+        <div id="new-room-error" class="room-modal-error" hidden></div>
+        <div class="room-modal-actions">
+          <button id="new-room-cancel" type="button" class="ghost">Cancel</button>
+          <button id="new-room-submit" type="submit">Create room</button>
+        </div>
+      </form>
+    </div>
+
     {{ base_path|default:""|json_script:"det-base-path" }}
     {{ ws_via_proxy|default:False|json_script:"det-ws-via-proxy" }}
     {{ room_name|default:"lobby"|json_script:"det-room-name" }}
@@ -1744,13 +1760,15 @@
       const cursorLayerEl = document.getElementById("cursor-layer");
       const loadingOverlayEl = document.getElementById("loading-overlay");
       const goalTabsEl = document.getElementById("goal-tabs");
-      const newGoalForm = document.getElementById("new-goal-form");
-      const newGoalInput = document.getElementById("new-goal-input");
-      const newGoalPopInput = document.getElementById("new-goal-pop");
-      const newGoalMaxVotesInput = document.getElementById("new-goal-max-votes");
-      const newGoalSigmaInput = document.getElementById("new-goal-sigma");
-      const newGoalEliteInput = document.getElementById("new-goal-elite");
-      const newGoalCrossoverInput = document.getElementById("new-goal-crossover");
+      const newRoomBtn = document.getElementById("new-room-btn");
+      const newRoomModalEl = document.getElementById("new-room-modal");
+      const newRoomForm = document.getElementById("new-room-form");
+      const newRoomNameInput = document.getElementById("new-room-name");
+      const newRoomDescriptionInput = document.getElementById("new-room-description");
+      const newRoomErrorEl = document.getElementById("new-room-error");
+      const newRoomSubmitBtn = document.getElementById("new-room-submit");
+      const newRoomCloseBtn = document.getElementById("new-room-close");
+      const newRoomCancelBtn = document.getElementById("new-room-cancel");
       const activeGoalTitle = document.getElementById("active-goal-title");
       const activeGoalGen = document.getElementById("active-goal-gen");
       const roundVoteText = document.getElementById("round-vote-text");
@@ -2868,13 +2886,6 @@
         sendCursor(0, 0, false);
       });
 
-      function generatePrivateRoomSlug() {
-        const bytes = new Uint8Array(8);
-        crypto.getRandomValues(bytes);
-        const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-        return `p-${hex}`;
-      }
-
       const shareLinkBtn = document.getElementById("share-link-btn");
       if (shareLinkBtn) {
         shareLinkBtn.addEventListener("click", async () => {
@@ -2888,44 +2899,64 @@
         });
       }
 
-      newGoalForm.addEventListener("submit", (e) => {
+      function openNewRoomModal() {
+        newRoomErrorEl.hidden = true;
+        newRoomModalEl.hidden = false;
+        newRoomNameInput.focus();
+      }
+
+      function closeNewRoomModal() {
+        newRoomModalEl.hidden = true;
+        newRoomErrorEl.hidden = true;
+        newRoomSubmitBtn.disabled = false;
+        newRoomSubmitBtn.textContent = "Create room";
+      }
+
+      newRoomBtn.addEventListener("click", openNewRoomModal);
+      newRoomCloseBtn.addEventListener("click", closeNewRoomModal);
+      newRoomCancelBtn.addEventListener("click", closeNewRoomModal);
+      newRoomModalEl.addEventListener("click", (e) => {
+        if (e.target === newRoomModalEl) closeNewRoomModal();
+      });
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !newRoomModalEl.hidden) closeNewRoomModal();
+      });
+
+      newRoomForm.addEventListener("submit", async (e) => {
         e.preventDefault();
-        const goal = newGoalInput.value.trim();
-        const pop = parsePopValue(newGoalPopInput);
-        const mv = parseMaxVotesValue(newGoalMaxVotesInput);
-        const sigma = parseSigmaValue(newGoalSigmaInput);
-        const eliteFrac = parseEliteValue(newGoalEliteInput);
-        const crossoverRate = parseCrossoverValue(newGoalCrossoverInput);
-        if (newGoalPopInput) newGoalPopInput.value = String(pop);
-        if (newGoalMaxVotesInput) newGoalMaxVotesInput.value = String(mv);
-        if (newGoalSigmaInput) newGoalSigmaInput.value = sigma.toFixed(2);
-        if (newGoalEliteInput) newGoalEliteInput.value = eliteFrac.toFixed(2);
-        if (newGoalCrossoverInput) newGoalCrossoverInput.value = crossoverRate.toFixed(2);
-        if (!isPrivateRoom) {
-          const targetSlug = generatePrivateRoomSlug();
-          const params = new URLSearchParams();
-          if (goal) params.set("goal", goal);
-          if (pop !== initialPop) params.set("pop", String(pop));
-          if (mv !== initialMaxVotes) params.set("max_votes", String(mv));
-          if (Math.abs(sigma - initialMutSigma) > 1e-4) params.set("sigma", sigma.toFixed(2));
-          if (Math.abs(eliteFrac - initialEliteFrac) > 1e-4) params.set("elite_frac", eliteFrac.toFixed(2));
-          if (Math.abs(crossoverRate - initialCrossoverRate) > 1e-4) params.set("crossover", crossoverRate.toFixed(2));
-          const qs = params.toString() ? `?${params.toString()}` : "";
-          window.location.assign(`${basePath}/p/${targetSlug}/${qs}`);
+        const name = newRoomNameInput.value.trim();
+        if (!name) {
+          newRoomErrorEl.textContent = "Room name is required.";
+          newRoomErrorEl.hidden = false;
+          newRoomNameInput.focus();
           return;
         }
-        if (!goal || !socket || socket.readyState !== WebSocket.OPEN) return;
-        socket.send(JSON.stringify({
-          type: "create_goal",
-          goal,
-          population_size: pop,
-          max_votes_per_user: mv,
-          mutation_sigma: sigma,
-          elite_frac: eliteFrac,
-          crossover_rate: crossoverRate,
-        }));
-        activeGoalName = goal;
-        newGoalInput.value = "";
+        newRoomErrorEl.hidden = true;
+        newRoomSubmitBtn.disabled = true;
+        newRoomSubmitBtn.textContent = "Creating...";
+        try {
+          const res = await fetch(`${basePath}/api/rooms/`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRFToken": csrfToken,
+            },
+            body: JSON.stringify({
+              name,
+              description: newRoomDescriptionInput.value.trim(),
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.url) {
+            throw new Error(data.error || "Could not create room.");
+          }
+          window.location.assign(data.url);
+        } catch (err) {
+          newRoomErrorEl.textContent = err.message || "Could not create room.";
+          newRoomErrorEl.hidden = false;
+          newRoomSubmitBtn.disabled = false;
+          newRoomSubmitBtn.textContent = "Create room";
+        }
       });
 
       if (emptyGoalForm) {

@@ -1192,7 +1192,15 @@ proc apply_room_init*(room, goals_json: string) {.exportpy.} =
         room_evolution[room].default_params
       else:
         cfg.params
+    var carry_creates = initHashSet[string]()
+    var carry_params = initTable[string, GoalParams]()
+    if room in room_evolution and room_evolution[room].initializing:
+      # keep goals requested before the room finished booting
+      carry_creates = room_evolution[room].pending_creates
+      carry_params = room_evolution[room].pending_create_params
     room_evolution[room] = populate_room_goals(parsed, dp)
+    room_evolution[room].pending_creates = carry_creates
+    room_evolution[room].pending_create_params = carry_params
     evo_payload = build_evolution_state_payload(room)
     targets = room_targets(room)
   if targets.len > 0:

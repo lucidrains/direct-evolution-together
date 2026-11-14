@@ -7,6 +7,7 @@ urlpatterns = [
     path("", views.index, name="index"),
     path("p/<slug:room>/", views.index, name="private_room"),
     path("health/", views.health, name="health"),
+    path("api/rooms/", views.api_create_room, name="api_create_room"),
     path("export/bundle/", views.export_bundle, name="export_bundle"),
     path("export/weights/", views.export_weights, name="export_weights"),
     path("export/script/", views.export_script, name="export_script"),

@@ -2,6 +2,7 @@ import hmac
 import io
 import json
 import os
+import secrets
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -10,6 +11,7 @@ import zipfile
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import render
+from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
@@ -20,6 +22,7 @@ from direct_evolution_together.cppn import (
     save_cppn_bytes,
     slugify_policy_name,
 )
+from direct_evolution_together.models import Room
 
 
 def _resolve_base_path(request: HttpRequest) -> str:
@@ -30,10 +33,29 @@ def _resolve_base_path(request: HttpRequest) -> str:
     return f"/{forwarded}" if forwarded else ""
 
 
+def _room_slug(name: str) -> str:
+    base = slugify(name)[:48].strip("-") or f"p-{secrets.token_hex(4)}"
+    if base == "lobby":
+        base = "lobby-2"
+    slug = base
+    suffix = 2
+    while Room.objects.filter(slug=slug).exists():
+        slug = f"{base}-{suffix}"
+        suffix += 1
+    return slug
+
+
 def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
     """Serve the minimal collaborative evolution and chat page."""
     if not room or len(room) > 64:
         return HttpResponseBadRequest("Invalid room name")
+    room_title = "Lobby" if room == "lobby" else room
+    room_description = ""
+    if room != "lobby":
+        meta = Room.objects.filter(slug=room).values("name", "description").first()
+        if meta:
+            room_title = meta["name"]
+            room_description = meta["description"]
     initial_goal = request.GET.get("goal", "").strip()[:32]
     initial_pop = settings.POPULATION_SIZE
     raw_pop = request.GET.get("pop", "").strip()
@@ -81,6 +103,8 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
             "ws_host": settings.WS_HOST,
             "ws_port": settings.WS_PORT,
             "room_name": room,
+            "room_title": room_title,
+            "room_description": room_description,
             "is_private": room != "lobby",
             "initial_goal": initial_goal,
             "initial_pop": initial_pop,
@@ -95,6 +119,36 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
 def health(request: HttpRequest) -> JsonResponse:
     """Basic health check endpoint."""
     return JsonResponse({"status": "ok"})
+
+
+@require_POST
+def api_create_room(request: HttpRequest) -> JsonResponse:
+    """Create a named private room and return its shareable path."""
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return JsonResponse({"error": "Invalid JSON."}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"error": "Invalid room payload."}, status=400)
+    name = str(payload.get("name") or "").strip()[:64]
+    description = str(payload.get("description") or "").strip()[:280]
+    if not name:
+        return JsonResponse({"error": "Room name is required."}, status=400)
+    room = Room.objects.create(
+        slug=_room_slug(name),
+        name=name,
+        description=description,
+    )
+    base_path = _resolve_base_path(request)
+    return JsonResponse(
+        {
+            "ok": True,
+            "slug": room.slug,
+            "name": room.name,
+            "description": room.description,
+            "url": f"{base_path}/p/{room.slug}/",
+        }
+    )
 
 
 def _parse_export_payload(request: HttpRequest) -> tuple[dict, str]:

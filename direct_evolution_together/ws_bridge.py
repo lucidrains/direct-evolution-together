@@ -84,7 +84,7 @@ def flush_evo_jobs() -> int:
             initial_goal = (job.get("goal") or "").strip()
             if initial_goal:
                 goal_names: tuple[str, ...] = (initial_goal,)
-            elif room.startswith("p-"):
+            elif room != "lobby":
                 goal_names = ()
             else:
                 goal_names = DEFAULT_GOALS

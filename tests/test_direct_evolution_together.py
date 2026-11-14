@@ -45,6 +45,7 @@ def _ws_server(**kwargs):
         stop_ws_server()
 
 
+@pytest.mark.django_db
 def test_http_pages_health_and_subpath(client, settings):
     assert client.get("/health/").json() == {"status": "ok"}
 
@@ -56,7 +57,7 @@ def test_http_pages_health_and_subpath(client, settings):
     priv = client.get("/p/p-testroom1/?pop=24&max_votes=7&sigma=0.45&elite_frac=0.20&crossover=0.60")
     assert priv.status_code == 200
     priv_html = priv.content.decode()
-    assert "Create Private Room" in priv_html
+    assert "Start a goal" in priv_html
     assert 'id="det-initial-pop" type="application/json">24<' in priv_html
     assert 'id="det-initial-max-votes" type="application/json">7<' in priv_html
     assert 'id="det-initial-sigma" type="application/json">"0.45"<' in priv_html
@@ -70,6 +71,46 @@ def test_http_pages_health_and_subpath(client, settings):
     assert '<script id="det-ws-via-proxy" type="application/json">true</script>' in sub_html
     assert 'href="/evolver/"' in sub_html
     assert 'href="/evolver/"' in client.get("/reset/").content.decode()
+
+
+@pytest.mark.django_db
+def test_create_room_api_names_and_renders_header(client):
+    resp = client.post(
+        "/api/rooms/",
+        data=json.dumps({"name": "Neon Orchid", "description": "Glowing flowers"}),
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    room = resp.json()
+    assert room["slug"] == "neon-orchid"
+    assert room["url"] == "/p/neon-orchid/"
+
+    html = client.get(room["url"]).content.decode()
+    assert "Neon Orchid" in html
+    assert "Glowing flowers" in html
+
+    duplicate = client.post(
+        "/api/rooms/",
+        data=json.dumps({"name": "Neon Orchid"}),
+        content_type="application/json",
+    ).json()
+    assert duplicate["slug"] == "neon-orchid-2"
+
+    reserved = client.post(
+        "/api/rooms/",
+        data=json.dumps({"name": "Lobby"}),
+        content_type="application/json",
+    ).json()
+    assert reserved["slug"] != "lobby"
+
+    assert (
+        client.post(
+            "/api/rooms/",
+            data=json.dumps({"name": "  "}),
+            content_type="application/json",
+        ).status_code
+        == 400
+    )
 
 
 def test_cppn_evolution_and_export_bundle(client, tmp_path):
@@ -194,6 +235,12 @@ def test_e2e_private_room_ga_and_admin_reset(client, monkeypatch, settings):
             }))
             beetle = {g["name"]: g for g in _recv_until(priv, "evolution_state")["goals"]}["Beetle"]
             assert beetle["populationSize"] == 6 and beetle["maxVotesPerUser"] == 5
+
+            # Named private rooms (no p- prefix) start empty and accept goals
+            with connect(f"ws://127.0.0.1:{port}/ws/chat/named-room/?username=carol") as named:
+                assert _recv_until(named, "evolution_state")["goals"] == []
+                named.send(json.dumps({"type": "create_goal", "goal": "Fern", "population_size": 4}))
+                assert [g["name"] for g in _recv_until(named, "evolution_state")["goals"]] == ["Fern"]
 
             # Evolve lobby Butterfly -> gen 1
             pub.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "index": 0, "vote": 1}))
