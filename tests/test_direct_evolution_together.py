@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import gzip
 import io
 import json
 import os
@@ -27,9 +28,15 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _decode_ws_message(raw):
+    if isinstance(raw, bytes):
+        raw = gzip.decompress(raw).decode("utf-8")
+    return json.loads(raw)
+
+
 def _recv_until(ws, target_type: str, timeout: float = 5.0) -> dict:
     while True:
-        msg = json.loads(ws.recv(timeout=timeout))
+        msg = _decode_ws_message(ws.recv(timeout=timeout))
         if msg.get("type") == target_type:
             return msg
 
@@ -203,7 +210,36 @@ def test_e2e_chat_persistence_cursor_and_evolution():
                 a2.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "index": 2, "vote": 1}))
                 upd = _recv_until(a1, "goal_updated", timeout=5.0)
                 assert upd["goal"]["generation"] == 1
-                assert len(upd["goal"]["lineage"]) == 24
+                assert upd["goal"]["lineageTotal"] == 24
+                assert len(upd["goal"]["lineage"]) < 24
+
+                a1.send(json.dumps({"type": "lineage_all", "goal": "Butterfly"}))
+                full = _recv_until(a1, "lineage_all")
+                assert len(full["lineage"]) == 24
+
+
+def test_ws_gzip_state_and_lazy_lineage():
+    with _ws_server(seed=False, pop_size=6) as port:
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=gz&gzip=1") as ws:
+            saw_binary = False
+            while True:
+                raw = ws.recv(timeout=10)
+                if isinstance(raw, bytes):
+                    saw_binary = True
+                msg = _decode_ws_message(raw)
+                if msg.get("type") == "evolution_state":
+                    break
+            assert saw_binary
+
+            goal = msg["goals"][0]
+            assert goal["lineageTotal"] == len(goal["lineage"]) == 6
+            assert all("weights" not in node for node in goal["lineage"])
+
+            ws.send(json.dumps({"type": "lineage_all", "goal": goal["name"]}))
+            full = _recv_until(ws, "lineage_all")
+            assert full["goal"] == goal["name"]
+            assert full["lineageTotal"] == len(full["lineage"]) == 6
+            assert all("weights" in node for node in full["lineage"])
 
 
 @pytest.mark.django_db(transaction=True)

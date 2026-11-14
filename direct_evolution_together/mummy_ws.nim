@@ -3,6 +3,7 @@
 import std/[algorithm, atomics, json, locks, os, sets, strutils, sysrand, tables, times]
 import mummy, mummy/routers
 import nimpy
+import zippy
 
 const
   history_limit = 100
@@ -37,6 +38,8 @@ const
   vote_burst_max_ops = 12
   max_lineage_nodes = 300
   ticker_sleep_ms = 40
+  # Large JSON payloads compress ~3x; below this it is not worth the CPU.
+  gzip_min_bytes = 4096
 
 type
   EvoJobKind {.pure.} = enum
@@ -63,12 +66,14 @@ type
     initial_goal: string
     initial_pop_size: int
     initial_params: GoalParams
+    gzip: bool
 
   ClientInfo = object
     ws: WebSocket
     room: string
     username: string
     vote_timestamps_ms: seq[int64]
+    gzip: bool
 
   PendingPersist = object
     room: string
@@ -324,6 +329,60 @@ proc extract_lineage_nodes(genomes_json: string; gen: int): JsonNode {.gcsafe.} 
       "activations": item.getOrDefault("activations"),
     })
 
+proc lineage_payload_node(goal: GoalPopulation; full: bool): tuple[lineage: JsonNode, total: int] {.gcsafe.} =
+  ## Sends only the current generation's ancestry by default; the client asks
+  ## for the archived `all` view on demand. Live nodes resolve their weights
+  ## from `goal.genomes`, so omit that duplicate data.
+  result.lineage = newJArray()
+  let parsed =
+    if goal.lineage_json.len > 0: parseJson(goal.lineage_json)
+    else: extract_lineage_nodes(goal.genomes_json, goal.generation)
+  if parsed.kind != JArray:
+    return
+  result.total = parsed.len
+
+  if full:
+    for node in parsed:
+      result.lineage.add(node)
+    return
+
+  var by_id = initTable[int, JsonNode]()
+  for node in parsed:
+    by_id[node.getOrDefault("id").getInt(0)] = node
+
+  var keep = initHashSet[int]()
+  var queue: seq[int] = @[]
+  for node in parsed:
+    if node.getOrDefault("gen").getInt(-1) == goal.generation:
+      let gid = node.getOrDefault("id").getInt(0)
+      if gid notin keep:
+        keep.incl(gid)
+        queue.add(gid)
+
+  var q_idx = 0
+  while q_idx < queue.len:
+    let cur_id = queue[q_idx]
+    inc q_idx
+    if cur_id in by_id:
+      for p in by_id[cur_id].getOrDefault("parents"):
+        let pid = p.getInt(0)
+        if pid notin keep and pid in by_id:
+          keep.incl(pid)
+          queue.add(pid)
+
+  for node in parsed:
+    let gid = node.getOrDefault("id").getInt(0)
+    if gid notin keep:
+      continue
+    if node.getOrDefault("gen").getInt(-1) == goal.generation:
+      var lean = node
+      lean.delete("weights")
+      lean.delete("biases")
+      lean.delete("activations")
+      result.lineage.add(lean)
+    else:
+      result.lineage.add(node)
+
 proc merge_lineage_json(prev_lineage_json, genomes_json: string; gen: int): string {.gcsafe.} =
   let fresh = extract_lineage_nodes(genomes_json, gen)
   var combined =
@@ -423,18 +482,18 @@ proc goal_to_json(
   c: RuntimeConfig;
   client_map: Table[WebSocket, ClientInfo];
   now: int64;
+  full_lineage = false;
 ): JsonNode {.gcsafe.} =
   let genomes_node =
     if goal.genomes_json.len > 0: parseJson(goal.genomes_json)
     else: newJArray()
-  let lineage_node =
-    if goal.lineage_json.len > 0: parseJson(goal.lineage_json)
-    else: extract_lineage_nodes(goal.genomes_json, goal.generation)
+  let lineage_payload = lineage_payload_node(goal, full_lineage)
   result = %*{
     "name": goal.name,
     "generation": goal.generation,
     "genomes": genomes_node,
-    "lineage": lineage_node,
+    "lineage": lineage_payload.lineage,
+    "lineageTotal": %lineage_payload.total,
   }
   result.attach_round_fields(goal, c, client_map, now)
 
@@ -517,9 +576,49 @@ proc room_targets(
           continue
         result.add(ws)
 
+proc client_uses_gzip(ws: WebSocket): bool {.gcsafe.} =
+  with_state_lock:
+    result = ws in clients and clients[ws].gzip
+
+proc compress_payload(payload: string): string {.gcsafe.} =
+  try:
+    result = compress(payload, BestSpeed, dfGzip)
+  except CatchableError:
+    result = ""
+
+proc send_payload(ws: WebSocket; payload: string) {.gcsafe.} =
+  if payload.len >= gzip_min_bytes and client_uses_gzip(ws):
+    let gz = compress_payload(payload)
+    if gz.len > 0:
+      ws.send(gz, BinaryMessage)
+      return
+  ws.send(payload)
+
 proc broadcast(targets: seq[WebSocket]; payload: string) {.gcsafe.} =
-  for ws in targets:
+  if payload.len < gzip_min_bytes:
+    for ws in targets:
+      ws.send(payload)
+    return
+
+  var plain: seq[WebSocket] = @[]
+  var gz_targets: seq[WebSocket] = @[]
+  with_state_lock:
+    for ws in targets:
+      if ws in clients and clients[ws].gzip:
+        gz_targets.add(ws)
+      else:
+        plain.add(ws)
+
+  for ws in plain:
     ws.send(payload)
+  if gz_targets.len > 0:
+    let gz = compress_payload(payload)
+    if gz.len > 0:
+      for ws in gz_targets:
+        ws.send(gz, BinaryMessage)
+    else:
+      for ws in gz_targets:
+        ws.send(payload)
 
 proc init_goal_population(
   name, genomes_json: string;
@@ -564,6 +663,7 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
 
   let username = sanitize_username(request.queryParams["username"])
   let initial_goal = sanitize_goal_name(request.queryParams["goal"])
+  let wants_gzip = request.queryParams["gzip"] == "1"
   var base_cfg: RuntimeConfig
   with_state_lock:
     base_cfg = cfg
@@ -599,6 +699,7 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
       initial_goal: initial_goal,
       initial_pop_size: req_pop,
       initial_params: req_params,
+      gzip: wants_gzip,
     )
 
 proc on_open(ws: WebSocket) {.gcsafe.} =
@@ -617,7 +718,12 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
       let info = pending_upgrades[ws]
       pending_upgrades.del(ws)
       let unique_name = make_unique_username(info.room, info.username)
-      clients[ws] = ClientInfo(ws: ws, room: info.room, username: unique_name)
+      clients[ws] = ClientInfo(
+        ws: ws,
+        room: info.room,
+        username: unique_name,
+        gzip: info.gzip,
+      )
       if info.room notin rooms:
         rooms[info.room] = initHashSet[WebSocket]()
       rooms[info.room].incl(ws)
@@ -659,10 +765,10 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
       found = true
 
   if found:
-    ws.send(identity_payload)
-    ws.send(history_payload)
+    send_payload(ws, identity_payload)
+    send_payload(ws, history_payload)
     if has_evolution_ready:
-      ws.send(evolution_payload)
+      send_payload(ws, evolution_payload)
     broadcast(targets, presence_payload)
     broadcast(targets, join_payload)
 
@@ -705,7 +811,7 @@ proc handle_rename(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
         changed = true
 
   if changed:
-    ws.send($(%*{"type": "identity", "username": assigned_name}))
+    send_payload(ws, $(%*{"type": "identity", "username": assigned_name}))
     broadcast(other_targets, cursor_leave_payload)
     broadcast(targets, presence_payload)
     broadcast(targets, rename_payload)
@@ -871,7 +977,7 @@ proc handle_cast_vote(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
             updated = true
 
   if throttle_payload.len > 0:
-    ws.send(throttle_payload)
+    send_payload(ws, throttle_payload)
   if updated:
     broadcast(targets, votes_payload)
 
@@ -920,6 +1026,25 @@ proc on_close(ws: WebSocket) {.gcsafe.} =
     for vp in vote_payloads:
       broadcast(targets, vp)
 
+proc handle_lineage_all(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
+  let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
+  var response = ""
+  with_state_lock:
+    if ws in clients:
+      let room = clients[ws].room
+      if room in room_evolution and goal_name in room_evolution[room].goals:
+        let goal = room_evolution[room].goals[goal_name]
+        let lineage_payload = lineage_payload_node(goal, full = true)
+        response = $(%*{
+          "type": "lineage_all",
+          "goal": goal_name,
+          "generation": goal.generation,
+          "lineage": lineage_payload.lineage,
+          "lineageTotal": lineage_payload.total,
+        })
+  if response.len > 0:
+    send_payload(ws, response)
+
 proc websocket_handler(
   ws: WebSocket;
   event: WebSocketEvent;
@@ -944,6 +1069,7 @@ proc websocket_handler(
     of "chat": handle_chat(ws, payload)
     of "create_goal": handle_create_goal(ws, payload)
     of "cast_vote": handle_cast_vote(ws, payload)
+    of "lineage_all": handle_lineage_all(ws, payload)
     else: discard
   of ErrorEvent:
     discard

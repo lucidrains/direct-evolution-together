@@ -1657,8 +1657,242 @@
       const initialCrossoverRate = Math.max(0.0, Math.min(1.0, Number(JSON.parse(document.getElementById("det-initial-crossover").textContent)) ?? 0.75));
       const csrfToken = "{{ csrf_token }}";
       const CANVAS_SIZE = 64;
+      const LINEAGE_CANVAS_SIZE = 32;
       const FULLSCREEN_CANVAS_SIZE = 512;
+      const supportsGzip = typeof DecompressionStream === "function";
       const coordCache = new Map();
+
+      // Rendered images are content-addressed so elites and page reloads reuse them.
+      const RENDER_CACHE_DB = "det-render-cache-v1";
+      const RENDER_CACHE_STORE = "images";
+      const RENDER_CACHE_MAX = 4096;
+      const IMAGE_MEMORY_MAX = 900;
+      const LARGE_IMAGE_MEMORY_MAX = 6;
+      const imageMemory = new Map();
+      const largeImageMemory = new Map();
+      const genomeFingerprints = new WeakMap();
+      const pendingImageWrites = new Map();
+      let imageFlushTimer = null;
+      let renderDbPromise = null;
+      let renderDbDisabled = false;
+
+      function hashText(text, seed) {
+        let h = seed >>> 0;
+        for (let i = 0; i < text.length; i++) {
+          h ^= text.charCodeAt(i);
+          h = Math.imul(h, 16777619) >>> 0;
+        }
+        return h >>> 0;
+      }
+
+      function genomeFingerprint(genome) {
+        if (!genome || typeof genome !== "object") return "0";
+        const memo = genomeFingerprints.get(genome);
+        if (memo) return memo;
+        const w = Array.isArray(genome.weights) ? genome.weights : [];
+        const b = Array.isArray(genome.biases) ? genome.biases : [];
+        const a = Array.isArray(genome.activations) ? genome.activations : [];
+        const text = w.join(",") + "|" + b.join(",") + "|" + a.join(",");
+        const fp =
+          hashText(text, 0x811c9dc5).toString(16).padStart(8, "0") +
+          hashText(text, 0x9e3779b9).toString(16).padStart(8, "0");
+        genomeFingerprints.set(genome, fp);
+        return fp;
+      }
+
+      function openRenderDb() {
+        if (renderDbPromise) return renderDbPromise;
+        renderDbPromise = new Promise((resolve) => {
+          if (!("indexedDB" in window)) {
+            renderDbDisabled = true;
+            resolve(null);
+            return;
+          }
+          let req;
+          try {
+            req = indexedDB.open(RENDER_CACHE_DB, 1);
+          } catch (_) {
+            renderDbDisabled = true;
+            resolve(null);
+            return;
+          }
+          req.onupgradeneeded = () => {
+            const db = req.result;
+            if (!db.objectStoreNames.contains(RENDER_CACHE_STORE)) {
+              const store = db.createObjectStore(RENDER_CACHE_STORE, { keyPath: "key" });
+              store.createIndex("createdAt", "createdAt");
+            }
+          };
+          req.onsuccess = () => {
+            const db = req.result;
+            db.onversionchange = () => db.close();
+            resolve(db);
+            pruneRenderCache(db);
+          };
+          req.onerror = () => {
+            renderDbDisabled = true;
+            resolve(null);
+          };
+          req.onblocked = () => {
+            renderDbDisabled = true;
+            resolve(null);
+          };
+        });
+        return renderDbPromise;
+      }
+
+      async function pruneRenderCache(db) {
+        try {
+          const count = await new Promise((resolve, reject) => {
+            const req = db
+              .transaction(RENDER_CACHE_STORE, "readonly")
+              .objectStore(RENDER_CACHE_STORE)
+              .count();
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          });
+          let excess = count - RENDER_CACHE_MAX;
+          if (excess <= 0) return;
+          const tx = db.transaction(RENDER_CACHE_STORE, "readwrite");
+          const cursorReq = tx
+            .objectStore(RENDER_CACHE_STORE)
+            .index("createdAt")
+            .openCursor();
+          cursorReq.onsuccess = () => {
+            const cursor = cursorReq.result;
+            if (!cursor || excess <= 0) return;
+            cursor.delete();
+            excess -= 1;
+            cursor.continue();
+          };
+        } catch (_) {}
+      }
+
+      function rememberImage(key, img) {
+        const large = img.width > CANVAS_SIZE;
+        const map = large ? largeImageMemory : imageMemory;
+        const limit = large ? LARGE_IMAGE_MEMORY_MAX : IMAGE_MEMORY_MAX;
+        if (map.has(key)) map.delete(key);
+        map.set(key, img);
+        while (map.size > limit) {
+          map.delete(map.keys().next().value);
+        }
+      }
+
+      function getRememberedImage(key, large) {
+        const map = large ? largeImageMemory : imageMemory;
+        const img = map.get(key);
+        if (!img) return null;
+        map.delete(key);
+        map.set(key, img);
+        return img;
+      }
+
+      async function preloadImages(genomes, size) {
+        if (!Array.isArray(genomes) || genomes.length === 0) return;
+        const large = size > CANVAS_SIZE;
+        const keys = [];
+        const seen = new Set();
+        for (const genome of genomes) {
+          if (!genome || !Array.isArray(genome.weights)) continue;
+          const key = `${size}:${genomeFingerprint(genome)}`;
+          if (seen.has(key) || getRememberedImage(key, large)) continue;
+          seen.add(key);
+          keys.push(key);
+        }
+        if (keys.length === 0) return;
+
+        const db = await openRenderDb();
+        if (!db || renderDbDisabled) return;
+        await new Promise((resolve) => {
+          let tx;
+          try {
+            tx = db.transaction(RENDER_CACHE_STORE, "readonly");
+          } catch (_) {
+            resolve();
+            return;
+          }
+          const store = tx.objectStore(RENDER_CACHE_STORE);
+          let remaining = keys.length;
+          let settled = false;
+          const finish = () => {
+            remaining -= 1;
+            if (remaining <= 0 && !settled) {
+              settled = true;
+              resolve();
+            }
+          };
+          tx.onabort = tx.onerror = () => {
+            if (!settled) {
+              settled = true;
+              resolve();
+            }
+          };
+          for (const key of keys) {
+            let req;
+            try {
+              req = store.get(key);
+            } catch (_) {
+              finish();
+              continue;
+            }
+            req.onsuccess = () => {
+              const record = req.result;
+              if (record && record.data) {
+                try {
+                  const img = new ImageData(
+                    new Uint8ClampedArray(record.data),
+                    record.size,
+                    record.size
+                  );
+                  rememberImage(key, img);
+                } catch (_) {}
+              }
+              finish();
+            };
+            req.onerror = finish;
+          }
+        });
+      }
+
+      function queueImagePersist(key, img) {
+        pendingImageWrites.set(key, {
+          key,
+          size: img.width,
+          data: img.data,
+          createdAt: Date.now(),
+        });
+        if (imageFlushTimer !== null) return;
+        imageFlushTimer = setTimeout(flushImageWrites, 250);
+      }
+
+      async function flushImageWrites() {
+        imageFlushTimer = null;
+        if (pendingImageWrites.size === 0) return;
+        if (renderDbDisabled) {
+          pendingImageWrites.clear();
+          return;
+        }
+        const db = await openRenderDb();
+        if (!db || renderDbDisabled) {
+          pendingImageWrites.clear();
+          return;
+        }
+        const records = Array.from(pendingImageWrites.values());
+        pendingImageWrites.clear();
+        let tx;
+        try {
+          tx = db.transaction(RENDER_CACHE_STORE, "readwrite");
+        } catch (_) {
+          return;
+        }
+        const store = tx.objectStore(RENDER_CACHE_STORE);
+        for (const record of records) {
+          try {
+            store.put(record);
+          } catch (_) {}
+        }
+      }
 
       function getCoords(size) {
         if (coordCache.has(size)) return coordCache.get(size);
@@ -1691,10 +1925,9 @@
         }
       }
 
-      function renderCppnToCanvas(genome, canvas, size = CANVAS_SIZE) {
+      function renderCppnImageData(genome, size = CANVAS_SIZE) {
         const { total, coordX, coordY, coordR } = getCoords(size);
-        const ctx = canvas.getContext("2d");
-        const img = ctx.createImageData(size, size);
+        const img = new ImageData(size, size);
         const data = img.data;
         const w = genome.weights;
         const b = genome.biases;
@@ -1739,7 +1972,20 @@
           data[outIdx + 3] = 255;
         }
 
-        ctx.putImageData(img, 0, 0);
+        return img;
+      }
+
+      function renderCppnToCanvas(genome, canvas, size = CANVAS_SIZE) {
+        if (!genome || !Array.isArray(genome.weights)) return;
+        const large = size > CANVAS_SIZE;
+        const key = `${size}:${genomeFingerprint(genome)}`;
+        let img = getRememberedImage(key, large);
+        if (!img) {
+          img = renderCppnImageData(genome, size);
+          rememberImage(key, img);
+          if (!large) queueImagePersist(key, img);
+        }
+        canvas.getContext("2d").putImageData(img, 0, 0);
       }
 
       const storedName = localStorage.getItem("det_username") || "";
@@ -1840,6 +2086,7 @@
       let goalsByName = new Map();
       let goalOrder = [];
       let activeGoalName = null;
+      let activeGoalRenderToken = 0;
       let gridFilter = "all";
       let lineageFilter = "active";
       let lineageCollapsed = false;
@@ -1985,7 +2232,7 @@
           btn.addEventListener("click", () => {
             activeGoalName = name;
             renderGoalTabs();
-            renderActiveGoal(true);
+            renderActiveGoalCached();
             refreshAllCursorsVisibility();
             if (lastLocalCursor) {
               sendCursor(lastLocalCursor.x, lastLocalCursor.y, true);
@@ -2346,6 +2593,13 @@
         }
       }
 
+      function renderActiveGoalCached() {
+        const token = ++activeGoalRenderToken;
+        preloadGoalImages(goalsByName.get(activeGoalName)).then(() => {
+          if (token === activeGoalRenderToken) renderActiveGoal(true);
+        });
+      }
+
       const LINEAGE_OP_META = {
         elite: { label: "E", title: "Elite carry-over" },
         crossover: { label: "X", title: "Crossover + mutation" },
@@ -2497,9 +2751,19 @@
 
         const allNodes = goal.lineage;
         const gensSet = new Set(allNodes.map((n) => n.gen));
-        lineageStatsEl.textContent = `${gensSet.size} gen${gensSet.size === 1 ? "" : "s"} · ${allNodes.length} nodes`;
+        const totalNodes = goal._lineageFull
+          ? allNodes.length
+          : Math.max(allNodes.length, Number(goal.lineageTotal) || 0);
+        const nodeLabel = totalNodes > allNodes.length
+          ? `${allNodes.length}/${totalNodes}`
+          : `${allNodes.length}`;
+        lineageStatsEl.textContent = `${gensSet.size} gen${gensSet.size === 1 ? "" : "s"} · ${nodeLabel} nodes`;
 
         if (lineageCollapsed) return;
+
+        if (lineageFilter === "all" && !goal._lineageFull) {
+          requestFullLineage(goal);
+        }
 
         const useActiveOnly = lineageFilter === "active" && goal.generation > 0;
         const activeIds = useActiveOnly ? computeActiveLineageIds(allNodes, goal.generation) : null;
@@ -2550,9 +2814,9 @@
             );
 
             const cvs = document.createElement("canvas");
-            cvs.width = 32;
-            cvs.height = 32;
-            renderCppnToCanvas(node, cvs, 32);
+            cvs.width = LINEAGE_CANVAS_SIZE;
+            cvs.height = LINEAGE_CANVAS_SIZE;
+            renderCppnToCanvas(node, cvs, LINEAGE_CANVAS_SIZE);
             el.appendChild(cvs);
 
             const meta = document.createElement("div");
@@ -2723,6 +2987,188 @@
         if (socket) socket.close();
       });
 
+      function mergeLiveLineage(goal) {
+        if (!goal || !Array.isArray(goal.lineage) || !Array.isArray(goal.genomes)) return;
+        const live = new Map();
+        for (const genome of goal.genomes) live.set(genome.id, genome);
+        for (const node of goal.lineage) {
+          if (Array.isArray(node.weights)) continue;
+          const src = live.get(node.id);
+          if (src && Array.isArray(src.weights)) {
+            node.weights = src.weights;
+            node.biases = src.biases;
+            node.activations = src.activations;
+          }
+        }
+      }
+
+      async function preloadGoalImages(goal) {
+        if (!goal) return;
+        mergeLiveLineage(goal);
+        await Promise.all([
+          preloadImages(goal.genomes || [], CANVAS_SIZE),
+          preloadImages(goal.lineage || [], LINEAGE_CANVAS_SIZE),
+        ]);
+      }
+
+      async function preloadStateImages(goals) {
+        const genomes = [];
+        const lineage = [];
+        for (const goal of goals) {
+          mergeLiveLineage(goal);
+          if (Array.isArray(goal.genomes)) genomes.push(...goal.genomes);
+          if (Array.isArray(goal.lineage)) lineage.push(...goal.lineage);
+        }
+        await Promise.all([
+          preloadImages(genomes, CANVAS_SIZE),
+          preloadImages(lineage, LINEAGE_CANVAS_SIZE),
+        ]);
+      }
+
+      function requestFullLineage(goal) {
+        if (!goal || goal._lineageFull || goal._lineageRequested) return;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        goal._lineageRequested = true;
+        socket.send(JSON.stringify({ type: "lineage_all", goal: goal.name }));
+      }
+
+      async function decodeSocketPayload(raw) {
+        if (typeof raw === "string") return raw;
+        if (!supportsGzip) return "";
+        const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream("gzip"));
+        return await new Response(stream).text();
+      }
+
+      async function handleServerPayload(data) {
+        if (data.type === "identity") {
+          nameInput.value = data.username;
+          localStorage.setItem("det_username", data.username);
+        } else if (data.type === "history") {
+          messagesEl.replaceChildren();
+          for (const msg of data.messages || []) {
+            appendChat(msg.username, msg.message, msg.timestamp);
+          }
+        } else if (data.type === "evolution_state") {
+          loadingOverlayEl.hidden = true;
+          const goals = data.goals || [];
+          for (const g of goals) {
+            g._lineageFull = false;
+            g._lineageRequested = false;
+          }
+          await preloadStateImages(goals);
+          goalsByName = new Map();
+          goalOrder = [];
+          for (const g of goals) {
+            syncGoalDeadline(g);
+            goalsByName.set(g.name, g);
+            goalOrder.push(g.name);
+          }
+          if (!activeGoalName || !goalsByName.has(activeGoalName)) {
+            activeGoalName = goalOrder[0] || null;
+          }
+          activeGoalRenderToken += 1;
+          renderGoalTabs();
+          renderActiveGoal(true);
+        } else if (data.type === "goal_updated") {
+          const g = data.goal;
+          if (g) {
+            g._lineageFull = false;
+            g._lineageRequested = false;
+            mergeLiveLineage(g);
+            if (g.name === activeGoalName) {
+              await preloadGoalImages(g);
+            }
+            syncGoalDeadline(g);
+            goalsByName.set(g.name, g);
+            if (!goalOrder.includes(g.name)) goalOrder.push(g.name);
+            renderGoalTabs();
+            if (g.name === activeGoalName) {
+              activeGoalRenderToken += 1;
+              renderActiveGoal(true);
+            }
+          }
+        } else if (data.type === "lineage_all") {
+          const g = goalsByName.get(data.goal);
+          if (g && data.generation === g.generation) {
+            g.lineage = data.lineage || [];
+            g.lineageTotal = data.lineageTotal || g.lineage.length;
+            g._lineageFull = true;
+            g._lineageRequested = false;
+            mergeLiveLineage(g);
+            await preloadImages(g.lineage, LINEAGE_CANVAS_SIZE);
+            if (data.goal === activeGoalName && lineageFilter === "all") {
+              renderLineageTree(g);
+            }
+          }
+        } else if (data.type === "votes_updated") {
+          const g = goalsByName.get(data.goal);
+          if (g) {
+            g.votes = data.votes || [];
+            g.totalVotes = data.totalVotes || 0;
+            g.minVotes = data.minVotes || 3;
+            g.countdownMs = data.countdownMs || 0;
+            g.countdownDurationMs = data.countdownDurationMs || 8000;
+            g.evolving = Boolean(data.evolving);
+            g.mutationSigma = data.mutationSigma;
+            if (typeof data.populationSize === "number") {
+              g.populationSize = data.populationSize;
+            }
+            if (typeof data.maxVotesPerUser === "number") {
+              g.maxVotesPerUser = data.maxVotesPerUser;
+            }
+            if (typeof data.eliteFrac === "number") {
+              g.eliteFrac = data.eliteFrac;
+            }
+            if (typeof data.crossoverRate === "number") {
+              g.crossoverRate = data.crossoverRate;
+            }
+            syncGoalDeadline(g);
+            if (data.goal === activeGoalName) {
+              updateVoteCards();
+            }
+          }
+        } else if (data.type === "vote_throttled") {
+          const g = goalsByName.get(data.goal);
+          if (g && typeof data.index === "number") {
+            const k = voteKey(g.name, g.generation, data.index);
+            const v = g.votes && g.votes[data.index];
+            const me = (nameInput.value || "").trim();
+            if (v && me && Array.isArray(v.upUsers) && v.upUsers.includes(me)) {
+              myVotes.set(k, 1);
+            } else if (v && me && Array.isArray(v.downUsers) && v.downUsers.includes(me)) {
+              myVotes.set(k, -1);
+            } else {
+              myVotes.set(k, 0);
+            }
+            if (data.goal === activeGoalName) updateVoteCards();
+          }
+          if (data.message) showThrottleNotice(data.message);
+        } else if (data.type === "chat") {
+          appendChat(data.username, data.message, data.timestamp);
+        } else if (data.type === "system") {
+          appendSystem(data.message, data.timestamp);
+        } else if (data.type === "cursor") {
+          renderCursor(
+            data.username,
+            Number(data.x || 0),
+            Number(data.y || 0),
+            Boolean(data.visible),
+            data.goal || ""
+          );
+        } else if (data.type === "cursor_leave") {
+          removeCursor(data.username);
+        } else if (data.type === "presence") {
+          const users = data.users || [];
+          renderUsers(users);
+          const activeSet = new Set(users);
+          for (const username of Array.from(remoteCursors.keys())) {
+            if (!activeSet.has(username)) {
+              removeCursor(username);
+            }
+          }
+        }
+      }
+
       function connect() {
         if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
           return;
@@ -2740,11 +3186,14 @@
         if (isPrivateRoom && initialMutSigma) params.set("sigma", initialMutSigma.toFixed(2));
         if (isPrivateRoom) params.set("elite_frac", initialEliteFrac.toFixed(2));
         if (isPrivateRoom) params.set("crossover", initialCrossoverRate.toFixed(2));
+        if (supportsGzip) params.set("gzip", "1");
         const qs = params.toString() ? `?${params.toString()}` : "";
         const wsUrl = wsViaProxy
           ? `${proto}//${window.location.host}${basePath}/ws/chat/${roomName}/${qs}`
           : `${proto}//${wsHost}:${wsPort}/ws/chat/${roomName}/${qs}`;
         socket = new WebSocket(wsUrl);
+        socket.binaryType = "arraybuffer";
+        let inboundQueue = Promise.resolve();
 
         socket.addEventListener("open", () => {
           hideReconnectOverlay();
@@ -2762,108 +3211,14 @@
         });
 
         socket.addEventListener("message", (event) => {
-          const data = JSON.parse(event.data);
-          if (data.type === "identity") {
-            nameInput.value = data.username;
-            localStorage.setItem("det_username", data.username);
-          } else if (data.type === "history") {
-            messagesEl.replaceChildren();
-            for (const msg of data.messages || []) {
-              appendChat(msg.username, msg.message, msg.timestamp);
-            }
-          } else if (data.type === "evolution_state") {
-            loadingOverlayEl.hidden = true;
-            const goals = data.goals || [];
-            goalsByName = new Map();
-            goalOrder = [];
-            for (const g of goals) {
-              syncGoalDeadline(g);
-              goalsByName.set(g.name, g);
-              goalOrder.push(g.name);
-            }
-            if (!activeGoalName || !goalsByName.has(activeGoalName)) {
-              activeGoalName = goalOrder[0] || null;
-            }
-            renderGoalTabs();
-            renderActiveGoal(true);
-          } else if (data.type === "goal_updated") {
-            const g = data.goal;
-            if (g) {
-              syncGoalDeadline(g);
-              goalsByName.set(g.name, g);
-              if (!goalOrder.includes(g.name)) goalOrder.push(g.name);
-              renderGoalTabs();
-              if (g.name === activeGoalName) {
-                renderActiveGoal(true);
-              }
-            }
-          } else if (data.type === "votes_updated") {
-            const g = goalsByName.get(data.goal);
-            if (g) {
-              g.votes = data.votes || [];
-              g.totalVotes = data.totalVotes || 0;
-              g.minVotes = data.minVotes || 3;
-              g.countdownMs = data.countdownMs || 0;
-              g.countdownDurationMs = data.countdownDurationMs || 8000;
-              g.evolving = Boolean(data.evolving);
-              g.mutationSigma = data.mutationSigma;
-              if (typeof data.populationSize === "number") {
-                g.populationSize = data.populationSize;
-              }
-              if (typeof data.maxVotesPerUser === "number") {
-                g.maxVotesPerUser = data.maxVotesPerUser;
-              }
-              if (typeof data.eliteFrac === "number") {
-                g.eliteFrac = data.eliteFrac;
-              }
-              if (typeof data.crossoverRate === "number") {
-                g.crossoverRate = data.crossoverRate;
-              }
-              syncGoalDeadline(g);
-              if (data.goal === activeGoalName) {
-                updateVoteCards();
-              }
-            }
-          } else if (data.type === "vote_throttled") {
-            const g = goalsByName.get(data.goal);
-            if (g && typeof data.index === "number") {
-              const k = voteKey(g.name, g.generation, data.index);
-              const v = g.votes && g.votes[data.index];
-              const me = (nameInput.value || "").trim();
-              if (v && me && Array.isArray(v.upUsers) && v.upUsers.includes(me)) {
-                myVotes.set(k, 1);
-              } else if (v && me && Array.isArray(v.downUsers) && v.downUsers.includes(me)) {
-                myVotes.set(k, -1);
-              } else {
-                myVotes.set(k, 0);
-              }
-              if (data.goal === activeGoalName) updateVoteCards();
-            }
-            if (data.message) showThrottleNotice(data.message);
-          } else if (data.type === "chat") {
-            appendChat(data.username, data.message, data.timestamp);
-          } else if (data.type === "system") {
-            appendSystem(data.message, data.timestamp);
-          } else if (data.type === "cursor") {
-            renderCursor(
-              data.username,
-              Number(data.x || 0),
-              Number(data.y || 0),
-              Boolean(data.visible),
-              data.goal || ""
-            );
-          } else if (data.type === "cursor_leave") {
-            removeCursor(data.username);
-          } else if (data.type === "presence") {
-            const users = data.users || [];
-            renderUsers(users);
-            const activeSet = new Set(users);
-            for (const username of Array.from(remoteCursors.keys())) {
-              if (!activeSet.has(username)) {
-                removeCursor(username);
-              }
-            }
-          }
+          const raw = event.data;
+          inboundQueue = inboundQueue
+            .then(async () => {
+              const text = await decodeSocketPayload(raw);
+              if (!text) return;
+              await handleServerPayload(JSON.parse(text));
+            })
+            .catch((err) => console.error("WebSocket message failed", err));
         });
       }
 
