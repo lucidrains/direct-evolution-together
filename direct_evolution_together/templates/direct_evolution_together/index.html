@@ -30,9 +30,12 @@
         font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
+        overflow-x: hidden;
+        overflow-x: clip;
       }
       body {
         min-height: 100vh;
+        min-height: 100dvh;
         display: flex;
         flex-direction: column;
       }
@@ -95,11 +98,12 @@
         white-space: nowrap;
       }
       @media (max-width: 720px) {
-        header { flex-wrap: wrap; }
+        header { flex-wrap: wrap; row-gap: 0.35rem; }
         .title-line > span:first-child { display: none; }
         .room-name, .room-desc { max-width: 70vw; }
         .header-right {
           width: 100%;
+          flex-wrap: wrap;
           justify-content: flex-end;
         }
         .header-right .paper-link[href^="https://doi.org"] { display: none; }
@@ -188,9 +192,10 @@
         margin: 1rem auto;
         padding: 0 1rem;
       }
+      main > * { min-width: 0; }
       @media (max-width: 860px) {
         main {
-          grid-template-columns: 1fr;
+          grid-template-columns: minmax(0, 1fr);
           margin: 1rem auto;
         }
       }
@@ -213,6 +218,7 @@
         padding: 0 1rem;
         border-bottom: 1px solid var(--border);
         min-height: 44px;
+        min-width: 0;
       }
       .goal-tabs {
         display: flex;
@@ -220,7 +226,10 @@
         gap: 0.15rem;
         overflow-x: auto;
         scrollbar-width: none;
+        flex: 1 1 auto;
+        min-width: 0;
       }
+      .goal-tabs::-webkit-scrollbar { display: none; }
       .goal-tab {
         position: relative;
         background: transparent;
@@ -275,19 +284,23 @@
       }
       .goal-meta {
         display: flex;
+        flex-wrap: wrap;
         align-items: baseline;
         gap: 0.5rem;
+        min-width: 0;
       }
       .goal-meta h2 {
         margin: 0;
         font-size: 0.95rem;
         font-weight: 600;
         letter-spacing: -0.015em;
+        overflow-wrap: anywhere;
       }
       .gen-tag {
         font-family: var(--mono);
         font-size: 0.72rem;
         color: var(--dim);
+        overflow-wrap: anywhere;
       }
       .sigma-label {
         display: inline-flex;
@@ -392,8 +405,10 @@
       }
       .lineage-title-group {
         display: flex;
+        flex-wrap: wrap;
         align-items: baseline;
         gap: 0.55rem;
+        min-width: 0;
       }
       .lineage-title-group h3 {
         margin: 0;
@@ -414,8 +429,9 @@
       }
       .lineage-legend {
         display: inline-flex;
+        flex-wrap: wrap;
         align-items: center;
-        gap: 0.65rem;
+        gap: 0.35rem 0.65rem;
         font-family: var(--mono);
         font-size: 0.68rem;
         color: var(--muted);
@@ -563,8 +579,11 @@
       }
       .round-banner-top {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         justify-content: space-between;
+        column-gap: 0.5rem;
+        row-gap: 0.3rem;
         font-size: 0.74rem;
         font-family: var(--mono);
         color: var(--muted);
@@ -652,7 +671,24 @@
         scroll-behavior: smooth;
       }
       @media (max-width: 500px) {
-        .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        main { padding: 0 0.75rem; margin: 0.75rem auto; }
+        .goal-bar { padding: 0 0.75rem; }
+        .evo-body { padding: 0.75rem 0.75rem 0.85rem; }
+        .grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 0.5rem;
+        }
+        .genome-card .fs-btn,
+        .genome-card .dl-btn { display: none; }
+        .genome-footer { gap: 0.25rem; }
+        .round-banner-top {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          justify-content: initial;
+        }
+        #round-vote-text,
+        #round-timer { grid-column: 1 / -1; }
+        #user-vote-budget { grid-column: 1; justify-self: start; }
       }
       .genome-card {
         background: var(--surface-2);
@@ -956,8 +992,11 @@
         border-radius: 10px;
         padding: 0.5rem 0.75rem;
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
-        gap: 0.65rem;
+        justify-content: center;
+        gap: 0.5rem 0.65rem;
+        max-width: calc(100vw - 2rem);
         font-size: 0.76rem;
         color: var(--muted);
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
@@ -972,6 +1011,9 @@
         border: 1px solid var(--border);
         padding: 0.18rem 0.45rem;
         border-radius: 5px;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        word-break: break-all;
       }
       .toast .close-toast {
         background: transparent;
@@ -998,7 +1040,8 @@
         border: 1px solid var(--border-strong);
         border-radius: 12px;
         padding: 1.1rem 1.35rem;
-        min-width: 280px;
+        width: 100%;
+        min-width: 0;
         max-width: 360px;
         display: flex;
         flex-direction: column;
@@ -1201,6 +1244,8 @@
       .fs-dialog {
         width: min(740px, 100%);
         max-height: 94vh;
+        max-height: 94dvh;
+        overflow-y: auto;
         background: var(--surface);
         border: 1px solid var(--border-strong);
         border-radius: 14px;
@@ -1219,19 +1264,24 @@
       }
       .fs-title-wrap {
         display: flex;
+        flex-wrap: wrap;
         align-items: baseline;
-        gap: 0.55rem;
+        gap: 0.35rem 0.55rem;
+        min-width: 0;
         font-family: var(--mono);
         font-size: 0.82rem;
         color: var(--text);
       }
+      #fs-title { overflow-wrap: anywhere; }
       .fs-sub {
         color: var(--muted);
         font-size: 0.75rem;
       }
       .fs-actions {
         display: inline-flex;
+        flex-wrap: wrap;
         align-items: center;
+        justify-content: flex-end;
         gap: 0.45rem;
       }
       .fs-stage {
@@ -1240,9 +1290,13 @@
         align-items: center;
         justify-content: center;
         gap: 0.65rem;
+        width: 100%;
+        min-width: 0;
       }
       #fs-canvas {
         width: min(512px, 72vh, 100%);
+        min-width: 0;
+        flex: 0 1 auto;
         aspect-ratio: 1 / 1;
         border-radius: 10px;
         background: #000;
@@ -1281,6 +1335,9 @@
       .room-modal-overlay[hidden] { display: none; }
       .room-modal {
         width: min(440px, 100%);
+        max-height: calc(100vh - 2rem);
+        max-height: calc(100dvh - 2rem);
+        overflow-y: auto;
         background: var(--surface);
         border: 1px solid var(--border-strong);
         border-radius: 14px;
@@ -1353,8 +1410,18 @@
       }
       .room-modal-actions {
         display: flex;
+        flex-wrap: wrap;
         justify-content: flex-end;
         gap: 0.5rem;
+      }
+      @media (max-width: 720px) {
+        input[type="text"],
+        input[type="number"],
+        textarea,
+        .name-form input,
+        .ga-param-card .pop-input,
+        .room-field input,
+        .room-field textarea { font-size: 16px; }
       }
     </style>
   </head>
