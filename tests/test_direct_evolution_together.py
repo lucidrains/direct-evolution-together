@@ -593,3 +593,386 @@ def test_admin_clear_lobby_goal_and_private_room(client, monkeypatch, settings):
     finally:
         ws_bridge.stop_ws_server()
         mummy_ws.clear_state()
+
+
+@pytest.mark.django_db
+def test_weight_upload_validation_and_population_cap(client):
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    from direct_evolution_together.cppn import save_cppn_bytes
+    from direct_evolution_together.models import Room, RoomEvolutionState
+
+    valid_net = CPPN.random(101)
+    valid_pt = save_cppn_bytes(valid_net.to_dict())
+
+    # 1. Corrupt .pt, unsupported extension, and zip without .pt must fail compatibility check
+    for bad_file in (
+        SimpleUploadedFile("corrupt.pt", b"not-a-pytorch-checkpoint"),
+        SimpleUploadedFile("notes.txt", valid_pt),
+        SimpleUploadedFile("bad.zip", b"not-a-zip"),
+    ):
+        r = client.post("/api/weights/validate/", {"weights": [bad_file]})
+        assert r.status_code == 400 and r.json()["ok"] is False
+
+    empty_zip_buf = io.BytesIO()
+    with zipfile.ZipFile(empty_zip_buf, "w") as zf:
+        zf.writestr("readme.txt", "hello")
+    r_no_pt = client.post(
+        "/api/weights/validate/",
+        {"weights": [SimpleUploadedFile("empty.zip", empty_zip_buf.getvalue())]},
+    )
+    assert r_no_pt.status_code == 400 and "no .pt" in r_no_pt.json()["error"]
+
+    # 2. Wrong architecture / wrong shape / NaN weights / invalid activation codes must fail
+    wrong_arch_buf = io.BytesIO()
+    torch.save({"model": torch.nn.Linear(4, 3).state_dict()}, wrong_arch_buf)
+    r_arch = client.post(
+        "/api/weights/validate/",
+        {"weights": [SimpleUploadedFile("linear.pt", wrong_arch_buf.getvalue())]},
+    )
+    assert r_arch.status_code == 400 and "Incompatible network architecture" in r_arch.json()["error"]
+
+    wrong_shape_sd = {k: v.clone() for k, v in valid_net.state_dict().items()}
+    wrong_shape_sd["layers.0.weight"] = torch.zeros(8, 4)
+    wrong_shape_buf = io.BytesIO()
+    torch.save({"model": wrong_shape_sd}, wrong_shape_buf)
+    r_shape = client.post(
+        "/api/weights/validate/",
+        {"weights": [SimpleUploadedFile("wrong_shape.pt", wrong_shape_buf.getvalue())]},
+    )
+    assert r_shape.status_code == 400 and "Incompatible shape" in r_shape.json()["error"]
+
+    nan_sd = {k: v.clone() for k, v in valid_net.state_dict().items()}
+    nan_sd["layers.1.bias"][0] = float("nan")
+    nan_buf = io.BytesIO()
+    torch.save({"model": nan_sd}, nan_buf)
+    r_nan = client.post(
+        "/api/weights/validate/",
+        {"weights": [SimpleUploadedFile("nan.pt", nan_buf.getvalue())]},
+    )
+    assert r_nan.status_code == 400 and "NaN or Inf" in r_nan.json()["error"]
+
+    bad_act_sd = {k: v.clone() for k, v in valid_net.state_dict().items()}
+    bad_act_sd["activations"][0] = 99
+    bad_act_buf = io.BytesIO()
+    torch.save({"model": bad_act_sd}, bad_act_buf)
+    r_act = client.post(
+        "/api/weights/validate/",
+        {"weights": [SimpleUploadedFile("bad_act.pt", bad_act_buf.getvalue())]},
+    )
+    assert r_act.status_code == 400 and "Activation codes out of range" in r_act.json()["error"]
+
+    # 3. Zip containing macOS resource forks (__MACOSX / ._weights.pt) ignores junk and loads real .pt
+    mac_zip_buf = io.BytesIO()
+    with zipfile.ZipFile(mac_zip_buf, "w") as zf:
+        zf.writestr("__MACOSX/strain_a/._weights.pt", b"appledouble-junk")
+        zf.writestr("strain_a/._weights.pt", b"appledouble-junk")
+        zf.writestr("strain_a/weights.pt", valid_pt)
+    r_mac = client.post(
+        "/api/weights/validate/",
+        {"weights": [SimpleUploadedFile("strain_a.zip", mac_zip_buf.getvalue())]},
+    )
+    assert r_mac.status_code == 200
+    mac_json = r_mac.json()
+    assert mac_json["ok"] is True and len(mac_json["strains"]) == 1
+    assert mac_json["strains"][0]["label"] == "strain_a"
+    assert mac_json["strains"][0]["genome"]["weights"] == valid_net.to_dict()["weights"]
+
+    # 4. Population size boundary checks: uploaded count allowed up to population_size, rejected above
+    r_full = client.post(
+        "/api/rooms/",
+        {
+            "name": "Full Seeded Dish",
+            "population_size": "3",
+            "weights": [SimpleUploadedFile(f"s{i}.pt", valid_pt) for i in range(3)],
+        },
+    )
+    assert r_full.status_code == 200
+    full_json = r_full.json()
+    assert full_json["seeded"] == 3
+    assert full_json["population_size"] == 3
+    saved_full = json.loads(RoomEvolutionState.objects.get(room="full-seeded-dish").state_json)
+    assert len(saved_full["goals"][0]["genomes"]) == 3
+    assert all(g["op"] == "seed" for g in saved_full["goals"][0]["genomes"])
+
+    r_cap = client.post(
+        "/api/rooms/",
+        {
+            "name": "Overfull Dish",
+            "population_size": "3",
+            "weights": [SimpleUploadedFile(f"s{i}.pt", valid_pt) for i in range(4)],
+        },
+    )
+    assert r_cap.status_code == 400
+    assert "cannot exceed total population size" in r_cap.json()["error"]
+    assert not Room.objects.filter(name="Overfull Dish").exists()
+    assert not RoomEvolutionState.objects.filter(room="overfull-dish").exists()
+
+    # Out-of-range population sizes (2 and 65) are rejected explicitly
+    for bad_pop in ("2", "65", "abc"):
+        r_pop = client.post(
+            "/api/rooms/",
+            {
+                "name": "Bad Pop Dish",
+                "population_size": bad_pop,
+                "weights": [SimpleUploadedFile("s0.pt", valid_pt)],
+            },
+        )
+        assert r_pop.status_code == 400
+        assert not Room.objects.filter(name="Bad Pop Dish").exists()
+
+    # 5. Server-side large-file, zip-bomb, internal .pt bomb, and entry-flood protections
+    huge_pt = b"x" * (160 * 1024)  # > 128 KB per-checkpoint limit
+    r_huge_val = client.post(
+        "/api/weights/validate/",
+        {"weights": [SimpleUploadedFile("huge.pt", huge_pt)]},
+    )
+    assert r_huge_val.status_code == 400
+    assert "exceeds the 128 KB size limit" in r_huge_val.json()["error"]
+
+    r_huge_room = client.post(
+        "/api/rooms/",
+        {"name": "Huge Dish", "weights": [SimpleUploadedFile("huge.pt", huge_pt)]},
+    )
+    assert r_huge_room.status_code == 400
+    assert "exceeds the 128 KB size limit" in r_huge_room.json()["error"]
+    assert not Room.objects.filter(name="Huge Dish").exists()
+
+    # Oversized HTTP request body (> 4 MB Content-Length) rejected with 413 pre-multipart
+    r_oversized_req = client.post(
+        "/api/weights/validate/",
+        data=b"0" * 32,
+        content_type="multipart/form-data; boundary=xyz",
+        CONTENT_LENGTH=str(5 * 1024 * 1024),
+    )
+    assert r_oversized_req.status_code == 413
+    assert "exceeds the 4 MB maximum request size" in r_oversized_req.json()["error"]
+
+    # Outer .zip decompression bomb: tiny compressed zip (< 2 KB) expanding to 512 KB .pt
+    zip_bomb_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_bomb_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("bomb/weights.pt", b"\x00" * (512 * 1024))
+    assert len(zip_bomb_buf.getvalue()) < 4096
+    r_zip_bomb = client.post(
+        "/api/weights/validate/",
+        {"weights": [SimpleUploadedFile("bomb.zip", zip_bomb_buf.getvalue())]},
+    )
+    assert r_zip_bomb.status_code == 400
+    assert "exceeds the 128 KB size limit" in r_zip_bomb.json()["error"]
+
+    # Inner .pt zip decompression bomb: tiny .pt zip (< 2 KB) expanding to 512 KB internally
+    pt_bomb_buf = io.BytesIO()
+    with zipfile.ZipFile(pt_bomb_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("archive/data/0", b"\x00" * (512 * 1024))
+    assert len(pt_bomb_buf.getvalue()) < 4096
+    r_pt_bomb = client.post(
+        "/api/weights/validate/",
+        {"weights": [SimpleUploadedFile("inner_bomb.pt", pt_bomb_buf.getvalue())]},
+    )
+    assert r_pt_bomb.status_code == 400
+    assert "decompressed size exceeds the 256 KB safety limit" in r_pt_bomb.json()["error"]
+
+    # Zip archive entry-count flood (> 256 entries) and nested .zip rejected
+    flood_buf = io.BytesIO()
+    with zipfile.ZipFile(flood_buf, "w") as zf:
+        for idx in range(270):
+            zf.writestr(f"junk/f{idx}.txt", b"a")
+    r_flood = client.post(
+        "/api/weights/validate/",
+        {"weights": [SimpleUploadedFile("flood.zip", flood_buf.getvalue())]},
+    )
+    assert r_flood.status_code == 400
+    assert "too many entries" in r_flood.json()["error"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_e2e_download_weights_reseed_new_room_and_evolve(client, monkeypatch):
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    with _ws_server(seed=True, pop_size=8, max_votes=4) as port:
+        mummy_ws.set_round_config(2, 60)
+
+        # Step 1: Run a full 5-generation evolution in /lobby ("Butterfly"), archiving 2 strains along the way
+        saved_gen2_genome = None
+        saved_gen5_genome = None
+        with (
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=archivist") as a_lob,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=breeder") as b_lob,
+        ):
+            lob_evo = _recv_until(a_lob, "evolution_state")
+            _recv_until(b_lob, "evolution_state")
+            cur_goal = {g["name"]: g for g in lob_evo["goals"]}["Butterfly"]
+            assert cur_goal["generation"] == 0
+
+            for expected_next_gen in range(1, 6):
+                gen = cur_goal["generation"]
+                a_lob.send(json.dumps({
+                    "type": "cast_vote", "goal": "Butterfly", "generation": gen, "index": 0, "vote": 1,
+                }))
+                _recv_until(a_lob, "votes_updated")
+                b_lob.send(json.dumps({
+                    "type": "cast_vote", "goal": "Butterfly", "generation": gen, "index": 1, "vote": 1,
+                }))
+                cur_goal = _recv_until(a_lob, "goal_updated", timeout=4.0)["goal"]
+                _recv_until(b_lob, "goal_updated", timeout=4.0)
+                assert cur_goal["generation"] == expected_next_gen
+
+                if expected_next_gen == 2:
+                    # Save individual #1 midway through the run at Generation 2
+                    saved_gen2_genome = cur_goal["genomes"][0]
+                elif expected_next_gen == 5:
+                    # Save individual #2 at the end of the 5-generation run (Generation 5)
+                    saved_gen5_genome = cur_goal["genomes"][2]
+
+            assert saved_gen2_genome is not None
+            assert saved_gen5_genome is not None
+
+            # Step 2: Export one as a .zip bundle (/export/bundle/) and one as raw .pt (/export/weights/)
+            bundle_resp = client.post(
+                "/export/bundle/",
+                data=json.dumps({
+                    "goal": "Butterfly",
+                    "generation": 2,
+                    "index": 0,
+                    "genome": saved_gen2_genome,
+                }),
+                content_type="application/json",
+            )
+            assert bundle_resp.status_code == 200
+
+            weights_resp = client.post(
+                "/export/weights/",
+                data=json.dumps({
+                    "goal": "Butterfly",
+                    "generation": 5,
+                    "index": 2,
+                    "genome": saved_gen5_genome,
+                }),
+                content_type="application/json",
+            )
+            assert weights_resp.status_code == 200
+
+            # Step 3: Validate both archived downloads via /api/weights/validate/ (live UI preview path)
+            val_resp = client.post(
+                "/api/weights/validate/",
+                {
+                    "weights": [
+                        SimpleUploadedFile("butterfly_g2_0.zip", bundle_resp.content),
+                        SimpleUploadedFile("butterfly_g5_2.pt", weights_resp.content),
+                    ]
+                },
+            )
+            assert val_resp.status_code == 200
+            preview_strains = val_resp.json()["strains"]
+            assert [s["label"] for s in preview_strains] == ["butterfly_g2_0", "butterfly_g5_2"]
+            assert preview_strains[0]["genome"]["weights"] == saved_gen2_genome["weights"]
+            assert preview_strains[1]["genome"]["weights"] == saved_gen5_genome["weights"]
+
+            # Step 4: Create a new room reseeded with the 2 archived strains (< pop_size=6)
+            create_resp = client.post(
+                "/api/rooms/",
+                {
+                    "name": "Petri Reseed",
+                    "description": "Reseeded from Gen 2 & Gen 5 Butterfly strains",
+                    "population_size": "6",
+                    "max_votes_per_user": "4",
+                    "mutation_sigma": "0.35",
+                    "elite_frac": "0.35",
+                    "crossover_rate": "0.80",
+                    "weights": [
+                        SimpleUploadedFile("butterfly_g2_0.zip", bundle_resp.content),
+                        SimpleUploadedFile("butterfly_g5_2.pt", weights_resp.content),
+                    ],
+                },
+            )
+            assert create_resp.status_code == 200
+            room_data = create_resp.json()
+            assert room_data["ok"] is True
+            assert room_data["slug"] == "petri-reseed"
+            assert room_data["seeded"] == 2
+            assert room_data["population_size"] == 6
+            assert room_data["url"] == "/p/petri-reseed/"
+
+            # Share the newly created room URL in chat and verify broadcast preserves full URL & room path
+            invite_msg = "Reseeded Gen 2 + Gen 5 strains at http://127.0.0.1:8000/p/petri-reseed/ (/p/petri-reseed/)!"
+            a_lob.send(json.dumps({"type": "chat", "message": invite_msg}))
+            chat_evt = _recv_until(b_lob, "chat")
+            assert chat_evt["username"] == "archivist"
+            assert chat_evt["message"] == invite_msg
+
+        page_html = client.get(room_data["url"]).content.decode()
+        assert "Petri Reseed" in page_html
+        assert "seed-dropzone" in page_html
+        assert "Seed (S)" in page_html
+        assert "appendLinkifiedText" in page_html
+        assert "chat-link" in page_html
+
+        # Step 5: Join the newly created room over WebSocket; verify Gen 0 has 2 seeded + 4 random = 6 total
+        with (
+            connect(f"ws://127.0.0.1:{port}/ws/chat/petri-reseed/?username=alice") as a_ws,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/petri-reseed/?username=bob") as b_ws,
+        ):
+            reseed_evo = _recv_until(a_ws, "evolution_state")
+            _recv_until(b_ws, "evolution_state")
+            assert len(reseed_evo["goals"]) == 1
+            dish = reseed_evo["goals"][0]
+            assert dish["name"] == "Petri Reseed"
+            assert dish["generation"] == 0
+            assert dish["populationSize"] == 6
+            assert len(dish["genomes"]) == 6
+
+            g0, g1 = dish["genomes"][0], dish["genomes"][1]
+            assert g0["op"] == "seed" and g0["parents"] == []
+            assert g1["op"] == "seed" and g1["parents"] == []
+            assert g0["weights"] == saved_gen2_genome["weights"]
+            assert g0["biases"] == saved_gen2_genome["biases"]
+            assert g0["activations"] == saved_gen2_genome["activations"]
+            assert g1["weights"] == saved_gen5_genome["weights"]
+            assert g1["biases"] == saved_gen5_genome["biases"]
+            assert g1["activations"] == saved_gen5_genome["activations"]
+            assert all(g["op"] == "random" for g in dish["genomes"][2:])
+
+            # Step 6: Collaboratively vote on the 2 seeded strains to evolve Gen 0 -> Gen 1
+            a_ws.send(json.dumps({
+                "type": "cast_vote", "goal": "Petri Reseed", "generation": 0, "index": 0, "vote": 1,
+            }))
+            _recv_until(a_ws, "votes_updated")
+            b_ws.send(json.dumps({
+                "type": "cast_vote", "goal": "Petri Reseed", "generation": 0, "index": 1, "vote": 1,
+            }))
+            gen1 = _recv_until(a_ws, "goal_updated", timeout=4.0)["goal"]
+            assert gen1["generation"] == 1
+            assert len(gen1["genomes"]) == 6
+            seed_ids = {g0["id"], g1["id"]}
+            elites = [g for g in gen1["genomes"] if g["op"] == "elite"]
+            assert len(elites) >= 2
+            assert {tuple(elites[0]["weights"]), tuple(elites[1]["weights"])} == {
+                tuple(saved_gen2_genome["weights"]),
+                tuple(saved_gen5_genome["weights"]),
+            }
+            assert all(set(e["parents"]) <= seed_ids for e in elites[:2])
+
+            a_ws.send(json.dumps({"type": "lineage_all", "goal": "Petri Reseed"}))
+            full_lin = _recv_until(a_ws, "lineage_all")
+            gen0_ops = [n["op"] for n in full_lin["lineage"] if n["gen"] == 0]
+            assert gen0_ops.count("seed") == 2 and gen0_ops.count("random") == 4
+
+        # Step 7: Also verify separate-process (uvicorn + ws_server) DB handoff on init_room
+        monkeypatch.setattr(ws_bridge, "is_running", lambda: False)
+        async_resp = client.post(
+            "/api/rooms/",
+            {
+                "name": "Async Dish",
+                "population_size": "4",
+                "weights": [SimpleUploadedFile("butterfly_g2_0.zip", bundle_resp.content)],
+            },
+        )
+        assert async_resp.status_code == 200
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/async-dish/?username=carol") as c_ws:
+            async_evo = _recv_until(c_ws, "evolution_state", timeout=4.0)
+            async_goal = async_evo["goals"][0]
+            assert async_goal["name"] == "Async Dish"
+            assert len(async_goal["genomes"]) == 4
+            assert async_goal["genomes"][0]["op"] == "seed"
+            assert async_goal["genomes"][0]["weights"] == saved_gen2_genome["weights"]
+            assert all(g["op"] == "random" for g in async_goal["genomes"][1:])

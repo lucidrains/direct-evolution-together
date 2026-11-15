@@ -1,9 +1,11 @@
+import io
 import itertools
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import tempfile
 import threading
-from typing import Iterable
+from typing import Iterable, Sequence
+import zipfile
 
 import torch
 import torch.nn as nn
@@ -11,9 +13,21 @@ import torch.nn.functional as F
 from torch_einops_utils.save_load import save_load
 
 LAYER_DIMS = (4, 12, 12, 12, 3)
+NUM_WEIGHTS = sum(a * b for a, b in zip(LAYER_DIMS[:-1], LAYER_DIMS[1:]))  # 372
+NUM_BIASES = sum(LAYER_DIMS[1:])  # 39
 NUM_HIDDEN = sum(LAYER_DIMS[1:-1])  # 36
 NUM_ACTIVATIONS = 5  # 0=tanh, 1=sin, 2=gauss, 3=abs, 4=leaky_relu
 POPULATION_SIZE = 30
+MIN_POPULATION_SIZE = 3
+MAX_POPULATION_SIZE = 64
+MAX_CHECKPOINT_BYTES = 128 * 1024  # 128 KB (~4.5 KB typical CPPN .pt)
+MAX_CHECKPOINT_UNCOMPRESSED_BYTES = 256 * 1024  # 256 KB max internal .pt zip payload
+MAX_PT_ARCHIVE_ENTRIES = 64
+MAX_ARCHIVE_BYTES = 2 * 1024 * 1024  # 2 MB max .zip upload
+MAX_ARCHIVE_UNCOMPRESSED_BYTES = 4 * 1024 * 1024  # 4 MB max extracted .pt bytes per .zip
+MAX_ZIP_ENTRIES = 256
+MAX_TOTAL_UPLOAD_BYTES = 4 * 1024 * 1024  # 4 MB max total HTTP upload body
+MAX_UPLOAD_FILES = MAX_POPULATION_SIZE
 DEFAULT_MUT_SIGMA = 0.30
 DEFAULT_ELITE_FRAC = 0.20
 DEFAULT_CROSSOVER_RATE = 0.75
@@ -436,6 +450,269 @@ def save_cppn_bytes(data: dict) -> bytes:
     with tempfile.NamedTemporaryFile(suffix=".pt") as tmp:
         net.save(tmp.name)
         return Path(tmp.name).read_bytes()
+
+
+def _clean_strain_label(raw: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_.-]+", "_", (raw or "").strip()).strip("_.")
+    return (cleaned[:48] or "strain")
+
+
+def _read_zip_member_bounded(
+    zf: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    max_bytes: int,
+    error_message: str,
+) -> bytes:
+    """Read a zip entry up to `max_bytes`, guarding against spoofed ZipInfo sizes."""
+    if info.file_size > max_bytes:
+        raise ValueError(error_message)
+    chunks: list[bytes] = []
+    read_total = 0
+    with zf.open(info, "r") as member:
+        while chunk := member.read(min(65536, max_bytes - read_total + 1)):
+            read_total += len(chunk)
+            if read_total > max_bytes:
+                raise ValueError(error_message)
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _verify_pt_container_bounds(raw_bytes: bytes, source_name: str) -> None:
+    """Guard against PyTorch `.pt` zip/decompression bombs before calling `torch.load`."""
+    if not zipfile.is_zipfile(io.BytesIO(raw_bytes)):
+        return
+    try:
+        zf_ctx = zipfile.ZipFile(io.BytesIO(raw_bytes), "r")
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"{source_name}: Corrupt checkpoint archive.") from exc
+
+    err_msg = (
+        f"{source_name}: Checkpoint decompressed size exceeds the "
+        f"{MAX_CHECKPOINT_UNCOMPRESSED_BYTES // 1024} KB safety limit."
+    )
+    with zf_ctx as zf:
+        infos = zf.infolist()
+        if len(infos) > MAX_PT_ARCHIVE_ENTRIES:
+            raise ValueError(
+                f"{source_name}: Checkpoint contains too many internal entries ({len(infos)} > {MAX_PT_ARCHIVE_ENTRIES})."
+            )
+        budget = MAX_CHECKPOINT_UNCOMPRESSED_BYTES
+        for info in infos:
+            if info.is_dir():
+                continue
+            member_bytes = _read_zip_member_bounded(zf, info, budget, err_msg)
+            budget -= len(member_bytes)
+
+
+@torch.no_grad()
+def load_cppn_bytes(
+    raw_bytes: bytes,
+    *,
+    source_name: str = "weights.pt",
+    assign_id: bool = True,
+) -> dict:
+    """Safely validate and deserialize a downloaded CPPN `.pt` checkpoint into a genome dict.
+
+    Enforces strict compressed & decompressed byte caps before deserializing, uses
+    `weights_only=True` so untrusted uploads never execute arbitrary pickle payloads,
+    and strictly verifies layer topology, tensor shapes, dtypes, finiteness, and activations.
+    """
+    if not raw_bytes:
+        raise ValueError(f"{source_name}: Checkpoint file is empty.")
+    if len(raw_bytes) > MAX_CHECKPOINT_BYTES:
+        raise ValueError(
+            f"{source_name}: Checkpoint exceeds the {MAX_CHECKPOINT_BYTES // 1024} KB size limit."
+        )
+
+    _verify_pt_container_bounds(raw_bytes, source_name)
+
+    try:
+        pkg = torch.load(io.BytesIO(raw_bytes), map_location="cpu", weights_only=True)
+    except Exception as exc:
+        raise ValueError(f"{source_name}: Not a valid PyTorch checkpoint.") from exc
+
+    if isinstance(pkg, dict) and isinstance(pkg.get("model"), dict):
+        state_dict = pkg["model"]
+    elif isinstance(pkg, dict):
+        state_dict = pkg
+    else:
+        raise ValueError(f"{source_name}: Invalid checkpoint structure (expected CPPN state dict).")
+
+    net = CPPN(genome_id=(None if assign_id else 0), parents=[], op="seed")
+    expected = net.state_dict()
+    if set(state_dict.keys()) != set(expected.keys()):
+        dims_str = "→".join(str(d) for d in LAYER_DIMS)
+        raise ValueError(
+            f"{source_name}: Incompatible network architecture (expected CPPN layers {dims_str})."
+        )
+
+    validated: dict[str, torch.Tensor] = {}
+    for key, exp_tensor in expected.items():
+        val = state_dict[key]
+        if not isinstance(val, torch.Tensor):
+            raise ValueError(f"{source_name}: Entry '{key}' is not a tensor.")
+        if tuple(val.shape) != tuple(exp_tensor.shape):
+            raise ValueError(
+                f"{source_name}: Incompatible shape for '{key}': got {tuple(val.shape)}, expected {tuple(exp_tensor.shape)}."
+            )
+        if key == "activations":
+            if val.dtype == torch.bool or torch.is_floating_point(val) or torch.is_complex(val):
+                raise ValueError(f"{source_name}: 'activations' must contain integer codes.")
+            acts = val.to(dtype=torch.long)
+            if int(acts.min().item()) < 0 or int(acts.max().item()) >= NUM_ACTIVATIONS:
+                raise ValueError(
+                    f"{source_name}: Activation codes out of range [0, {NUM_ACTIVATIONS - 1}]."
+                )
+            validated[key] = acts
+        else:
+            if not torch.is_floating_point(val):
+                raise ValueError(f"{source_name}: Parameter '{key}' must be floating-point.")
+            param = val.to(dtype=torch.float32)
+            if not bool(torch.isfinite(param).all().item()):
+                raise ValueError(f"{source_name}: Parameter '{key}' contains NaN or Inf values.")
+            validated[key] = param
+
+    net.load_state_dict(validated, strict=True)
+    return net.to_dict()
+
+
+def parse_uploaded_strain_bytes(
+    filename: str,
+    raw_bytes: bytes,
+    *,
+    assign_ids: bool = False,
+    max_strains: int = MAX_POPULATION_SIZE,
+) -> list[tuple[str, dict, bytes]]:
+    """Extract and validate one or more CPPN strains from an uploaded `.pt` or exported `.zip`."""
+    safe_name = Path(filename or "upload").name or "upload"
+    lower_name = safe_name.lower()
+    if max_strains < 1:
+        raise ValueError(
+            f"Maximum of {MAX_POPULATION_SIZE} seed strains reached (cannot exceed max population {MAX_POPULATION_SIZE})."
+        )
+
+    if lower_name.endswith(".pt"):
+        genome = load_cppn_bytes(raw_bytes, source_name=safe_name, assign_id=assign_ids)
+        return [(_clean_strain_label(Path(safe_name).stem), genome, raw_bytes)]
+
+    if lower_name.endswith(".zip"):
+        if not raw_bytes:
+            raise ValueError(f"{safe_name}: Zip archive is empty.")
+        if len(raw_bytes) > MAX_ARCHIVE_BYTES:
+            raise ValueError(
+                f"{safe_name}: Zip archive exceeds the {MAX_ARCHIVE_BYTES // (1024 * 1024)} MB size limit."
+            )
+        try:
+            zf_ctx = zipfile.ZipFile(io.BytesIO(raw_bytes), "r")
+        except zipfile.BadZipFile as exc:
+            raise ValueError(f"{safe_name}: Corrupt or invalid .zip archive.") from exc
+
+        with zf_ctx as zf:
+            infos = zf.infolist()
+            if len(infos) > MAX_ZIP_ENTRIES:
+                raise ValueError(
+                    f"{safe_name}: Zip archive contains too many entries ({len(infos)} > {MAX_ZIP_ENTRIES})."
+                )
+
+            pt_infos = []
+            for info in infos:
+                if info.is_dir():
+                    continue
+                rel = PurePosixPath(info.filename)
+                if ".." in rel.parts:
+                    raise ValueError(f"{safe_name}: Unsafe path inside zip archive.")
+                if "__MACOSX" in rel.parts or rel.name.startswith("._"):
+                    continue
+                if rel.name.lower().endswith(".zip"):
+                    raise ValueError(f"{safe_name}: Nested .zip archives are not permitted.")
+                if rel.name.lower().endswith(".pt"):
+                    pt_infos.append(info)
+
+            if not pt_infos:
+                raise ValueError(f"{safe_name}: Zip archive contains no .pt weight files.")
+            if len(pt_infos) > max_strains:
+                raise ValueError(
+                    f"{safe_name}: Contains {len(pt_infos)} checkpoints, exceeding remaining slot limit ({max_strains})."
+                )
+
+            results: list[tuple[str, dict, bytes]] = []
+            zip_stem = Path(safe_name).stem
+            total_extracted = 0
+            for info in pt_infos:
+                pt_bytes = _read_zip_member_bounded(
+                    zf,
+                    info,
+                    MAX_CHECKPOINT_BYTES,
+                    f"{safe_name} ({info.filename}): Checkpoint exceeds the {MAX_CHECKPOINT_BYTES // 1024} KB size limit.",
+                )
+                total_extracted += len(pt_bytes)
+                if total_extracted > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+                    raise ValueError(
+                        f"{safe_name}: Extracted checkpoints exceed the {MAX_ARCHIVE_UNCOMPRESSED_BYTES // (1024 * 1024)} MB safety limit."
+                    )
+                rel = PurePosixPath(info.filename)
+                if rel.stem.lower() == "weights" and rel.parent.name:
+                    raw_label = rel.parent.name
+                elif rel.stem.lower() == "weights":
+                    raw_label = zip_stem
+                else:
+                    raw_label = rel.stem
+                genome = load_cppn_bytes(
+                    pt_bytes,
+                    source_name=f"{safe_name} ({rel.name})",
+                    assign_id=assign_ids,
+                )
+                results.append((_clean_strain_label(raw_label), genome, pt_bytes))
+            return results
+
+    raise ValueError(
+        f"{safe_name}: Unsupported file format (upload downloaded .pt weights or .zip bundles)."
+    )
+
+
+def create_seeded_population(
+    seed_genomes: Sequence[dict],
+    pop_size: int = POPULATION_SIZE,
+) -> list[dict]:
+    """Create a Generation-0 population seeded with archived strains plus fresh random founders.
+
+    Allows `1 <= len(seed_genomes) <= pop_size` so uploaded strains can partially or fully
+    seed the population without exceeding `pop_size`.
+    """
+    pop_size = int(pop_size)
+    if pop_size < MIN_POPULATION_SIZE or pop_size > MAX_POPULATION_SIZE:
+        raise ValueError(
+            f"Population size must be between {MIN_POPULATION_SIZE} and {MAX_POPULATION_SIZE}."
+        )
+    if not seed_genomes:
+        raise ValueError("At least one seed strain is required to seed a population.")
+    if len(seed_genomes) > pop_size:
+        raise ValueError(
+            f"Uploaded strains ({len(seed_genomes)}) cannot exceed total population size ({pop_size})."
+        )
+
+    seeded: list[dict] = []
+    for g in seed_genomes:
+        if (
+            not isinstance(g, dict)
+            or len(g.get("weights", ())) != NUM_WEIGHTS
+            or len(g.get("biases", ())) != NUM_BIASES
+            or len(g.get("activations", ())) != NUM_HIDDEN
+        ):
+            raise ValueError("Invalid seed genome dimensions.")
+        net = CPPN.from_dict(
+            {
+                **g,
+                "id": _alloc_genome_id(),
+                "parents": [],
+                "op": "seed",
+            }
+        )
+        seeded.append(net.to_dict())
+
+    remaining = pop_size - len(seeded)
+    random_fill = create_random_population(pop_size=remaining) if remaining > 0 else []
+    return seeded + random_fill
 
 
 def build_runner_script(weights_filename: str = "weights.pt") -> str:

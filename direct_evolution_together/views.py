@@ -1,3 +1,4 @@
+import base64
 import hmac
 import io
 import json
@@ -9,6 +10,7 @@ import urllib.request
 import zipfile
 
 from django.conf import settings
+from django.core.exceptions import RequestDataTooBig, TooManyFilesSent
 from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import render
 from django.utils.text import slugify
@@ -17,8 +19,16 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 
 from direct_evolution_together import mummy_ws, ws_bridge
 from direct_evolution_together.cppn import (
+    MAX_ARCHIVE_BYTES,
+    MAX_CHECKPOINT_BYTES,
+    MAX_POPULATION_SIZE,
+    MAX_TOTAL_UPLOAD_BYTES,
+    MAX_UPLOAD_FILES,
+    MIN_POPULATION_SIZE,
     build_runner_script,
     create_random_population,
+    create_seeded_population,
+    parse_uploaded_strain_bytes,
     save_cppn_bytes,
     slugify_policy_name,
 )
@@ -121,34 +131,289 @@ def health(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"status": "ok"})
 
 
+def _truncate_utf8(text: str, max_bytes: int = 32) -> str:
+    cleaned = (text or "").strip()
+    encoded = cleaned.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return cleaned
+    return encoded[:max_bytes].decode("utf-8", errors="ignore").strip()
+
+
+def _parse_clamped_float_param(raw: object, fallback: float, lo: float, hi: float) -> float:
+    if raw is None or str(raw).strip() == "":
+        return float(fallback)
+    try:
+        return max(lo, min(hi, float(raw)))
+    except (TypeError, ValueError):
+        return float(fallback)
+
+
+def _parse_clamped_int_param(raw: object, fallback: int, lo: int, hi: int) -> int:
+    if raw is None or str(raw).strip() == "":
+        return int(fallback)
+    try:
+        return max(lo, min(hi, int(raw)))
+    except (TypeError, ValueError):
+        return int(fallback)
+
+
+def _too_large_error() -> str:
+    max_mb = MAX_TOTAL_UPLOAD_BYTES // (1024 * 1024)
+    return f"Upload payload exceeds the {max_mb} MB maximum request size."
+
+
+def _check_request_content_length(request: HttpRequest) -> str | None:
+    """Reject oversized HTTP bodies before Django's multipart parser streams them."""
+    raw_len = request.META.get("CONTENT_LENGTH")
+    if not raw_len:
+        return None
+    try:
+        content_len = int(raw_len)
+    except (TypeError, ValueError):
+        return None
+    return _too_large_error() if content_len > MAX_TOTAL_UPLOAD_BYTES else None
+
+
+def _parse_multipart_upload(request: HttpRequest) -> tuple[dict, list, tuple[int, str] | None]:
+    """Safely extract POST metadata and uploaded files under upload caps."""
+    if size_err := _check_request_content_length(request):
+        return {}, [], (413, size_err)
+    try:
+        post_data = request.POST
+        files = request.FILES.getlist("weights") or request.FILES.getlist("files")
+    except TooManyFilesSent:
+        return {}, [], (400, f"Too many uploaded files (max {MAX_UPLOAD_FILES}).")
+    except RequestDataTooBig:
+        return {}, [], (413, _too_large_error())
+    if len(files) > MAX_UPLOAD_FILES:
+        return {}, [], (400, f"Too many uploaded files (max {MAX_UPLOAD_FILES}).")
+    return post_data, files, None
+
+
+def _read_uploaded_file_bounded(up: object, total_remaining: int) -> bytes:
+    """Read an uploaded file with strict per-file and cumulative byte caps."""
+    filename = str(getattr(up, "name", "") or "upload")
+    is_zip = filename.lower().endswith(".zip")
+    per_file_cap = MAX_ARCHIVE_BYTES if is_zip else MAX_CHECKPOINT_BYTES
+    limit_label = f"{MAX_ARCHIVE_BYTES // (1024 * 1024)} MB" if is_zip else f"{MAX_CHECKPOINT_BYTES // 1024} KB"
+    max_mb = MAX_TOTAL_UPLOAD_BYTES // (1024 * 1024)
+
+    def _verify_size(n: int) -> None:
+        if n > per_file_cap:
+            raise ValueError(f"{filename}: File exceeds the {limit_label} size limit.")
+        if n > total_remaining:
+            raise ValueError(f"Combined uploaded files exceed the {max_mb} MB limit.")
+
+    if isinstance(reported := getattr(up, "size", None), int):
+        _verify_size(reported)
+
+    data = getattr(up, "read")(max(0, min(per_file_cap, total_remaining)) + 1)
+    _verify_size(len(data))
+    return data
+
+
+def _extract_uploaded_strains(
+    uploaded_files: list,
+    remaining_slots: int,
+) -> list[tuple[str, dict, bytes]]:
+    """Read, bound-check, and parse uploaded `.pt`/`.zip` strain files."""
+    strains: list[tuple[str, dict, bytes]] = []
+    bytes_remaining = MAX_TOTAL_UPLOAD_BYTES
+    for up in uploaded_files:
+        raw_bytes = _read_uploaded_file_bounded(up, bytes_remaining)
+        bytes_remaining -= len(raw_bytes)
+        parsed = parse_uploaded_strain_bytes(
+            up.name,
+            raw_bytes,
+            assign_ids=False,
+            max_strains=remaining_slots,
+        )
+        remaining_slots -= len(parsed)
+        strains.extend(parsed)
+    return strains
+
+
+@require_POST
+def api_validate_weights(request: HttpRequest) -> JsonResponse:
+    """Validate uploaded `.pt` or `.zip` CPPN checkpoints and return preview genomes."""
+    post_data, uploaded_files, err = _parse_multipart_upload(request)
+    if err:
+        return JsonResponse({"ok": False, "error": err[1]}, status=err[0])
+    if not uploaded_files:
+        return JsonResponse(
+            {"ok": False, "error": "Please select at least one .pt or .zip weight file."},
+            status=400,
+        )
+
+    existing_count = _parse_clamped_int_param(
+        post_data.get("existing_count"), 0, 0, MAX_POPULATION_SIZE
+    )
+    remaining_slots = MAX_POPULATION_SIZE - existing_count
+    if remaining_slots < 1:
+        return JsonResponse(
+            {
+                "ok": False,
+                "error": (
+                    f"Cannot exceed {MAX_POPULATION_SIZE} uploaded strains "
+                    f"(max population size is {MAX_POPULATION_SIZE})."
+                ),
+            },
+            status=400,
+        )
+
+    try:
+        parsed = _extract_uploaded_strains(uploaded_files, remaining_slots)
+    except ValueError as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+
+    strains = [
+        {
+            "label": label,
+            "genome": genome,
+            "pt_b64": base64.b64encode(pt_bytes).decode("ascii"),
+        }
+        for label, genome, pt_bytes in parsed
+    ]
+    return JsonResponse({"ok": True, "strains": strains})
+
+
 @require_POST
 def api_create_room(request: HttpRequest) -> JsonResponse:
-    """Create a named private room and return its shareable path."""
-    try:
-        payload = json.loads(request.body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return JsonResponse({"error": "Invalid JSON."}, status=400)
-    if not isinstance(payload, dict):
-        return JsonResponse({"error": "Invalid room payload."}, status=400)
+    """Create a named private room, optionally reseeding Gen 0 with uploaded CPPN weights."""
+    is_multipart = (request.content_type or "").lower().startswith("multipart/form-data")
+    if is_multipart:
+        payload, uploaded_files, err = _parse_multipart_upload(request)
+        if err:
+            return JsonResponse({"error": err[1]}, status=err[0])
+    else:
+        if size_err := _check_request_content_length(request):
+            return JsonResponse({"error": size_err}, status=413)
+        try:
+            payload = json.loads(request.body.decode("utf-8"))
+        except RequestDataTooBig:
+            return JsonResponse({"error": _too_large_error()}, status=413)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return JsonResponse({"error": "Invalid JSON."}, status=400)
+        if not isinstance(payload, dict):
+            return JsonResponse({"error": "Invalid room payload."}, status=400)
+        uploaded_files = []
+
     name = str(payload.get("name") or "").strip()[:64]
     description = str(payload.get("description") or "").strip()[:280]
     if not name:
         return JsonResponse({"error": "Room name is required."}, status=400)
+
+    raw_pop = payload.get("population_size")
+    if raw_pop is not None and str(raw_pop).strip() != "":
+        try:
+            pop_size = int(str(raw_pop).strip())
+        except ValueError:
+            return JsonResponse(
+                {
+                    "error": (
+                        f"Population size must be an integer between "
+                        f"{MIN_POPULATION_SIZE} and {MAX_POPULATION_SIZE}."
+                    )
+                },
+                status=400,
+            )
+        if not (MIN_POPULATION_SIZE <= pop_size <= MAX_POPULATION_SIZE):
+            return JsonResponse(
+                {
+                    "error": (
+                        f"Population size must be between "
+                        f"{MIN_POPULATION_SIZE} and {MAX_POPULATION_SIZE}."
+                    )
+                },
+                status=400,
+            )
+    else:
+        pop_size = int(settings.POPULATION_SIZE)
+
+    base_path = _resolve_base_path(request)
+    seeded_meta: dict | None = None
+
+    if uploaded_files:
+        try:
+            seed_genomes = [
+                genome
+                for _, genome, _ in _extract_uploaded_strains(uploaded_files, MAX_POPULATION_SIZE)
+            ]
+        except ValueError as exc:
+            return JsonResponse({"error": str(exc)}, status=400)
+
+        if len(seed_genomes) > pop_size:
+            return JsonResponse(
+                {
+                    "error": (
+                        f"Uploaded strains ({len(seed_genomes)}) cannot exceed "
+                        f"total population size ({pop_size})."
+                    )
+                },
+                status=400,
+            )
+
+        try:
+            genomes = create_seeded_population(seed_genomes, pop_size=pop_size)
+        except ValueError as exc:
+            return JsonResponse({"error": str(exc)}, status=400)
+
+        seeded_meta = {
+            "genomes": genomes,
+            "seeded": len(seed_genomes),
+            "max_votes": _parse_clamped_int_param(
+                payload.get("max_votes_per_user"), settings.MAX_VOTES_PER_USER, 1, 64
+            ),
+            "mut_sigma": _parse_clamped_float_param(
+                payload.get("mutation_sigma"), settings.MUTATION_SIGMA, 0.05, 1.0
+            ),
+            "elite_frac": _parse_clamped_float_param(
+                payload.get("elite_frac"), settings.ELITE_FRAC, 0.0, 0.5
+            ),
+            "crossover_rate": _parse_clamped_float_param(
+                payload.get("crossover_rate"), settings.CROSSOVER_RATE, 0.0, 1.0
+            ),
+        }
+
     room = Room.objects.create(
         slug=_room_slug(name),
         name=name,
         description=description,
     )
-    base_path = _resolve_base_path(request)
-    return JsonResponse(
-        {
-            "ok": True,
-            "slug": room.slug,
-            "name": room.name,
-            "description": room.description,
-            "url": f"{base_path}/p/{room.slug}/",
-        }
-    )
+    resp_data: dict[str, object] = {
+        "ok": True,
+        "slug": room.slug,
+        "name": room.name,
+        "description": room.description,
+        "url": f"{base_path}/p/{room.slug}/",
+    }
+
+    if seeded_meta is not None:
+        raw_goal = str(payload.get("goal") or "").strip()
+        goal_name = _truncate_utf8(raw_goal or name, 32) or room.slug[:32]
+        state_json = ws_bridge.build_room_state_json(
+            goal_name,
+            seeded_meta["genomes"],
+            max_votes_per_user=seeded_meta["max_votes"],
+            mut_sigma=seeded_meta["mut_sigma"],
+            elite_frac=seeded_meta["elite_frac"],
+            crossover_rate=seeded_meta["crossover_rate"],
+        )
+        RoomEvolutionState.objects.update_or_create(
+            room=room.slug,
+            defaults={"state_json": state_json},
+        )
+        if ws_bridge.is_running():
+            mummy_ws.restore_room_state(room.slug, state_json)
+        resp_data.update(
+            {
+                "seeded": seeded_meta["seeded"],
+                "population_size": pop_size,
+                "goal": goal_name,
+            }
+        )
+
+    return JsonResponse(resp_data)
 
 
 def _parse_export_payload(request: HttpRequest) -> tuple[dict, str]:

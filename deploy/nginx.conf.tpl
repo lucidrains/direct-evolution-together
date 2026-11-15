@@ -22,5 +22,5 @@ location ^~ {{SUBPATH}}/ {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-Prefix {{SUBPATH}};
-    client_max_body_size 16m;
+    client_max_body_size 4m;
 }

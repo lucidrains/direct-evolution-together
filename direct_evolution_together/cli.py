@@ -159,6 +159,16 @@ def main() -> None:
     os.environ["MUMMY_ELITE_FRAC"] = f"{elite_frac:.2f}"
     os.environ["MUMMY_CROSSOVER_RATE"] = f"{crossover_rate:.2f}"
 
+    from direct_evolution_together import settings as det_settings
+
+    det_settings.WS_HOST = args.ws_host
+    det_settings.WS_PORT = int(args.ws_port)
+    det_settings.POPULATION_SIZE = pop_size
+    det_settings.MAX_VOTES_PER_USER = max_votes
+    det_settings.MUTATION_SIGMA = mut_sigma
+    det_settings.ELITE_FRAC = elite_frac
+    det_settings.CROSSOVER_RATE = crossover_rate
+
     import django
     from django.core.management import call_command, execute_from_command_line
 

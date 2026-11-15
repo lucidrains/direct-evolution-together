@@ -37,6 +37,50 @@ def _build_goals_payload(
     )
 
 
+def build_room_state_json(
+    goal_name: str,
+    genomes: list[dict],
+    *,
+    max_votes_per_user: int = 20,
+    mut_sigma: float = 0.30,
+    elite_frac: float = 0.20,
+    crossover_rate: float = 0.75,
+) -> str:
+    """Serialize initial Generation-0 room state matching Mummy's RoomEvolutionState schema."""
+    params = {
+        "maxVotesPerUser": int(max_votes_per_user),
+        "mutSigma": float(mut_sigma),
+        "eliteFrac": float(elite_frac),
+        "crossoverRate": float(crossover_rate),
+    }
+    lineage = [
+        {
+            "id": int(g["id"]),
+            "gen": 0,
+            "parents": [int(p) for p in g.get("parents", [])],
+            "op": str(g.get("op", "random")),
+            "weights": g["weights"],
+            "biases": g["biases"],
+            "activations": g["activations"],
+        }
+        for g in genomes
+    ]
+    return json.dumps(
+        {
+            "defaultParams": params,
+            "goals": [
+                {
+                    "name": goal_name,
+                    "generation": 0,
+                    "genomes": genomes,
+                    "lineage": lineage,
+                    "params": params,
+                }
+            ],
+        }
+    )
+
+
 def _max_genome_id_in_state(state_json: str) -> int:
     max_id = 0
     try:
@@ -125,6 +169,13 @@ def flush_evo_jobs() -> int:
         room = job["room"]
         pop_size = int(job.get("populationSize") or 30)
         if kind == "init_room":
+            if _persist_to_db:
+                close_old_connections()
+                saved_row = RoomEvolutionState.objects.filter(room=room).first()
+                if saved_row is not None:
+                    sync_genome_counter(_max_genome_id_in_state(saved_row.state_json))
+                    mummy_ws.restore_room_state(room, saved_row.state_json)
+                    continue
             initial_goal = (job.get("goal") or "").strip()
             if initial_goal:
                 goal_names: tuple[str, ...] = (initial_goal,)

@@ -20,6 +20,7 @@
         --ok: #34d399;
         --err: #fb7185;
         --gold: #f59e0b;
+        --seed: #c084fc;
         --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       }
       * { box-sizing: border-box; }
@@ -486,6 +487,7 @@
       .legend-dot.elite { background: #f5c451; }
       .legend-dot.crossover { background: #38bdf8; }
       .legend-dot.mutation { background: #34d399; }
+      .legend-dot.seed { background: var(--seed); }
       .legend-dot.random { background: #71717a; }
       .lineage-viewport {
         position: relative;
@@ -518,6 +520,7 @@
       .lineage-edge.op-elite { stroke: #f5c451; }
       .lineage-edge.op-crossover { stroke: #38bdf8; }
       .lineage-edge.op-mutation { stroke: #34d399; }
+      .lineage-edge.op-seed { stroke: #c084fc; }
       .lineage-edge.op-random { stroke: #71717a; }
       .lineage-edge.highlighted {
         opacity: 0.96;
@@ -608,6 +611,7 @@
       .op-chip.op-elite { color: #f5c451; background: rgba(245, 196, 81, 0.14); }
       .op-chip.op-crossover { color: #38bdf8; background: rgba(56, 189, 248, 0.14); }
       .op-chip.op-mutation { color: #34d399; background: rgba(52, 211, 153, 0.14); }
+      .op-chip.op-seed { color: #c084fc; background: rgba(192, 132, 252, 0.16); }
       .op-chip.op-random { color: #a1a1aa; background: rgba(113, 113, 122, 0.18); }
       .round-banner {
         display: flex;
@@ -728,6 +732,7 @@
         #user-vote-budget { grid-column: 1; justify-self: start; }
       }
       .genome-card {
+        position: relative;
         background: var(--surface-2);
         border: 1px solid var(--border);
         border-radius: 8px;
@@ -736,6 +741,26 @@
         flex-direction: column;
         gap: 4px;
         transition: border-color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+      }
+      .genome-card.is-seed {
+        border-color: rgba(192, 132, 252, 0.34);
+      }
+      .seed-badge {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        z-index: 2;
+        pointer-events: none;
+        font-family: var(--mono);
+        font-size: 0.58rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        color: var(--seed);
+        background: rgba(9, 9, 11, 0.82);
+        border: 1px solid rgba(192, 132, 252, 0.42);
+        border-radius: 999px;
+        padding: 0.08rem 0.38rem;
+        backdrop-filter: blur(4px);
       }
       .genome-card[hidden] {
         display: none;
@@ -966,9 +991,19 @@
         font-weight: 500;
         margin-right: 0.35rem;
       }
+      .msg a.chat-link {
+        color: #7dd3fc;
+        text-decoration: underline;
+        text-decoration-color: rgba(125, 211, 252, 0.45);
+        text-underline-offset: 2px;
+        transition: color 0.12s ease, text-decoration-color 0.12s ease;
+      }
+      .msg a.chat-link:hover {
+        color: #bae6fd;
+        text-decoration-color: currentColor;
+      }
       form.composer {
         display: flex;
-        gap: 0.4rem;
         padding: 0.55rem 0.7rem;
         border-top: 1px solid var(--border);
         background: rgba(255, 255, 255, 0.015);
@@ -1018,6 +1053,65 @@
       button:disabled {
         opacity: 0.38;
         cursor: not-allowed;
+      }
+      .composer-box {
+        display: flex;
+        align-items: stretch;
+        width: 100%;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .composer-box:focus-within {
+        border-color: var(--border-strong);
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.04);
+      }
+      .composer-box input[type="text"] {
+        border: none;
+        border-radius: 0;
+        background: transparent;
+        padding: 0.45rem 0.65rem;
+      }
+      .composer-box input[type="text"]:focus {
+        outline: none;
+        border-color: transparent;
+      }
+      .composer-box .send-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        padding: 0;
+        border: none;
+        border-left: 1px solid var(--border);
+        border-radius: 0;
+        outline: none;
+        background: var(--surface-2);
+        color: var(--text);
+        flex-shrink: 0;
+        transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+      }
+      .composer-box .send-btn svg {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+        transition: transform 0.15s ease;
+      }
+      .composer-box:has(input:not(:placeholder-shown)) .send-btn:not(:disabled),
+      .composer-box .send-btn:hover:not(:disabled) {
+        opacity: 1;
+        background: var(--text);
+        color: var(--bg);
+      }
+      .composer-box .send-btn:hover:not(:disabled) svg {
+        transform: translate(1px, -1px);
+      }
+      .composer-box .send-btn:disabled {
+        opacity: 0.42;
+        background: var(--surface-2);
+        color: var(--muted);
       }
       .toast {
         position: fixed;
@@ -1371,7 +1465,7 @@
       }
       .room-modal-overlay[hidden] { display: none; }
       .room-modal {
-        width: min(440px, 100%);
+        width: min(480px, 100%);
         max-height: calc(100vh - 2rem);
         max-height: calc(100dvh - 2rem);
         overflow-y: auto;
@@ -1441,10 +1535,285 @@
         border-color: var(--border-strong);
       }
       .room-field-hint { color: var(--dim); }
+      .seed-dish-panel {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 0.72rem 0.8rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.58rem;
+      }
+      .seed-dish-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+      }
+      .seed-dish-title {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 0.38rem;
+        font-size: 0.78rem;
+        font-weight: 500;
+        color: var(--text);
+      }
+      .seed-pop-ctrl {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.38rem;
+        font-family: var(--mono);
+        font-size: 0.71rem;
+        color: var(--muted);
+      }
+      .seed-pop-ctrl .pop-input {
+        width: 50px;
+        background: var(--bg);
+        padding: 0.2rem 0.32rem;
+      }
+      .seed-dropzone {
+        border: 1px dashed rgba(255, 255, 255, 0.16);
+        border-radius: 8px;
+        background: var(--bg);
+        padding: 0.62rem 0.72rem;
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        cursor: pointer;
+        transition: border-color 0.15s ease, background 0.15s ease;
+      }
+      .seed-dropzone:hover,
+      .seed-dropzone:focus-visible,
+      .seed-dropzone.drag-over {
+        outline: none;
+        border-color: rgba(192, 132, 252, 0.6);
+        background: rgba(192, 132, 252, 0.06);
+      }
+      .seed-dropzone.is-invalid {
+        border-color: rgba(251, 113, 133, 0.55);
+        background: rgba(251, 113, 133, 0.05);
+      }
+      .seed-dropzone-icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 7px;
+        background: rgba(192, 132, 252, 0.12);
+        border: 1px solid rgba(192, 132, 252, 0.28);
+        color: var(--seed);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .seed-dropzone-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 0.16rem;
+        min-width: 0;
+      }
+      .seed-dropzone-main {
+        font-size: 0.77rem;
+        color: var(--text);
+        line-height: 1.3;
+      }
+      .seed-capacity-hint {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--dim);
+        line-height: 1.35;
+      }
+      .seed-capacity-hint.is-seeded {
+        color: var(--seed);
+      }
+      .seed-capacity-hint.is-invalid {
+        color: var(--err);
+      }
+      .seed-recent-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 0.34rem;
+      }
+      .seed-recent-wrap[hidden] { display: none; }
+      .seed-recent-label {
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        color: var(--dim);
+      }
+      .seed-recent-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+      }
+      .seed-recent-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.36rem;
+        padding: 0.2rem 0.45rem 0.2rem 0.24rem;
+        background: var(--bg);
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        font-weight: 400;
+        max-width: 100%;
+      }
+      .seed-recent-pill:hover:not(:disabled) {
+        opacity: 1;
+        color: var(--text);
+        border-color: rgba(192, 132, 252, 0.5);
+        background: rgba(192, 132, 252, 0.06);
+      }
+      .seed-recent-pill canvas {
+        width: 20px;
+        height: 20px;
+        border-radius: 3px;
+        background: #000;
+        border: 1px solid var(--border);
+        flex-shrink: 0;
+        display: block;
+      }
+      .seed-recent-pill-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 155px;
+      }
+      .seed-recent-pill-tag {
+        color: var(--seed);
+        font-weight: 600;
+        flex-shrink: 0;
+      }
+      .seed-tray-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 0.38rem;
+      }
+      .seed-tray-wrap[hidden] { display: none; }
+      .seed-tray-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        font-family: var(--mono);
+        font-size: 0.67rem;
+        color: var(--muted);
+      }
+      .seed-clear-btn {
+        background: transparent;
+        border: none;
+        color: var(--dim);
+        padding: 0.1rem 0.25rem;
+        font-family: var(--mono);
+        font-size: 0.67rem;
+      }
+      .seed-clear-btn:hover:not(:disabled) {
+        color: var(--text);
+      }
+      .seed-tray {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+        gap: 0.42rem;
+        max-height: 152px;
+        overflow-y: auto;
+        padding-right: 2px;
+      }
+      .seed-chip {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.28rem 0.35rem;
+        background: var(--bg);
+        border: 1px solid rgba(192, 132, 252, 0.28);
+        border-radius: 7px;
+        min-width: 0;
+      }
+      .seed-chip canvas {
+        width: 34px;
+        height: 34px;
+        border-radius: 4px;
+        background: #000;
+        border: 1px solid var(--border);
+        flex-shrink: 0;
+        display: block;
+      }
+      .seed-chip-meta {
+        display: flex;
+        flex-direction: column;
+        gap: 0.08rem;
+        min-width: 0;
+        flex: 1 1 auto;
+      }
+      .seed-chip-name {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .seed-chip-sub {
+        font-family: var(--mono);
+        font-size: 0.6rem;
+        color: var(--seed);
+      }
+      .seed-chip-remove {
+        width: 20px;
+        height: 20px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        color: var(--dim);
+        font-size: 0.88rem;
+        line-height: 1;
+        flex-shrink: 0;
+      }
+      .seed-chip-remove:hover:not(:disabled) {
+        color: var(--err);
+        border-color: rgba(251, 113, 133, 0.3);
+        background: rgba(251, 113, 133, 0.08);
+      }
+      .room-ga-details {
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: rgba(255, 255, 255, 0.015);
+        padding: 0.48rem 0.68rem;
+      }
+      .room-ga-details summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        color: var(--muted);
+        user-select: none;
+      }
+      .room-ga-details summary::-webkit-details-marker { display: none; }
+      .room-ga-details summary:hover { color: var(--text); }
+      .room-ga-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.48rem;
+        margin-top: 0.55rem;
+      }
       .room-modal-error {
         color: var(--err);
-        font-size: 0.76rem;
+        background: rgba(251, 113, 133, 0.08);
+        border: 1px solid rgba(251, 113, 133, 0.28);
+        border-radius: 7px;
+        padding: 0.42rem 0.6rem;
+        font-size: 0.75rem;
+        line-height: 1.38;
       }
+      .room-modal-error[hidden] { display: none; }
       .room-modal-actions {
         display: flex;
         flex-wrap: wrap;
@@ -1637,8 +2006,15 @@
         <div class="chat-pane">
           <div id="messages" class="messages"></div>
           <form id="chat-form" class="composer">
-            <input id="chat-input" type="text" placeholder="Message..." autocomplete="off" maxlength="2000" />
-            <button id="send-btn" type="submit" disabled>Send</button>
+            <div class="composer-box">
+              <input id="chat-input" type="text" placeholder="Message..." autocomplete="off" maxlength="2000" />
+              <button id="send-btn" class="send-btn" type="submit" aria-label="Send message" title="Send message" disabled>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M14.2 1.8 7.1 8.9" />
+                  <path d="m14.2 1.8-4.5 12.4-2.6-5.3-5.3-2.6 12.4-4.5Z" />
+                </svg>
+              </button>
+            </div>
           </form>
         </div>
       </aside>
@@ -1654,6 +2030,7 @@
               <span class="legend-item"><span class="legend-dot elite"></span>Elite (E)</span>
               <span class="legend-item"><span class="legend-dot crossover"></span>Crossover (X)</span>
               <span class="legend-item"><span class="legend-dot mutation"></span>Mutation (M)</span>
+              <span class="legend-item"><span class="legend-dot seed"></span>Seed (S)</span>
               <span class="legend-item"><span class="legend-dot random"></span>Random (R)</span>
             </div>
             <div class="filter-tabs" role="tablist" aria-label="Lineage tree filter">
@@ -1733,6 +2110,70 @@
           <span>Description <span class="room-field-hint">optional</span></span>
           <textarea id="new-room-description" maxlength="280" rows="2" placeholder="What is this room exploring?"></textarea>
         </label>
+
+        <div class="seed-dish-panel">
+          <div class="seed-dish-head">
+            <span class="seed-dish-title">
+              <span>Reseed petri dish</span>
+              <span class="room-field-hint">optional</span>
+            </span>
+            <label class="seed-pop-ctrl" title="Total population size per generation (3–64). Uploaded strains cannot exceed this number.">
+              <span>Population</span>
+              <input id="new-room-pop" class="pop-input" type="number" min="3" max="64" step="1" value="{{ initial_pop|default:30 }}" aria-label="New room population size" />
+              <span class="ga-param-range">3–64</span>
+            </label>
+          </div>
+          <input id="seed-file-input" type="file" accept=".pt,.zip" multiple hidden />
+          <div id="seed-dropzone" class="seed-dropzone" role="button" tabindex="0" aria-label="Upload downloaded CPPN weights (.pt or .zip)">
+            <span class="seed-dropzone-icon" aria-hidden="true">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 10.5V2.5m0 0-3 3m3-3 3 3" />
+                <path d="M2.5 10.5v1.8A1.2 1.2 0 0 0 3.7 13.5h8.6a1.2 1.2 0 0 0 1.2-1.2v-1.8" />
+              </svg>
+            </span>
+            <div class="seed-dropzone-copy">
+              <span id="seed-dropzone-main" class="seed-dropzone-main">Drop downloaded <code>.pt</code> or <code>.zip</code> weights, or click to upload</span>
+              <span id="seed-capacity-hint" class="seed-capacity-hint">Optional · up to 30 archived strains (&le; 30 pop)</span>
+            </div>
+          </div>
+          <div id="seed-recent-wrap" class="seed-recent-wrap" hidden>
+            <span class="seed-recent-label">Saved in this session · click to add</span>
+            <div id="seed-recent-list" class="seed-recent-list"></div>
+          </div>
+          <div id="seed-tray-wrap" class="seed-tray-wrap" hidden>
+            <div class="seed-tray-bar">
+              <span id="seed-tray-title">Archived founder strains</span>
+              <button id="seed-clear-btn" type="button" class="seed-clear-btn">Clear all</button>
+            </div>
+            <div id="seed-tray" class="seed-tray"></div>
+          </div>
+        </div>
+
+        <details class="room-ga-details">
+          <summary>
+            <span>Genetic algorithm parameters</span>
+            <span class="room-field-hint">votes, &sigma;, elite, crossover</span>
+          </summary>
+          <div class="room-ga-grid">
+            <label class="ga-param-card" title="Maximum active votes each participant can hold in a single round (1–64)">
+              <span class="ga-param-top"><span>Votes / person</span><span class="ga-param-range">1–64</span></span>
+              <input id="new-room-max-votes" class="pop-input" type="number" min="1" max="64" step="1" value="{{ initial_max_votes|default:20 }}" aria-label="New room max votes per user" />
+            </label>
+            <label class="ga-param-card" title="Gaussian weight mutation step size applied to bred offspring (0.05–1.00)">
+              <span class="ga-param-top"><span>Mutation &sigma;</span><span class="ga-param-range">0.05–1.00</span></span>
+              <input id="new-room-sigma" class="pop-input" type="number" min="0.05" max="1.0" step="0.05" value="{{ initial_mut_sigma|default:'0.30' }}" aria-label="New room mutation sigma" />
+            </label>
+            <label class="ga-param-card" title="Share of highest-scored liked individuals preserved verbatim each generation (0.00–0.50)">
+              <span class="ga-param-top"><span>Elite fraction</span><span class="ga-param-range">0.00–0.50</span></span>
+              <input id="new-room-elite" class="pop-input" type="number" min="0" max="0.5" step="0.05" value="{{ initial_elite_frac|default:'0.20' }}" aria-label="New room elite fraction" />
+            </label>
+            <label class="ga-param-card" title="Probability of neuron-unit parent mixing vs asexual mutation (0.00–1.00)">
+              <span class="ga-param-top"><span>Crossover rate</span><span class="ga-param-range">0.00–1.00</span></span>
+              <input id="new-room-crossover" class="pop-input" type="number" min="0" max="1" step="0.05" value="{{ initial_crossover_rate|default:'0.75' }}" aria-label="New room crossover rate" />
+            </label>
+          </div>
+        </details>
+
         <div id="new-room-error" class="room-modal-error" hidden></div>
         <div class="room-modal-actions">
           <button id="new-room-cancel" type="button" class="ghost">Cancel</button>
@@ -2118,6 +2559,19 @@
       const newRoomForm = document.getElementById("new-room-form");
       const newRoomNameInput = document.getElementById("new-room-name");
       const newRoomDescriptionInput = document.getElementById("new-room-description");
+      const newRoomPopInput = document.getElementById("new-room-pop");
+      const newRoomMaxVotesInput = document.getElementById("new-room-max-votes");
+      const newRoomSigmaInput = document.getElementById("new-room-sigma");
+      const newRoomEliteInput = document.getElementById("new-room-elite");
+      const newRoomCrossoverInput = document.getElementById("new-room-crossover");
+      const seedFileInput = document.getElementById("seed-file-input");
+      const seedDropzoneEl = document.getElementById("seed-dropzone");
+      const seedDropzoneMainEl = document.getElementById("seed-dropzone-main");
+      const seedCapacityHintEl = document.getElementById("seed-capacity-hint");
+      const seedTrayWrapEl = document.getElementById("seed-tray-wrap");
+      const seedTrayTitleEl = document.getElementById("seed-tray-title");
+      const seedTrayEl = document.getElementById("seed-tray");
+      const seedClearBtn = document.getElementById("seed-clear-btn");
       const newRoomErrorEl = document.getElementById("new-room-error");
       const newRoomSubmitBtn = document.getElementById("new-room-submit");
       const newRoomCloseBtn = document.getElementById("new-room-close");
@@ -2570,6 +3024,41 @@
         setTimeout(() => { dlToastCopy.textContent = "Copy"; }, 1400);
       });
 
+      const RECENT_DOWNLOADS_KEY = "det_recent_downloads_v1";
+      const MAX_RECENT_DOWNLOADS = 8;
+
+      function loadRecentDownloads() {
+        try {
+          const raw = sessionStorage.getItem(RECENT_DOWNLOADS_KEY);
+          if (!raw) return [];
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed.filter((x) => x && x.label && x.genome) : [];
+        } catch (_) {
+          return [];
+        }
+      }
+
+      let recentDownloads = loadRecentDownloads();
+
+      function rememberDownloadedStrain(stem, goalName, generation, idx, genome) {
+        const fp = genomeFingerprint(genome);
+        recentDownloads = [
+          {
+            label: stem,
+            fp,
+            goal: goalName,
+            generation,
+            index: idx,
+            genome,
+          },
+          ...recentDownloads.filter((item) => item.fp !== fp && item.label !== stem),
+        ].slice(0, MAX_RECENT_DOWNLOADS);
+        try {
+          sessionStorage.setItem(RECENT_DOWNLOADS_KEY, JSON.stringify(recentDownloads));
+        } catch (_) {}
+        renderRecentDownloads();
+      }
+
       async function downloadPolicy(goal, idx) {
         const genome = goal.genomes && goal.genomes[idx];
         if (!genome) return;
@@ -2600,6 +3089,8 @@
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
+
+        rememberDownloadedStrain(stem, goal.name, goal.generation, idx, genome);
 
         dlToastLabel.textContent = `${filename}:`;
         dlToastCmd.textContent = `unzip ${filename} && cd ${stem} && uv run run.py`;
@@ -2634,7 +3125,15 @@
           genomeGridEl.replaceChildren();
           goal.genomes.forEach((genome, idx) => {
             const card = document.createElement("div");
-            card.className = "genome-card";
+            card.className = "genome-card" + (genome.op === "seed" ? " is-seed" : "");
+
+            if (genome.op === "seed") {
+              const seedBadge = document.createElement("span");
+              seedBadge.className = "seed-badge";
+              seedBadge.textContent = "seed";
+              seedBadge.title = "Seeded from uploaded weights";
+              card.appendChild(seedBadge);
+            }
 
             const canvas = document.createElement("canvas");
             canvas.width = CANVAS_SIZE;
@@ -2718,6 +3217,7 @@
         elite: { label: "E", title: "Elite carry-over" },
         crossover: { label: "X", title: "Crossover + mutation" },
         mutation: { label: "M", title: "Mutation" },
+        seed: { label: "S", title: "Seeded archive strain" },
         random: { label: "R", title: "Random founder / immigrant" },
       };
 
@@ -2808,6 +3308,7 @@
           elite: "#f5c451",
           crossover: "#38bdf8",
           mutation: "#34d399",
+          seed: "#c084fc",
           random: "#71717a",
         };
         for (const [op, color] of Object.entries(opColors)) {
@@ -2980,6 +3481,98 @@
 
       setInterval(renderRoundStatus, 100);
 
+      const CHAT_LINK_RE =
+        /\[([^\]\n]{1,160})\]\(((?:https?:\/\/|www\.|\/)[^\s<>)]+)\)|(https?:\/\/[^\s<>]+)|(www\.[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+[^\s<>]*)|(\/(?:[a-zA-Z0-9_-]+\/)?p\/[a-z0-9][a-z0-9-]{0,63}\/?(?:\?[^\s<>]*)?)/gi;
+
+      const CLOSING_PUNCT_PAIRS = { ")": "(", "]": "[", "}": "{" };
+
+      function countChar(str, ch) {
+        let n = 0;
+        for (let i = 0; i < str.length; i++) {
+          if (str[i] === ch) n += 1;
+        }
+        return n;
+      }
+
+      function splitTrailingUrlPunct(raw) {
+        let url = raw;
+        let suffix = "";
+        while (url.length > 0) {
+          const last = url[url.length - 1];
+          const opener = CLOSING_PUNCT_PAIRS[last];
+          const isUnbalancedClose = opener && countChar(url, last) > countChar(url, opener);
+          if (!",.;:!?'\"`".includes(last) && !isUnbalancedClose) break;
+          suffix = last + suffix;
+          url = url.slice(0, -1);
+        }
+        return { url, suffix };
+      }
+
+      function normalizeChatHref(rawUrl) {
+        if (!rawUrl) return null;
+        const candidate = /^www\./i.test(rawUrl) ? `https://${rawUrl}` : rawUrl;
+        try {
+          const parsed = new URL(candidate, window.location.origin);
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+          return parsed.href;
+        } catch (_) {
+          return null;
+        }
+      }
+
+      function createChatLink(href, label) {
+        const a = document.createElement("a");
+        a.className = "chat-link";
+        a.href = href;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = label;
+        return a;
+      }
+
+      function appendLinkifiedText(container, rawText) {
+        const text = String(rawText ?? "");
+        if (!text) return;
+        let cursor = 0;
+        CHAT_LINK_RE.lastIndex = 0;
+        for (const match of text.matchAll(CHAT_LINK_RE)) {
+          const idx = match.index ?? 0;
+          const full = match[0];
+          const mdLabel = match[1];
+          const mdUrl = match[2];
+          const bareDomainOrRoom = match[4] || match[5];
+
+          if (bareDomainOrRoom && idx > 0 && !/[\s([{"'<]/.test(text[idx - 1])) {
+            continue;
+          }
+
+          if (idx > cursor) {
+            container.appendChild(document.createTextNode(text.slice(cursor, idx)));
+          }
+
+          if (mdLabel !== undefined && mdUrl !== undefined) {
+            const safeHref = normalizeChatHref(mdUrl);
+            container.appendChild(safeHref ? createChatLink(safeHref, mdLabel) : document.createTextNode(full));
+            cursor = idx + full.length;
+            continue;
+          }
+
+          const { url, suffix } = splitTrailingUrlPunct(full);
+          const safeHref = normalizeChatHref(url);
+          if (safeHref && url.length > 0) {
+            container.appendChild(createChatLink(safeHref, url));
+            if (suffix) container.appendChild(document.createTextNode(suffix));
+          } else {
+            container.appendChild(document.createTextNode(full));
+          }
+          cursor = idx + full.length;
+        }
+
+        if (cursor < text.length) {
+          container.appendChild(document.createTextNode(text.slice(cursor)));
+        }
+      }
+
       function appendSystem(text, timestamp) {
         const div = document.createElement("div");
         div.className = "msg system";
@@ -2990,7 +3583,7 @@
           div.appendChild(t);
         }
         const body = document.createElement("span");
-        body.textContent = text;
+        appendLinkifiedText(body, text);
         div.appendChild(body);
         messagesEl.appendChild(div);
         messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -3012,7 +3605,7 @@
         div.appendChild(u);
 
         const body = document.createElement("span");
-        body.textContent = text;
+        appendLinkifiedText(body, text);
         div.appendChild(body);
 
         messagesEl.appendChild(div);
@@ -3377,17 +3970,317 @@
         });
       }
 
+      let stagedStrains = [];
+      let stagedStrainSeq = 0;
+      let isValidatingStrains = false;
+      let isSubmittingRoom = false;
+
+      function b64ToBytes(b64) {
+        const bin = atob(b64);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) {
+          out[i] = bin.charCodeAt(i);
+        }
+        return out;
+      }
+
+      function defaultSubmitLabel() {
+        return stagedStrains.length > 0
+          ? `Seed & create room (${stagedStrains.length})`
+          : "Create room";
+      }
+
+      function syncSeedCapacityState() {
+        const rawPop = parseInt(newRoomPopInput.value, 10);
+        const popInvalid = Number.isNaN(rawPop) || rawPop < 3 || rawPop > 64;
+        const count = stagedStrains.length;
+
+        if (popInvalid) {
+          seedCapacityHintEl.textContent = "Population size must be between 3 and 64.";
+          seedCapacityHintEl.className = "seed-capacity-hint is-invalid";
+          seedDropzoneEl.classList.add("is-invalid");
+          newRoomSubmitBtn.disabled = true;
+          if (!isSubmittingRoom) newRoomSubmitBtn.textContent = defaultSubmitLabel();
+          return false;
+        }
+
+        if (count > rawPop) {
+          const excess = count - rawPop;
+          seedCapacityHintEl.textContent =
+            `${count} uploaded — cannot exceed population size (${rawPop}). Increase population or remove ${excess}.`;
+          seedCapacityHintEl.className = "seed-capacity-hint is-invalid";
+          seedDropzoneEl.classList.add("is-invalid");
+          newRoomSubmitBtn.disabled = true;
+          if (!isSubmittingRoom) newRoomSubmitBtn.textContent = defaultSubmitLabel();
+          return false;
+        }
+
+        seedDropzoneEl.classList.remove("is-invalid");
+        if (count > 0) {
+          const randomCount = rawPop - count;
+          seedCapacityHintEl.textContent = randomCount > 0
+            ? `${count} archived strain${count === 1 ? "" : "s"} + ${randomCount} random founder${randomCount === 1 ? "" : "s"} = ${rawPop} pop`
+            : `${count} archived strain${count === 1 ? "" : "s"} (full ${rawPop} pop seeded)`;
+          seedCapacityHintEl.className = "seed-capacity-hint is-seeded";
+        } else {
+          seedCapacityHintEl.textContent =
+            `Optional · up to ${rawPop} archived strains (\u2264 ${rawPop} pop)`;
+          seedCapacityHintEl.className = "seed-capacity-hint";
+        }
+        newRoomSubmitBtn.disabled = isValidatingStrains || isSubmittingRoom;
+        if (!isSubmittingRoom) newRoomSubmitBtn.textContent = defaultSubmitLabel();
+        return true;
+      }
+
+      const seedRecentWrapEl = document.getElementById("seed-recent-wrap");
+      const seedRecentListEl = document.getElementById("seed-recent-list");
+      const MAX_CLIENT_PT_BYTES = 128 * 1024;
+      const MAX_CLIENT_ZIP_BYTES = 2 * 1024 * 1024;
+      const MAX_CLIENT_TOTAL_BYTES = 4 * 1024 * 1024;
+
+      function renderRecentDownloads() {
+        if (!seedRecentWrapEl || !seedRecentListEl) return;
+        seedRecentListEl.replaceChildren();
+        if (!Array.isArray(recentDownloads) || recentDownloads.length === 0) {
+          seedRecentWrapEl.hidden = true;
+          return;
+        }
+        seedRecentWrapEl.hidden = false;
+        const stagedFps = new Set(stagedStrains.map((s) => genomeFingerprint(s.genome)));
+        recentDownloads.forEach((item) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "seed-recent-pill";
+          const alreadyAdded = stagedFps.has(item.fp);
+          btn.disabled = alreadyAdded || isValidatingStrains || isSubmittingRoom;
+          btn.title = alreadyAdded ? `${item.label} already staged` : `Stage ${item.label}.pt`;
+
+          const cvs = document.createElement("canvas");
+          cvs.width = 20;
+          cvs.height = 20;
+          renderCppnToCanvas(item.genome, cvs, 20);
+          btn.appendChild(cvs);
+
+          const nameSpan = document.createElement("span");
+          nameSpan.className = "seed-recent-pill-name";
+          nameSpan.textContent = item.label;
+          btn.appendChild(nameSpan);
+
+          const tagSpan = document.createElement("span");
+          tagSpan.className = "seed-recent-pill-tag";
+          tagSpan.textContent = alreadyAdded ? "\u2713" : "+";
+          btn.appendChild(tagSpan);
+
+          btn.addEventListener("click", async () => {
+            if (isValidatingStrains || isSubmittingRoom) return;
+            try {
+              const res = await fetch(`${basePath}/export/weights/`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-CSRFToken": csrfToken,
+                },
+                body: JSON.stringify({
+                  goal: item.goal || item.label,
+                  generation: item.generation || 0,
+                  index: item.index || 0,
+                  genome: item.genome,
+                }),
+              });
+              if (!res.ok) throw new Error("Could not export saved strain weights.");
+              const blob = await res.blob();
+              const ptFile = new File([blob], `${item.label}.pt`, {
+                type: "application/octet-stream",
+              });
+              await stageUploadedFiles([ptFile]);
+            } catch (err) {
+              newRoomErrorEl.textContent = err.message || "Could not stage saved strain.";
+              newRoomErrorEl.hidden = false;
+            }
+          });
+
+          seedRecentListEl.appendChild(btn);
+        });
+      }
+
+      function renderSeedTray() {
+        seedTrayEl.replaceChildren();
+        renderRecentDownloads();
+        if (stagedStrains.length === 0) {
+          seedTrayWrapEl.hidden = true;
+          return;
+        }
+        seedTrayWrapEl.hidden = false;
+        seedTrayTitleEl.textContent = `Archived founder strains (${stagedStrains.length})`;
+        stagedStrains.forEach((item, idx) => {
+          const chip = document.createElement("div");
+          chip.className = "seed-chip";
+
+          const cvs = document.createElement("canvas");
+          cvs.width = 34;
+          cvs.height = 34;
+          renderCppnToCanvas(item.genome, cvs, 34);
+          chip.appendChild(cvs);
+
+          const meta = document.createElement("div");
+          meta.className = "seed-chip-meta";
+          const nameSpan = document.createElement("span");
+          nameSpan.className = "seed-chip-name";
+          nameSpan.title = item.label;
+          nameSpan.textContent = item.label;
+          const subSpan = document.createElement("span");
+          subSpan.className = "seed-chip-sub";
+          subSpan.textContent = `seed #${idx + 1}`;
+          meta.appendChild(nameSpan);
+          meta.appendChild(subSpan);
+          chip.appendChild(meta);
+
+          const rmBtn = document.createElement("button");
+          rmBtn.type = "button";
+          rmBtn.className = "seed-chip-remove";
+          rmBtn.setAttribute("aria-label", `Remove ${item.label}`);
+          rmBtn.title = "Remove strain";
+          rmBtn.textContent = "\u00d7";
+          rmBtn.addEventListener("click", () => {
+            stagedStrains = stagedStrains.filter((s) => s.uid !== item.uid);
+            newRoomErrorEl.hidden = true;
+            renderSeedTray();
+            syncSeedCapacityState();
+          });
+          chip.appendChild(rmBtn);
+
+          seedTrayEl.appendChild(chip);
+        });
+      }
+
+      async function stageUploadedFiles(fileList) {
+        const files = Array.from(fileList || []).filter(Boolean);
+        if (files.length === 0 || isValidatingStrains) return;
+
+        let batchBytes = 0;
+        for (const f of files) {
+          const lower = (f.name || "").toLowerCase();
+          const cap = lower.endsWith(".zip") ? MAX_CLIENT_ZIP_BYTES : MAX_CLIENT_PT_BYTES;
+          const capLabel = lower.endsWith(".zip") ? "2 MB" : "128 KB";
+          if (typeof f.size === "number" && f.size > cap) {
+            newRoomErrorEl.textContent = `${f.name}: File exceeds the ${capLabel} size limit.`;
+            newRoomErrorEl.hidden = false;
+            return;
+          }
+          batchBytes += Number(f.size) || 0;
+        }
+        if (batchBytes > MAX_CLIENT_TOTAL_BYTES) {
+          newRoomErrorEl.textContent = "Combined uploaded files exceed the 4 MB limit.";
+          newRoomErrorEl.hidden = false;
+          return;
+        }
+
+        isValidatingStrains = true;
+        newRoomErrorEl.hidden = true;
+        seedDropzoneMainEl.textContent = "Validating checkpoint compatibility...";
+        syncSeedCapacityState();
+        renderRecentDownloads();
+
+        const formData = new FormData();
+        formData.append("existing_count", String(stagedStrains.length));
+        for (const f of files) {
+          formData.append("weights", f, f.name);
+        }
+
+        try {
+          const res = await fetch(`${basePath}/api/weights/validate/`, {
+            method: "POST",
+            headers: { "X-CSRFToken": csrfToken },
+            body: formData,
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok || !Array.isArray(data.strains)) {
+            throw new Error(data.error || "Incompatible or unreadable checkpoint file.");
+          }
+          for (const strain of data.strains) {
+            const ptBytes = b64ToBytes(strain.pt_b64);
+            const safeLabel = strain.label || "strain";
+            const fileObj = new File([ptBytes], `${safeLabel}.pt`, {
+              type: "application/octet-stream",
+            });
+            stagedStrains.push({
+              uid: ++stagedStrainSeq,
+              label: safeLabel,
+              genome: strain.genome,
+              file: fileObj,
+            });
+          }
+          renderSeedTray();
+        } catch (err) {
+          newRoomErrorEl.textContent = err.message || "Could not validate weight file.";
+          newRoomErrorEl.hidden = false;
+        } finally {
+          isValidatingStrains = false;
+          seedDropzoneMainEl.innerHTML =
+            "Drop downloaded <code>.pt</code> or <code>.zip</code> weights, or click to upload";
+          syncSeedCapacityState();
+          renderRecentDownloads();
+        }
+      }
+
+      seedDropzoneEl.addEventListener("click", () => {
+        if (!isValidatingStrains && !isSubmittingRoom) seedFileInput.click();
+      });
+      seedDropzoneEl.addEventListener("keydown", (e) => {
+        if ((e.key === "Enter" || e.key === " ") && !isValidatingStrains && !isSubmittingRoom) {
+          e.preventDefault();
+          seedFileInput.click();
+        }
+      });
+      seedFileInput.addEventListener("change", () => {
+        if (seedFileInput.files && seedFileInput.files.length > 0) {
+          stageUploadedFiles(seedFileInput.files);
+        }
+        seedFileInput.value = "";
+      });
+      ["dragenter", "dragover"].forEach((evtName) => {
+        seedDropzoneEl.addEventListener(evtName, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          seedDropzoneEl.classList.add("drag-over");
+        });
+      });
+      ["dragleave", "drop"].forEach((evtName) => {
+        seedDropzoneEl.addEventListener(evtName, (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          seedDropzoneEl.classList.remove("drag-over");
+        });
+      });
+      seedDropzoneEl.addEventListener("drop", (e) => {
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          stageUploadedFiles(e.dataTransfer.files);
+        }
+      });
+      seedClearBtn.addEventListener("click", () => {
+        stagedStrains = [];
+        newRoomErrorEl.hidden = true;
+        renderSeedTray();
+        syncSeedCapacityState();
+      });
+      newRoomPopInput.addEventListener("input", () => {
+        syncSeedCapacityState();
+      });
+
       function openNewRoomModal() {
         newRoomErrorEl.hidden = true;
         newRoomModalEl.hidden = false;
+        recentDownloads = loadRecentDownloads();
+        renderRecentDownloads();
+        syncSeedCapacityState();
         newRoomNameInput.focus();
       }
 
       function closeNewRoomModal() {
         newRoomModalEl.hidden = true;
         newRoomErrorEl.hidden = true;
-        newRoomSubmitBtn.disabled = false;
-        newRoomSubmitBtn.textContent = "Create room";
+        isSubmittingRoom = false;
+        syncSeedCapacityState();
       }
 
       newRoomBtn.addEventListener("click", openNewRoomModal);
@@ -3409,31 +4302,77 @@
           newRoomNameInput.focus();
           return;
         }
+        if (!syncSeedCapacityState()) {
+          const rawPop = parseInt(newRoomPopInput.value, 10);
+          newRoomErrorEl.textContent = (Number.isNaN(rawPop) || rawPop < 3 || rawPop > 64)
+            ? "Population size must be between 3 and 64."
+            : `Uploaded strains (${stagedStrains.length}) cannot exceed total population size (${rawPop}).`;
+          newRoomErrorEl.hidden = false;
+          newRoomPopInput.focus();
+          return;
+        }
+
+        const pop = parsePopValue(newRoomPopInput);
+        const mv = parseMaxVotesValue(newRoomMaxVotesInput);
+        const sigma = parseSigmaValue(newRoomSigmaInput);
+        const eliteFrac = parseEliteValue(newRoomEliteInput);
+        const crossoverRate = parseCrossoverValue(newRoomCrossoverInput);
+        const description = newRoomDescriptionInput.value.trim();
+
         newRoomErrorEl.hidden = true;
+        isSubmittingRoom = true;
         newRoomSubmitBtn.disabled = true;
         newRoomSubmitBtn.textContent = "Creating...";
         try {
-          const res = await fetch(`${basePath}/api/rooms/`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-CSRFToken": csrfToken,
-            },
-            body: JSON.stringify({
-              name,
-              description: newRoomDescriptionInput.value.trim(),
-            }),
-          });
+          let res;
+          if (stagedStrains.length > 0) {
+            const formData = new FormData();
+            formData.append("name", name);
+            formData.append("description", description);
+            formData.append("population_size", String(pop));
+            formData.append("max_votes_per_user", String(mv));
+            formData.append("mutation_sigma", sigma.toFixed(2));
+            formData.append("elite_frac", eliteFrac.toFixed(2));
+            formData.append("crossover_rate", crossoverRate.toFixed(2));
+            for (const item of stagedStrains) {
+              formData.append("weights", item.file, item.file.name);
+            }
+            res = await fetch(`${basePath}/api/rooms/`, {
+              method: "POST",
+              headers: { "X-CSRFToken": csrfToken },
+              body: formData,
+            });
+          } else {
+            res = await fetch(`${basePath}/api/rooms/`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-CSRFToken": csrfToken,
+              },
+              body: JSON.stringify({ name, description }),
+            });
+          }
           const data = await res.json().catch(() => ({}));
           if (!res.ok || !data.url) {
             throw new Error(data.error || "Could not create room.");
           }
-          window.location.assign(data.url);
+          let targetUrl = data.url;
+          if (stagedStrains.length === 0) {
+            const qp = new URLSearchParams();
+            if (pop !== initialPop) qp.set("pop", String(pop));
+            if (mv !== initialMaxVotes) qp.set("max_votes", String(mv));
+            if (Math.abs(sigma - initialMutSigma) > 1e-6) qp.set("sigma", sigma.toFixed(2));
+            if (Math.abs(eliteFrac - initialEliteFrac) > 1e-6) qp.set("elite_frac", eliteFrac.toFixed(2));
+            if (Math.abs(crossoverRate - initialCrossoverRate) > 1e-6) qp.set("crossover", crossoverRate.toFixed(2));
+            const qs = qp.toString();
+            if (qs) targetUrl += `?${qs}`;
+          }
+          window.location.assign(targetUrl);
         } catch (err) {
+          isSubmittingRoom = false;
           newRoomErrorEl.textContent = err.message || "Could not create room.";
           newRoomErrorEl.hidden = false;
-          newRoomSubmitBtn.disabled = false;
-          newRoomSubmitBtn.textContent = "Create room";
+          syncSeedCapacityState();
         }
       });
 
