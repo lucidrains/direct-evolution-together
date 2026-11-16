@@ -171,6 +171,24 @@
         color: var(--text);
         border-color: var(--border-strong);
       }
+      .site-footer {
+        max-width: 1400px;
+        margin: 0.2rem auto 0.9rem;
+        padding: 0.3rem 1.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        opacity: 0.14;
+        transition: opacity 0.2s ease;
+      }
+      .site-footer:hover,
+      .site-footer:focus-within {
+        opacity: 1;
+      }
+      .site-footer .paper-link {
+        font-size: 0.68rem;
+        padding: 0.14rem 0.45rem;
+      }
       .status {
         font-size: 0.76rem;
         font-family: var(--mono);
@@ -203,7 +221,6 @@
         .title-line.is-private-brand { display: none; }
         .room-name, .room-desc { max-width: 100%; }
         .header-right { display: contents; }
-        .header-right .paper-link[href^="https://doi.org"] { display: none; }
         .status {
           grid-column: 2;
           grid-row: 1;
@@ -629,6 +646,18 @@
         font-family: var(--mono);
         color: var(--muted);
       }
+      .round-status-right {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        flex-wrap: wrap;
+      }
+      .evolve-now-btn {
+        font-family: var(--sans);
+        padding: 0.16rem 0.52rem;
+        font-size: 0.69rem;
+      }
+      .evolve-now-btn[hidden] { display: none; }
       .round-timer {
         font-weight: 500;
         font-variant-numeric: tabular-nums;
@@ -702,6 +731,162 @@
         font-size: 0.72rem;
         padding: 0.26rem 0.6rem;
       }
+      .grid-toolbar-right {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+      }
+      .task-pill {
+        font-family: var(--mono);
+        font-size: 0.62rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        padding: 0.08rem 0.36rem;
+        border-radius: 4px;
+        border: 1px solid rgba(56, 189, 248, 0.35);
+        background: rgba(56, 189, 248, 0.12);
+        color: #7dd3fc;
+      }
+      .sim-badge {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        z-index: 2;
+        pointer-events: none;
+        font-family: var(--mono);
+        font-size: 0.62rem;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        padding: 0.1rem 0.4rem;
+        border-radius: 999px;
+        background: rgba(9, 9, 11, 0.86);
+        border: 1px solid var(--border-strong);
+        color: var(--muted);
+        backdrop-filter: blur(4px);
+      }
+      .sim-badge.solved {
+        color: var(--ok);
+        border-color: rgba(52, 211, 153, 0.45);
+      }
+      .sim-badge.mid {
+        color: var(--gold);
+        border-color: rgba(245, 196, 81, 0.45);
+      }
+      .sim-slot-badge {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        z-index: 2;
+        pointer-events: none;
+        font-family: var(--mono);
+        font-size: 0.58rem;
+        color: var(--dim);
+        background: rgba(9, 9, 11, 0.8);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 0.08rem 0.36rem;
+      }
+      .genome-card.is-seed .sim-slot-badge {
+        top: 28px;
+      }
+      .sim-play-pill {
+        position: absolute;
+        bottom: 36px;
+        right: 9px;
+        z-index: 2;
+        pointer-events: none;
+        font-family: var(--mono);
+        font-size: 0.58rem;
+        color: var(--text);
+        background: rgba(9, 9, 11, 0.78);
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        padding: 0.08rem 0.38rem;
+        opacity: 0;
+        transition: opacity 0.14s ease;
+      }
+      .genome-card:hover .sim-play-pill {
+        opacity: 1;
+      }
+      .fs-sim-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.55rem 0.7rem;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 9px;
+      }
+      .fs-sim-bar[hidden] { display: none; }
+      .fs-sim-controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.38rem;
+      }
+      .fs-sim-select, .task-select {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.28rem 0.48rem;
+        font-family: var(--mono);
+        font-size: 0.72rem;
+      }
+      .task-select {
+        width: 100%;
+        padding: 0.44rem 0.6rem;
+        font-family: inherit;
+        font-size: 0.8rem;
+      }
+      .fs-sim-telemetry {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.65rem;
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .fs-sim-telemetry strong { color: var(--text); font-weight: 600; }
+      .fs-heldout-status {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--ok);
+      }
+      .fs-heldout-status[hidden] { display: none; }
+      .fs-video-wrap {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.55rem;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 9px;
+      }
+      .fs-video-wrap[hidden] { display: none; }
+      .fs-video-wrap video {
+        max-width: 100%;
+        width: 480px;
+        border-radius: 6px;
+        background: #000;
+      }
+      .fs-video-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        max-width: 480px;
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        color: var(--muted);
+      }
       .grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(156px, 1fr));
@@ -728,7 +913,8 @@
           justify-content: initial;
         }
         #round-vote-text,
-        #round-timer { grid-column: 1 / -1; }
+        .round-status-right { grid-column: 1 / -1; }
+        .round-status-right { justify-self: end; }
         #user-vote-budget { grid-column: 1; justify-self: start; }
       }
       .genome-card {
@@ -923,18 +1109,11 @@
         text-transform: uppercase;
         letter-spacing: 0.06em;
       }
-      .name-form {
-        display: flex;
-        align-items: center;
-        gap: 0.35rem;
+      .name-form .composer-box input[type="text"] {
+        padding: 0.36rem 0.58rem;
       }
-      .name-form input {
-        padding: 0.34rem 0.55rem;
-        font-size: 0.8rem;
-      }
-      .name-form button {
-        padding: 0.34rem 0.62rem;
-        font-size: 0.76rem;
+      .name-form .composer-box .send-btn {
+        width: 32px;
       }
       ul.users {
         list-style: none;
@@ -1099,14 +1278,18 @@
         flex-shrink: 0;
         transition: transform 0.15s ease;
       }
-      .composer-box:has(input:not(:placeholder-shown)) .send-btn:not(:disabled),
+      .composer:has(input:not(:placeholder-shown)) .send-btn:not(:disabled),
+      .name-form.is-dirty .composer-box .send-btn:not(:disabled),
       .composer-box .send-btn:hover:not(:disabled) {
         opacity: 1;
         background: var(--text);
         color: var(--bg);
       }
-      .composer-box .send-btn:hover:not(:disabled) svg {
+      .composer .send-btn:hover:not(:disabled) svg {
         transform: translate(1px, -1px);
+      }
+      .name-form .send-btn:hover:not(:disabled) svg {
+        transform: scale(1.08);
       }
       .composer-box .send-btn:disabled {
         opacity: 0.42;
@@ -1804,6 +1987,9 @@
         gap: 0.48rem;
         margin-top: 0.55rem;
       }
+      .room-ga-grid .is-wide {
+        grid-column: 1 / -1;
+      }
       .room-modal-error {
         color: var(--err);
         background: rgba(251, 113, 133, 0.08);
@@ -1871,13 +2057,6 @@
             <a class="paper-link" href="{{ base_path }}/" title="Return to public lobby">&larr; Lobby</a>
           </div>
         {% endif %}
-        <a
-          class="paper-link"
-          href="https://doi.org/10.1145/1357054.1357328"
-          target="_blank"
-          rel="noopener noreferrer"
-          title="Secretan et al. (2008) — Picbreeder: Evolving pictures collaboratively online (CHI '08)"
-        >Picbreeder ’08 &nearr;</a>
         <div class="status">
           <span id="status-dot" class="dot"></span>
           <span id="status-text">connecting</span>
@@ -1894,24 +2073,36 @@
         </div>
         <div class="goal-bar">
           <div id="goal-tabs" class="goal-tabs"></div>
-          <button id="new-room-btn" type="button" class="ghost new-room-btn" title="Create a new named room">New room</button>
+          <div style="display:inline-flex;align-items:center;gap:0.45rem;flex-shrink:0;">
+            {% if is_private %}
+              <button id="add-goal-btn" type="button" class="ghost new-room-btn" title="Add another evolution tab in this room">+ Goal</button>
+            {% endif %}
+            <button id="new-room-btn" type="button" class="ghost new-room-btn" title="Create a new named room">New room</button>
+          </div>
         </div>
 
         <div class="evo-body">
           <div id="private-empty-state" class="private-empty" hidden>
-            <h3>Start a goal</h3>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;">
+              <h3 style="margin:0;">Start a goal</h3>
+              <button id="empty-cancel-btn" type="button" class="ghost" hidden>Cancel</button>
+            </div>
             <p>
-              Think of a <strong>genetic algorithm</strong> as digital breeding: every image is drawn by a tiny neural network whose weights act like DNA.
+              Think of a <strong>genetic algorithm</strong> as digital breeding: every image or control policy is generated by a tiny CPPN neural network whose weights act like DNA.
               Your likes select the best parents, mix their traits together (<em>crossover</em>), and add small random tweaks (<em>mutation</em>) each round.
             </p>
             <ol class="private-steps">
-              <li><strong>Name the goal &amp; tune the genetic algorithm parameters</strong> below (locked once evolution begins, isolated from <code>/lobby</code>).</li>
+              <li><strong>Pick an environment &amp; tune the genetic algorithm parameters</strong> below (locked once evolution begins, isolated from <code>/lobby</code>).</li>
               <li><strong>Share link</strong> from the top bar so teammates join the exact same private room.</li>
-              <li><strong>Vote together</strong> — 3 votes start the synchronized timer to breed the next generation.</li>
+              <li><strong>Vote together</strong> — select strong candidates to start the synchronized timer and breed the next generation.</li>
             </ol>
             <form id="empty-goal-form" class="private-empty-form">
               <div class="private-goal-row">
-                <input id="empty-goal-input" type="text" placeholder="Goal e.g. Neon Orchid, Bioluminescent Coral..." maxlength="32" />
+                <select id="empty-task-select" class="task-select" style="flex:0 0 185px;" aria-label="Environment">
+                  <option value="image" {% if initial_task == "image" %}selected{% endif %}>Image (Picbreeder)</option>
+                  <option value="cartpole" {% if initial_task == "cartpole" %}selected{% endif %}>CartPole (Control)</option>
+                </select>
+                <input id="empty-goal-input" type="text" placeholder="Goal e.g. Neon Orchid, CartPole..." maxlength="32" />
                 <button type="submit">Start Goal</button>
               </div>
               <div class="ga-params-panel">
@@ -1925,7 +2116,12 @@
                     <input id="empty-pop-input" class="pop-input" type="number" min="3" max="64" step="1" value="{{ initial_pop|default:30 }}" aria-label="Population size" />
                     <span class="ga-param-hint">Candidates per generation</span>
                   </label>
-                  <label class="ga-param-card" title="Maximum active votes each participant can hold in a single round (1-64)">
+                  <label class="ga-param-card" title="Total votes across the room required before a round advances (1–256)">
+                    <span class="ga-param-top"><span>Required votes</span><span class="ga-param-range">1–256</span></span>
+                    <input id="empty-min-votes-input" class="pop-input" type="number" min="1" max="256" step="1" value="{{ initial_min_votes|default:20 }}" aria-label="Required room votes per round" />
+                    <span class="ga-param-hint">Room votes to evolve</span>
+                  </label>
+                  <label class="ga-param-card" title="Maximum active votes each participant can hold in a single round (1–64)">
                     <span class="ga-param-top"><span>Votes / person</span><span class="ga-param-range">1–64</span></span>
                     <input id="empty-max-votes-input" class="pop-input" type="number" min="1" max="64" step="1" value="{{ initial_max_votes|default:20 }}" aria-label="Max votes per user" />
                     <span class="ga-param-hint">Active votes per round</span>
@@ -1960,9 +2156,14 @@
 
             <div class="round-banner">
               <div class="round-banner-top">
-                <span id="round-vote-text">Voted: 0 / 15</span>
+                <span id="round-vote-text">Voted: 0 / {{ initial_min_votes|default:20 }}</span>
                 <span id="user-vote-budget" class="vote-budget-pill" title="Active vote budget per person each round — click an active vote again to free a slot">Your votes: 0 / {{ initial_max_votes|default:20 }}</span>
-                <span id="round-timer" class="round-timer waiting">Need 15 more votes</span>
+                <span class="round-status-right">
+                  <span id="round-timer" class="round-timer waiting">Need {{ initial_min_votes|default:20 }} more votes</span>
+                  {% if can_evolve_now %}
+                    <button id="evolve-now-btn" type="button" class="ghost evolve-now-btn" title="Operator override: breed the next generation immediately" hidden>Evolve now</button>
+                  {% endif %}
+                </span>
               </div>
               <div id="throttle-banner" class="throttle-banner" hidden></div>
               <div class="progress-track">
@@ -1975,7 +2176,13 @@
                 <button id="tab-all" type="button" class="filter-tab active" data-filter="all">All <span id="tab-all-count" class="tab-cnt">{{ initial_pop|default:30 }}</span></button>
                 <button id="tab-unvoted" type="button" class="filter-tab" data-filter="unvoted">Needs vote <span id="tab-unvoted-count" class="tab-cnt">{{ initial_pop|default:30 }}</span></button>
               </div>
-              <button id="next-unvoted-btn" type="button" class="ghost next-unvoted-btn">Next unvoted &darr;</button>
+              <div class="grid-toolbar-right">
+                <div id="sort-tabs" class="filter-tabs" role="tablist" aria-label="Sort candidates" hidden>
+                  <button id="sort-steps-btn" type="button" class="filter-tab active" data-sort="steps">Steps &darr;</button>
+                  <button id="sort-slot-btn" type="button" class="filter-tab" data-sort="slot">Slot #</button>
+                </div>
+                <button id="next-unvoted-btn" type="button" class="ghost next-unvoted-btn">Next unvoted &darr;</button>
+              </div>
             </div>
 
             <div id="genome-grid" class="grid"></div>
@@ -1993,8 +2200,14 @@
         <div class="rail-section">
           <div class="rail-label">Handle</div>
           <form id="name-form" class="name-form">
-            <input id="name-input" type="text" placeholder="Nickname" maxlength="24" />
-            <button type="submit" class="ghost">Set</button>
+            <div class="composer-box">
+              <input id="name-input" type="text" placeholder="Nickname" maxlength="24" />
+              <button id="name-btn" class="send-btn" type="submit" aria-label="Set username" title="Set username">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 8.5 6.4 11.8 13.2 4.5" />
+                </svg>
+              </button>
+            </div>
           </form>
         </div>
 
@@ -2049,6 +2262,16 @@
       </section>
     </main>
 
+    <footer class="site-footer">
+      <a
+        class="paper-link"
+        href="https://doi.org/10.1145/1357054.1357328"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Secretan et al. (2008) — Picbreeder: Evolving pictures collaboratively online (CHI '08)"
+      >Picbreeder ’08 &nearr;</a>
+    </footer>
+
     <div id="dl-toast" class="toast" hidden>
       <span id="dl-toast-label"></span>
       <code id="dl-toast-cmd"></code>
@@ -2084,7 +2307,8 @@
             <button id="fs-down-btn" type="button" class="vote-btn down-btn" aria-label="Dislike">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 9V3H2.5a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1H5Zm0 0 2.6 4.4a1.3 1.3 0 0 0 2.3-.8V10h3.1a1.2 1.2 0 0 0 1.2-1.4l-.8-4.4A1.3 1.3 0 0 0 12.1 3H5"/></svg><span class="cnt">0</span>
             </button>
-            <button id="fs-dl-btn" type="button" class="ghost" title="Download weights + uv runner">Download .zip</button>
+            <button id="fs-dl-pt-btn" type="button" class="ghost" title="Download CPPN checkpoint (.pt)">Download .pt</button>
+            <button id="fs-dl-btn" type="button" class="ghost" title="Download weights + uv runner (.zip)">Download .zip</button>
             <button id="fs-close-btn" type="button" class="ghost" aria-label="Close full screen">Close</button>
           </div>
         </div>
@@ -2092,6 +2316,31 @@
           <button id="fs-prev-btn" type="button" class="fs-nav-btn" aria-label="Previous individual">&lsaquo;</button>
           <canvas id="fs-canvas" width="512" height="512"></canvas>
           <button id="fs-next-btn" type="button" class="fs-nav-btn" aria-label="Next individual">&rsaquo;</button>
+        </div>
+        <div id="fs-sim-bar" class="fs-sim-bar" hidden>
+          <div class="fs-sim-controls">
+            <button id="fs-sim-play-btn" type="button" class="ghost">Pause</button>
+            <button id="fs-sim-restart-btn" type="button" class="ghost">Restart</button>
+            <select id="fs-sim-seed-select" class="fs-sim-select" aria-label="Episode seed">
+              <option value="0">Ep 1 (s=0)</option>
+              <option value="1">Ep 2 (s=1)</option>
+              <option value="2">Ep 3 (s=2)</option>
+              <option value="random">Random seed</option>
+            </select>
+            <button id="fs-sim-nudge-l" type="button" class="ghost" title="Apply leftward perturbation">&larr; Nudge</button>
+            <button id="fs-sim-nudge-r" type="button" class="ghost" title="Apply rightward perturbation">Nudge &rarr;</button>
+            <button id="fs-sim-heldout-btn" type="button" class="ghost" title="Test 10 unseen initial conditions">Test 10 Held-Out</button>
+            <button id="fs-sim-video-btn" type="button" class="ghost" title="Render &amp; fetch MP4 on demand from server">Render .mp4</button>
+          </div>
+          <div id="fs-sim-telemetry" class="fs-sim-telemetry"></div>
+        </div>
+        <div id="fs-heldout-status" class="fs-heldout-status" hidden></div>
+        <div id="fs-video-wrap" class="fs-video-wrap" hidden>
+          <video id="fs-video-el" controls autoplay playsinline loop></video>
+          <div class="fs-video-meta">
+            <span id="fs-video-caption">Server-rendered H.264 MP4 (lazy fetched on click)</span>
+            <a id="fs-video-dl" href="#" download class="chat-link">Download .mp4</a>
+          </div>
         </div>
       </div>
     </div>
@@ -2105,6 +2354,13 @@
         <label class="room-field">
           <span>Room name</span>
           <input id="new-room-name" type="text" maxlength="64" placeholder="e.g. Neon Orchid" required />
+        </label>
+        <label class="room-field">
+          <span>Environment</span>
+          <select id="new-room-task" class="task-select">
+            <option value="image">Image (Picbreeder CPPN)</option>
+            <option value="cartpole">CartPole (Continuous Control · HyperNEAT)</option>
+          </select>
         </label>
         <label class="room-field">
           <span>Description <span class="room-field-hint">optional</span></span>
@@ -2152,9 +2408,13 @@
         <details class="room-ga-details">
           <summary>
             <span>Genetic algorithm parameters</span>
-            <span class="room-field-hint">votes, &sigma;, elite, crossover</span>
+            <span class="room-field-hint">quorum, per-user cap, &sigma;, elite, crossover</span>
           </summary>
           <div class="room-ga-grid">
+            <label class="ga-param-card" title="Total votes across the room required before a round advances (1–256)">
+              <span class="ga-param-top"><span>Required votes</span><span class="ga-param-range">1–256</span></span>
+              <input id="new-room-min-votes" class="pop-input" type="number" min="1" max="256" step="1" value="{{ initial_min_votes|default:20 }}" aria-label="New room required votes" />
+            </label>
             <label class="ga-param-card" title="Maximum active votes each participant can hold in a single round (1–64)">
               <span class="ga-param-top"><span>Votes / person</span><span class="ga-param-range">1–64</span></span>
               <input id="new-room-max-votes" class="pop-input" type="number" min="1" max="64" step="1" value="{{ initial_max_votes|default:20 }}" aria-label="New room max votes per user" />
@@ -2167,7 +2427,7 @@
               <span class="ga-param-top"><span>Elite fraction</span><span class="ga-param-range">0.00–0.50</span></span>
               <input id="new-room-elite" class="pop-input" type="number" min="0" max="0.5" step="0.05" value="{{ initial_elite_frac|default:'0.20' }}" aria-label="New room elite fraction" />
             </label>
-            <label class="ga-param-card" title="Probability of neuron-unit parent mixing vs asexual mutation (0.00–1.00)">
+            <label class="ga-param-card is-wide" title="Probability of neuron-unit parent mixing vs asexual mutation (0.00–1.00)">
               <span class="ga-param-top"><span>Crossover rate</span><span class="ga-param-range">0.00–1.00</span></span>
               <input id="new-room-crossover" class="pop-input" type="number" min="0" max="1" step="0.05" value="{{ initial_crossover_rate|default:'0.75' }}" aria-label="New room crossover rate" />
             </label>
@@ -2186,29 +2446,64 @@
     {{ ws_via_proxy|default:False|json_script:"det-ws-via-proxy" }}
     {{ room_name|default:"lobby"|json_script:"det-room-name" }}
     {{ is_private|default:False|json_script:"det-is-private" }}
+    {{ evolve_token|default:""|json_script:"det-evolve-token" }}
     {{ initial_goal|default:""|json_script:"det-initial-goal" }}
+    {{ initial_task|default:"image"|json_script:"det-initial-task" }}
     {{ initial_pop|default:30|json_script:"det-initial-pop" }}
+    {{ initial_min_votes|default:20|json_script:"det-initial-min-votes" }}
+    {{ initial_min_votes_explicit|default:False|json_script:"det-initial-min-votes-explicit" }}
+    {{ default_min_votes|default:20|json_script:"det-default-min-votes" }}
     {{ initial_max_votes|default:20|json_script:"det-initial-max-votes" }}
     {{ initial_mut_sigma|default:"0.30"|json_script:"det-initial-sigma" }}
     {{ initial_elite_frac|default:"0.20"|json_script:"det-initial-elite" }}
     {{ initial_crossover_rate|default:"0.75"|json_script:"det-initial-crossover" }}
+    {{ task_specs|json_script:"det-task-specs" }}
     <script>
       const basePath = JSON.parse(document.getElementById("det-base-path").textContent) || "";
       const wsViaProxy = Boolean(JSON.parse(document.getElementById("det-ws-via-proxy").textContent));
       const roomName = JSON.parse(document.getElementById("det-room-name").textContent);
       const isPrivateRoom = Boolean(JSON.parse(document.getElementById("det-is-private").textContent));
+      const evolveToken = JSON.parse(document.getElementById("det-evolve-token").textContent) || "";
+      let canEvolveNow = Boolean(evolveToken);
       const initialGoal = JSON.parse(document.getElementById("det-initial-goal").textContent);
+      const initialTask = JSON.parse(document.getElementById("det-initial-task").textContent) || "image";
+      const taskSpecs = JSON.parse(document.getElementById("det-task-specs").textContent) || {};
       const initialPop = Math.max(3, Math.min(64, Number(JSON.parse(document.getElementById("det-initial-pop").textContent)) || 30));
+      const initialMinVotes = Math.max(1, Math.min(256, Number(JSON.parse(document.getElementById("det-initial-min-votes").textContent)) || 20));
+      const initialMinVotesExplicit = Boolean(JSON.parse(document.getElementById("det-initial-min-votes-explicit").textContent));
+      const defaultMinVotes = Math.max(1, Math.min(256, Number(JSON.parse(document.getElementById("det-default-min-votes").textContent)) || 20));
       const initialMaxVotes = Math.max(1, Math.min(64, Number(JSON.parse(document.getElementById("det-initial-max-votes").textContent)) || 20));
       const initialMutSigma = Math.max(0.05, Math.min(1.0, Number(JSON.parse(document.getElementById("det-initial-sigma").textContent)) || 0.30));
       const initialEliteFrac = Math.max(0.0, Math.min(0.5, Number(JSON.parse(document.getElementById("det-initial-elite").textContent)) ?? 0.20));
       const initialCrossoverRate = Math.max(0.0, Math.min(1.0, Number(JSON.parse(document.getElementById("det-initial-crossover").textContent)) ?? 0.75));
       const csrfToken = "{{ csrf_token }}";
       const CANVAS_SIZE = 64;
+      const CONTROL_CARD_SIZE = 160;
       const LINEAGE_CANVAS_SIZE = 32;
       const FULLSCREEN_CANVAS_SIZE = 512;
+      const FULLSCREEN_SIM_WIDTH = 512;
+      const FULLSCREEN_SIM_HEIGHT = 340;
       const supportsGzip = typeof DecompressionStream === "function";
       const coordCache = new Map();
+
+      function getTaskSpec(taskId) {
+        return taskSpecs[taskId] || taskSpecs.image || {
+          task: "image",
+          kind: "image",
+          label: "Image (Picbreeder)",
+          defaultPopSize: 30,
+          maxPopSize: 64,
+          defaultMinVotes: 0,
+        };
+      }
+
+      function goalTaskId(goal) {
+        return (goal && goal.task && taskSpecs[goal.task]) ? goal.task : "image";
+      }
+
+      function isControlGoal(goal) {
+        return getTaskSpec(goalTaskId(goal)).kind === "control";
+      }
 
       // Rendered images are content-addressed so elites and page reloads reuse them.
       const RENDER_CACHE_DB = "det-render-cache-v1";
@@ -2473,50 +2768,55 @@
         }
       }
 
-      function renderCppnImageData(genome, size = CANVAS_SIZE) {
-        const { total, coordX, coordY, coordR } = getCoords(size);
-        const img = new ImageData(size, size);
-        const data = img.data;
+      function evalCppnPoint(genome, x0, x1, x2, x3, h1, h2, h3, outRgb) {
         const w = genome.weights;
         const b = genome.biases;
         const acts = genome.activations;
 
+        for (let j = 0; j < 12; j++) {
+          const wo = j * 4;
+          const z = w[wo] * x0 + w[wo + 1] * x1 + w[wo + 2] * x2 + w[wo + 3] * x3 + b[j];
+          h1[j] = applyActivation(z, acts[j]);
+        }
+
+        for (let j = 0; j < 12; j++) {
+          const wo = 48 + j * 12;
+          let z = b[12 + j];
+          for (let i = 0; i < 12; i++) z += w[wo + i] * h1[i];
+          h2[j] = applyActivation(z, acts[12 + j]);
+        }
+
+        for (let j = 0; j < 12; j++) {
+          const wo = 192 + j * 12;
+          let z = b[24 + j];
+          for (let i = 0; i < 12; i++) z += w[wo + i] * h2[i];
+          h3[j] = applyActivation(z, acts[24 + j]);
+        }
+
+        for (let c = 0; c < 3; c++) {
+          const wo = 336 + c * 12;
+          let z = b[36 + c];
+          for (let i = 0; i < 12; i++) z += w[wo + i] * h3[i];
+          outRgb[c] = 0.5 + 0.5 * Math.tanh(z);
+        }
+      }
+
+      function renderCppnImageData(genome, size = CANVAS_SIZE) {
+        const { total, coordX, coordY, coordR } = getCoords(size);
+        const img = new ImageData(size, size);
+        const data = img.data;
+
         const h1 = new Float32Array(12);
         const h2 = new Float32Array(12);
         const h3 = new Float32Array(12);
+        const outRgb = new Float32Array(3);
 
         for (let p = 0; p < total; p++) {
-          const x = coordX[p];
-          const y = coordY[p];
-          const r = coordR[p];
-
-          for (let j = 0; j < 12; j++) {
-            const wo = j * 4;
-            const z = w[wo] * x + w[wo + 1] * y + w[wo + 2] * r + w[wo + 3] + b[j];
-            h1[j] = applyActivation(z, acts[j]);
-          }
-
-          for (let j = 0; j < 12; j++) {
-            const wo = 48 + j * 12;
-            let z = b[12 + j];
-            for (let i = 0; i < 12; i++) z += w[wo + i] * h1[i];
-            h2[j] = applyActivation(z, acts[12 + j]);
-          }
-
-          for (let j = 0; j < 12; j++) {
-            const wo = 192 + j * 12;
-            let z = b[24 + j];
-            for (let i = 0; i < 12; i++) z += w[wo + i] * h2[i];
-            h3[j] = applyActivation(z, acts[24 + j]);
-          }
-
+          evalCppnPoint(genome, coordX[p], coordY[p], coordR[p], 1.0, h1, h2, h3, outRgb);
           const outIdx = p * 4;
-          for (let c = 0; c < 3; c++) {
-            const wo = 336 + c * 12;
-            let z = b[36 + c];
-            for (let i = 0; i < 12; i++) z += w[wo + i] * h3[i];
-            data[outIdx + c] = Math.round((0.5 + 0.5 * Math.tanh(z)) * 255);
-          }
+          data[outIdx] = Math.round(outRgb[0] * 255);
+          data[outIdx + 1] = Math.round(outRgb[1] * 255);
+          data[outIdx + 2] = Math.round(outRgb[2] * 255);
           data[outIdx + 3] = 255;
         }
 
@@ -2536,8 +2836,518 @@
         canvas.getContext("2d").putImageData(img, 0, 0);
       }
 
+      // --- Continuous Control Environments (HyperNEAT on top of Stanley's CPPN) ---
+      const CARTPOLE_GRAVITY = 9.8;
+      const CARTPOLE_MASS_CART = 1.0;
+      const CARTPOLE_MASS_POLE = 0.1;
+      const CARTPOLE_TOTAL_MASS = CARTPOLE_MASS_CART + CARTPOLE_MASS_POLE;
+      const CARTPOLE_HALF_LENGTH = 0.5;
+      const CARTPOLE_POLEMASS_LENGTH = CARTPOLE_MASS_POLE * CARTPOLE_HALF_LENGTH;
+      const CARTPOLE_FORCE_MAG = 10.0;
+      const CARTPOLE_TAU = 0.02;
+      const CARTPOLE_THETA_THRESHOLD = (12.0 * 2.0 * Math.PI) / 360.0;
+      const CARTPOLE_X_THRESHOLD = 2.4;
+      const CARTPOLE_MAX_STEPS = 500;
+      const CARTPOLE_EVAL_SEEDS = [0, 1, 2];
+
+      function mulberry32(seed) {
+        let a = seed >>> 0;
+        return function () {
+          a = (a + 0x6D2B79F5) >>> 0;
+          let t = Math.imul(a ^ (a >>> 15), 1 | a);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      function linspace(lo, hi, count) {
+        if (count <= 1) return [0.0];
+        const out = new Array(count);
+        for (let i = 0; i < count; i++) {
+          out[i] = lo + ((hi - lo) * i) / (count - 1);
+        }
+        return out;
+      }
+
+      const substrateSpecCache = new Map();
+      function getSubstrateSpec(dims) {
+        const key = dims.join(",");
+        if (substrateSpecCache.has(key)) return substrateSpecCache.get(key);
+        const numLayers = dims.length - 1;
+        const zs = linspace(-1.0, 1.0, numLayers + 1);
+        const layerXs = dims.map((d) => linspace(-1.0, 1.0, d));
+        const queries = [];
+        const layers = [];
+        for (let l = 0; l < numLayers; l++) {
+          const dIn = dims[l];
+          const dOut = dims[l + 1];
+          const zMid = 0.5 * (zs[l] + zs[l + 1]);
+          const wIdx = new Int32Array(dIn * dOut);
+          for (let i = 0; i < dIn; i++) {
+            for (let j = 0; j < dOut; j++) {
+              wIdx[i * dOut + j] = queries.length;
+              queries.push([layerXs[l][i], layerXs[l + 1][j], zMid, 1.0]);
+            }
+          }
+          const bIdx = new Int32Array(dOut);
+          for (let j = 0; j < dOut; j++) {
+            bIdx[j] = queries.length;
+            queries.push([0.0, layerXs[l + 1][j], zs[l + 1], -1.0]);
+          }
+          layers.push({ dIn, dOut, wIdx, bIdx });
+        }
+        const entry = { dims, queries, layers };
+        substrateSpecCache.set(key, entry);
+        return entry;
+      }
+
+      const decodedSubstrateCache = new Map();
+      function decodeHyperNeatWeights(genome, dims = [4, 8, 1]) {
+        const cacheKey = `${dims.join(",")}:${genomeFingerprint(genome)}`;
+        const cached = decodedSubstrateCache.get(cacheKey);
+        if (cached) return cached;
+
+        const spec = getSubstrateSpec(dims);
+        const h1 = new Float32Array(12);
+        const h2 = new Float32Array(12);
+        const h3 = new Float32Array(12);
+        const outRgb = new Float32Array(3);
+        const raw = new Float64Array(spec.queries.length);
+
+        for (let q = 0; q < spec.queries.length; q++) {
+          const pt = spec.queries[q];
+          evalCppnPoint(genome, pt[0], pt[1], pt[2], pt[3], h1, h2, h3, outRgb);
+          raw[q] = outRgb[0] * 2.0 - 1.0;
+        }
+
+        const decoded = spec.layers.map((layer) => {
+          const wLen = layer.dIn * layer.dOut;
+          const w = new Float64Array(wLen);
+          let sum = 0.0;
+          for (let k = 0; k < wLen; k++) {
+            const val = raw[layer.wIdx[k]];
+            w[k] = val;
+            sum += val;
+          }
+          const mean = sum / wLen;
+          let varSum = 0.0;
+          for (let k = 0; k < wLen; k++) {
+            const diff = w[k] - mean;
+            varSum += diff * diff;
+          }
+          const std = Math.sqrt(varSum / wLen);
+          const scale = Math.sqrt(1.0 / layer.dIn) / (std + 1e-6);
+          for (let k = 0; k < wLen; k++) {
+            w[k] = (w[k] - mean) * scale;
+          }
+          const b = new Float64Array(layer.dOut);
+          for (let j = 0; j < layer.dOut; j++) {
+            b[j] = raw[layer.bIdx[j]] * 0.1;
+          }
+          return { dIn: layer.dIn, dOut: layer.dOut, w, b };
+        });
+
+        if (decodedSubstrateCache.size > 1000) decodedSubstrateCache.clear();
+        decodedSubstrateCache.set(cacheKey, decoded);
+        return decoded;
+      }
+
+      function forwardHyperNeatPolicy(decoded, obs) {
+        let h = obs;
+        for (let l = 0; l < decoded.length; l++) {
+          const layer = decoded[l];
+          const next = new Float64Array(layer.dOut);
+          for (let j = 0; j < layer.dOut; j++) {
+            let z = layer.b[j];
+            for (let i = 0; i < layer.dIn; i++) {
+              z += h[i] * layer.w[i * layer.dOut + j];
+            }
+            next[j] = Math.tanh(z);
+          }
+          h = next;
+        }
+        return h;
+      }
+
+      function cartpoleReset(seed) {
+        const rng = mulberry32(seed);
+        return [
+          (rng() * 2.0 - 1.0) * 0.05,
+          (rng() * 2.0 - 1.0) * 0.05,
+          (rng() * 2.0 - 1.0) * 0.05,
+          (rng() * 2.0 - 1.0) * 0.05,
+        ];
+      }
+
+      function cartpoleStep(state, actionU) {
+        const x = state[0];
+        const xDot = state[1];
+        const theta = state[2];
+        const thetaDot = state[3];
+        const u = Math.max(-1.0, Math.min(1.0, actionU));
+        const force = u * CARTPOLE_FORCE_MAG;
+        const costheta = Math.cos(theta);
+        const sintheta = Math.sin(theta);
+
+        const temp = (force + CARTPOLE_POLEMASS_LENGTH * thetaDot * thetaDot * sintheta) / CARTPOLE_TOTAL_MASS;
+        const thetaacc =
+          (CARTPOLE_GRAVITY * sintheta - costheta * temp) /
+          (CARTPOLE_HALF_LENGTH * (4.0 / 3.0 - (CARTPOLE_MASS_POLE * costheta * costheta) / CARTPOLE_TOTAL_MASS));
+        const xacc = temp - (CARTPOLE_POLEMASS_LENGTH * thetaacc * costheta) / CARTPOLE_TOTAL_MASS;
+
+        const nx = x + CARTPOLE_TAU * xDot;
+        const nxDot = xDot + CARTPOLE_TAU * xacc;
+        const ntheta = theta + CARTPOLE_TAU * thetaDot;
+        const nthetaDot = thetaDot + CARTPOLE_TAU * thetaacc;
+        const terminated =
+          nx < -CARTPOLE_X_THRESHOLD ||
+          nx > CARTPOLE_X_THRESHOLD ||
+          ntheta < -CARTPOLE_THETA_THRESHOLD ||
+          ntheta > CARTPOLE_THETA_THRESHOLD;
+
+        return { nextState: [nx, nxDot, ntheta, nthetaDot], force, terminated };
+      }
+
+      function cartpolePolicyAction(decoded, state) {
+        const obs = [
+          state[0] / CARTPOLE_X_THRESHOLD,
+          state[1] / 3.0,
+          state[2] / CARTPOLE_THETA_THRESHOLD,
+          state[3] / 3.0,
+        ];
+        return forwardHyperNeatPolicy(decoded, obs)[0];
+      }
+
+      function cartpoleRollout(genome, seed = 0, maxSteps = CARTPOLE_MAX_STEPS) {
+        const decoded = decodeHyperNeatWeights(genome, [4, 8, 1]);
+        let state = cartpoleReset(seed);
+        const states = [state];
+        const forces = [];
+        let absXSum = 0.0;
+
+        for (let s = 0; s < maxSteps; s++) {
+          const u = cartpolePolicyAction(decoded, state);
+          const res = cartpoleStep(state, u);
+          absXSum += Math.abs(state[0]);
+          forces.push(res.force);
+          states.push(res.nextState);
+          state = res.nextState;
+          if (res.terminated) break;
+        }
+        const steps = forces.length;
+        return {
+          seed,
+          steps,
+          meanAbsX: absXSum / Math.max(1, steps),
+          states,
+          forces,
+        };
+      }
+
+      const controlEvalCache = new Map();
+      function evaluateCartpoleSummary(genome, seeds = CARTPOLE_EVAL_SEEDS) {
+        const isDefault = seeds === CARTPOLE_EVAL_SEEDS;
+        const key = isDefault ? `cartpole:${genomeFingerprint(genome)}` : null;
+        if (key && controlEvalCache.has(key)) return controlEvalCache.get(key);
+
+        let sumSteps = 0;
+        let minSteps = CARTPOLE_MAX_STEPS;
+        let sumAbsX = 0;
+        let primaryRollout = null;
+        const perSeed = [];
+        for (let i = 0; i < seeds.length; i++) {
+          const ro = cartpoleRollout(genome, seeds[i], CARTPOLE_MAX_STEPS);
+          if (i === 0) primaryRollout = ro;
+          perSeed.push(ro.steps);
+          sumSteps += ro.steps;
+          if (ro.steps < minSteps) minSteps = ro.steps;
+          sumAbsX += ro.meanAbsX;
+        }
+        const meanSteps = Math.round((sumSteps / seeds.length) * 10) / 10;
+        const summary = {
+          meanSteps,
+          minSteps,
+          perSeed,
+          meanAbsX: sumAbsX / seeds.length,
+          solved: minSteps >= 490,
+          primaryRollout,
+        };
+        if (key) {
+          if (controlEvalCache.size > 2000) controlEvalCache.clear();
+          controlEvalCache.set(key, summary);
+        }
+        return summary;
+      }
+
+      function drawCartpolePose(ctx, state, force, width, height, trackY, scale, alpha, colorOverride) {
+        const x = state[0];
+        const theta = state[2];
+        const cx = width * 0.5 + x * scale;
+        const cartW = Math.max(16, Math.round(width * 0.11));
+        const cartH = Math.max(8, Math.round(cartW * 0.48));
+        const poleLen = height * 0.34;
+        const pivotY = trackY - cartH * 0.15;
+        const tipX = cx + Math.sin(theta) * poleLen;
+        const tipY = pivotY - Math.cos(theta) * poleLen;
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = colorOverride || "#e4e4e7";
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(cx - cartW * 0.5, trackY - cartH * 0.5, cartW, cartH, 3);
+        } else {
+          ctx.rect(cx - cartW * 0.5, trackY - cartH * 0.5, cartW, cartH);
+        }
+        ctx.fill();
+
+        const poleColor = colorOverride || (
+          Math.abs(theta) < 0.08 ? "#34d399" : (Math.abs(theta) < 0.16 ? "#f5c451" : "#fb7185")
+        );
+        ctx.strokeStyle = poleColor;
+        ctx.lineWidth = Math.max(2, Math.round(width * 0.015));
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(cx, pivotY);
+        ctx.lineTo(tipX, tipY);
+        ctx.stroke();
+
+        ctx.fillStyle = "#09090b";
+        ctx.strokeStyle = colorOverride || "#fafafa";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(cx, pivotY, Math.max(2, width * 0.01), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        if (!colorOverride && Math.abs(force) > 0.25) {
+          const arrowLen = (force / CARTPOLE_FORCE_MAG) * Math.max(14, width * 0.09);
+          const ay = trackY + cartH * 0.5 + 8;
+          ctx.strokeStyle = "#38bdf8";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(cx, ay);
+          ctx.lineTo(cx + arrowLen, ay);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      function renderCartpoleStaticCanvas(genome, canvas, size = CONTROL_CARD_SIZE) {
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width;
+        const h = canvas.height;
+        const summary = evaluateCartpoleSummary(genome);
+        const ro = summary.primaryRollout;
+        const states = ro.states;
+        const steps = ro.steps;
+
+        ctx.fillStyle = "#09090b";
+        ctx.fillRect(0, 0, w, h);
+
+        // Compact lineage thumbnail rendering
+        if (w <= 40) {
+          const pct = Math.min(1.0, summary.meanSteps / CARTPOLE_MAX_STEPS);
+          const barColor = summary.solved ? "#34d399" : (summary.meanSteps >= 150 ? "#f5c451" : "#fb7185");
+          const trackY = h * 0.62;
+          const scale = (w - 8) / (2.0 * CARTPOLE_X_THRESHOLD);
+          ctx.strokeStyle = "#3f3f46";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(4, trackY);
+          ctx.lineTo(w - 4, trackY);
+          ctx.stroke();
+          const midState = states[Math.floor((states.length - 1) * 0.5)] || states[0];
+          const cx = w * 0.5 + midState[0] * scale;
+          const tipX = cx + Math.sin(midState[2]) * (h * 0.42);
+          const tipY = trackY - Math.cos(midState[2]) * (h * 0.42);
+          ctx.strokeStyle = barColor;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(cx, trackY);
+          ctx.lineTo(tipX, tipY);
+          ctx.stroke();
+          ctx.fillStyle = "#27272a";
+          ctx.fillRect(3, h - 5, w - 6, 3);
+          ctx.fillStyle = barColor;
+          ctx.fillRect(3, h - 5, Math.max(2, Math.round((w - 6) * pct)), 3);
+          return summary;
+        }
+
+        const margin = Math.round(w * 0.08);
+        const usableW = w - 2 * margin;
+        const trackY = Math.round(h * 0.56);
+        const scale = usableW / (2.0 * CARTPOLE_X_THRESHOLD);
+
+        // Subtle grid & bounds
+        ctx.strokeStyle = "#18181f";
+        ctx.lineWidth = 1;
+        for (let g = 0; g <= 4; g++) {
+          const gx = margin + (usableW * g) / 4;
+          ctx.beginPath();
+          ctx.moveTo(gx, 16);
+          ctx.lineTo(gx, trackY + 12);
+          ctx.stroke();
+        }
+        ctx.strokeStyle = "#3f3f46";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(margin, trackY);
+        ctx.lineTo(w - margin, trackY);
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(251, 113, 133, 0.55)";
+        for (const bx of [margin, w - margin]) {
+          ctx.beginPath();
+          ctx.moveTo(bx, trackY - 7);
+          ctx.lineTo(bx, trackY + 7);
+          ctx.stroke();
+        }
+
+        // Pole-tip trajectory path
+        const poleLen = h * 0.34;
+        ctx.strokeStyle = summary.solved ? "rgba(52, 211, 153, 0.38)" : "rgba(245, 196, 81, 0.35)";
+        ctx.lineWidth = 1.25;
+        ctx.beginPath();
+        const stride = Math.max(1, Math.floor(states.length / 60));
+        for (let i = 0; i < states.length; i += stride) {
+          const st = states[i];
+          const tx = w * 0.5 + st[0] * scale + Math.sin(st[2]) * poleLen;
+          const ty = trackY - Math.cos(st[2]) * poleLen;
+          if (i === 0) ctx.moveTo(tx, ty);
+          else ctx.lineTo(tx, ty);
+        }
+        ctx.stroke();
+
+        // Ghost snapshots along trajectory
+        const snaps = [0, 0.25, 0.5, 0.75];
+        for (const frac of snaps) {
+          const si = Math.min(states.length - 1, Math.floor((states.length - 1) * frac));
+          drawCartpolePose(ctx, states[si], 0, w, h, trackY, scale, 0.22, "#71717a");
+        }
+        const finalState = states[states.length - 1];
+        const finalForce = ro.forces.length > 0 ? ro.forces[ro.forces.length - 1] : 0;
+        drawCartpolePose(ctx, finalState, finalForce, w, h, trackY, scale, 0.96, null);
+
+        // Theta(t) stability waveform strip along bottom
+        const waveTop = Math.round(h * 0.71);
+        const waveH = Math.round(h * 0.23);
+        const waveMidY = waveTop + waveH * 0.5;
+        ctx.fillStyle = "#111116";
+        ctx.fillRect(margin, waveTop, usableW, waveH);
+        ctx.strokeStyle = "#27272a";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(margin, waveTop, usableW, waveH);
+        ctx.strokeStyle = "rgba(255,255,255,0.08)";
+        ctx.beginPath();
+        ctx.moveTo(margin, waveMidY);
+        ctx.lineTo(w - margin, waveMidY);
+        ctx.stroke();
+
+        ctx.strokeStyle = summary.solved ? "#34d399" : (summary.meanSteps >= 150 ? "#f5c451" : "#fb7185");
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        const plotLen = Math.max(2, states.length);
+        for (let i = 0; i < states.length; i += stride) {
+          const px = margin + (i / (plotLen - 1)) * usableW;
+          const normTh = Math.max(-1, Math.min(1, states[i][2] / CARTPOLE_THETA_THRESHOLD));
+          const py = waveMidY - normTh * (waveH * 0.42);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+        return summary;
+      }
+
+      function renderCartpoleLiveFrame(canvas, state, force, stepIdx, maxSteps) {
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width;
+        const h = canvas.height;
+        const margin = Math.round(w * 0.08);
+        const usableW = w - 2 * margin;
+        const trackY = Math.round(h * 0.68);
+        const scale = usableW / (2.0 * CARTPOLE_X_THRESHOLD);
+
+        ctx.fillStyle = "#09090b";
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.strokeStyle = "#18181f";
+        ctx.lineWidth = 1;
+        for (let g = 0; g <= 8; g++) {
+          const gx = margin + (usableW * g) / 8;
+          ctx.beginPath();
+          ctx.moveTo(gx, 24);
+          ctx.lineTo(gx, trackY + 18);
+          ctx.stroke();
+        }
+        ctx.strokeStyle = "#52525b";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(margin, trackY);
+        ctx.lineTo(w - margin, trackY);
+        ctx.stroke();
+        ctx.strokeStyle = "#71717a";
+        ctx.beginPath();
+        ctx.moveTo(w * 0.5, trackY - 6);
+        ctx.lineTo(w * 0.5, trackY + 6);
+        ctx.stroke();
+        ctx.strokeStyle = "#fb7185";
+        for (const bx of [margin, w - margin]) {
+          ctx.beginPath();
+          ctx.moveTo(bx, trackY - 12);
+          ctx.lineTo(bx, trackY + 12);
+          ctx.stroke();
+        }
+
+        // Top progress bar
+        ctx.fillStyle = "#1f1f26";
+        ctx.fillRect(margin, 12, usableW, 5);
+        ctx.fillStyle = stepIdx >= 490 ? "#34d399" : "#f5c451";
+        ctx.fillRect(margin, 12, Math.round(usableW * Math.min(1, stepIdx / maxSteps)), 5);
+
+        drawCartpolePose(ctx, state, force, w, h, trackY, scale, 1.0, null);
+      }
+
+      const TaskRenderers = {
+        image: {
+          preload(genomes, size) {
+            return preloadImages(genomes, size);
+          },
+          renderCard(genome, canvas) {
+            canvas.width = CANVAS_SIZE;
+            canvas.height = CANVAS_SIZE;
+            renderCppnToCanvas(genome, canvas, CANVAS_SIZE);
+          },
+          renderLineageNode(node, canvas) {
+            canvas.width = LINEAGE_CANVAS_SIZE;
+            canvas.height = LINEAGE_CANVAS_SIZE;
+            renderCppnToCanvas(node, canvas, LINEAGE_CANVAS_SIZE);
+          },
+        },
+        cartpole: {
+          preload() {
+            return Promise.resolve();
+          },
+          renderCard(genome, canvas) {
+            canvas.width = CONTROL_CARD_SIZE;
+            canvas.height = CONTROL_CARD_SIZE;
+            return renderCartpoleStaticCanvas(genome, canvas, CONTROL_CARD_SIZE);
+          },
+          renderLineageNode(node, canvas) {
+            canvas.width = LINEAGE_CANVAS_SIZE;
+            canvas.height = LINEAGE_CANVAS_SIZE;
+            return renderCartpoleStaticCanvas(node, canvas, LINEAGE_CANVAS_SIZE);
+          },
+        },
+      };
+
+      function getTaskRenderer(goalOrTask) {
+        const tid = typeof goalOrTask === "string" ? goalOrTask : goalTaskId(goalOrTask);
+        return TaskRenderers[tid] || TaskRenderers.image;
+      }
+
       const storedName = localStorage.getItem("det_username") || "";
       const nameInput = document.getElementById("name-input");
+      let savedUsername = storedName;
       nameInput.value = storedName;
 
       const messagesEl = document.getElementById("messages");
@@ -2545,6 +3355,14 @@
       const chatInput = document.getElementById("chat-input");
       const sendBtn = document.getElementById("send-btn");
       const nameForm = document.getElementById("name-form");
+      const nameBtn = document.getElementById("name-btn");
+
+      function syncNameDirty() {
+        const cur = nameInput.value.trim();
+        nameForm.classList.toggle("is-dirty", Boolean(cur) && cur !== savedUsername);
+        if (nameBtn) nameBtn.disabled = !cur;
+      }
+      syncNameDirty();
       const usersList = document.getElementById("users-list");
       const onlineCount = document.getElementById("online-count");
       const statusDot = document.getElementById("status-dot");
@@ -2554,12 +3372,18 @@
       const cursorLayerEl = document.getElementById("cursor-layer");
       const loadingOverlayEl = document.getElementById("loading-overlay");
       const goalTabsEl = document.getElementById("goal-tabs");
+      const addGoalBtn = document.getElementById("add-goal-btn");
       const newRoomBtn = document.getElementById("new-room-btn");
       const newRoomModalEl = document.getElementById("new-room-modal");
       const newRoomForm = document.getElementById("new-room-form");
       const newRoomNameInput = document.getElementById("new-room-name");
+      const newRoomTaskSelect = document.getElementById("new-room-task");
       const newRoomDescriptionInput = document.getElementById("new-room-description");
       const newRoomPopInput = document.getElementById("new-room-pop");
+      const newRoomPopRangeEl = newRoomModalEl
+        ? newRoomModalEl.querySelector(".seed-pop-ctrl .ga-param-range")
+        : null;
+      const newRoomMinVotesInput = document.getElementById("new-room-min-votes");
       const newRoomMaxVotesInput = document.getElementById("new-room-max-votes");
       const newRoomSigmaInput = document.getElementById("new-room-sigma");
       const newRoomEliteInput = document.getElementById("new-room-elite");
@@ -2582,22 +3406,50 @@
       const userVoteBudgetEl = document.getElementById("user-vote-budget");
       const throttleBannerEl = document.getElementById("throttle-banner");
       const roundTimerEl = document.getElementById("round-timer");
+      const evolveNowBtn = document.getElementById("evolve-now-btn");
       const roundProgressEl = document.getElementById("round-progress");
       const tabAllBtn = document.getElementById("tab-all");
       const tabUnvotedBtn = document.getElementById("tab-unvoted");
       const tabAllCountEl = document.getElementById("tab-all-count");
       const tabUnvotedCountEl = document.getElementById("tab-unvoted-count");
+      const sortTabsEl = document.getElementById("sort-tabs");
+      const sortStepsBtn = document.getElementById("sort-steps-btn");
+      const sortSlotBtn = document.getElementById("sort-slot-btn");
       const nextUnvotedBtn = document.getElementById("next-unvoted-btn");
       const genomeGridEl = document.getElementById("genome-grid");
       const evoWorkspaceEl = document.getElementById("evo-workspace");
       const privateEmptyStateEl = document.getElementById("private-empty-state");
+      const emptyCancelBtn = document.getElementById("empty-cancel-btn");
       const emptyGoalForm = document.getElementById("empty-goal-form");
+      const emptyTaskSelect = document.getElementById("empty-task-select");
       const emptyGoalInput = document.getElementById("empty-goal-input");
       const emptyPopInput = document.getElementById("empty-pop-input");
+      const emptyPopRangeEl = emptyPopInput && emptyPopInput.closest(".ga-param-card")
+        ? emptyPopInput.closest(".ga-param-card").querySelector(".ga-param-range")
+        : null;
+      const emptyMinVotesInput = document.getElementById("empty-min-votes-input");
       const emptyMaxVotesInput = document.getElementById("empty-max-votes-input");
       const emptySigmaInput = document.getElementById("empty-sigma-input");
       const emptyEliteInput = document.getElementById("empty-elite-input");
       const emptyCrossoverInput = document.getElementById("empty-crossover-input");
+      const newRoomFormCtrls = {
+        popInput: newRoomPopInput,
+        popRangeEl: newRoomPopRangeEl,
+        minVotesInput: newRoomMinVotesInput,
+        eliteInput: newRoomEliteInput,
+        popTouched: false,
+        minVotesTouched: false,
+        eliteTouched: false,
+      };
+      const emptyFormCtrls = {
+        popInput: emptyPopInput,
+        popRangeEl: emptyPopRangeEl,
+        minVotesInput: emptyMinVotesInput,
+        eliteInput: emptyEliteInput,
+        popTouched: false,
+        minVotesTouched: false,
+        eliteTouched: false,
+      };
       const lineagePanelEl = document.getElementById("lineage-panel");
       const lineageStatsEl = document.getElementById("lineage-stats");
       const lineageViewportEl = document.getElementById("lineage-viewport");
@@ -2615,8 +3467,46 @@
         return Math.max(minVal, Math.min(maxVal, val));
       }
 
-      function parsePopValue(inputEl, fallback = initialPop) {
-        return parseClampedInt(inputEl, 3, 64, fallback);
+      function parsePopValue(inputEl, fallback = initialPop, maxVal = 64) {
+        return parseClampedInt(inputEl, 3, maxVal, fallback);
+      }
+
+      function applyTaskDefaults(taskId, ctrls) {
+        const spec = getTaskSpec(taskId);
+        const maxPop = spec.maxPopSize || 64;
+        if (ctrls.popInput) {
+          ctrls.popInput.max = String(maxPop);
+          if (!ctrls.popTouched) {
+            const nextDefault = spec.kind === "control"
+              ? (spec.defaultPopSize || 16)
+              : Math.min(maxPop, initialPop);
+            ctrls.popInput.value = String(nextDefault);
+          } else {
+            const cur = parseInt(ctrls.popInput.value, 10);
+            if (!Number.isNaN(cur) && cur > maxPop) {
+              ctrls.popInput.value = String(maxPop);
+            }
+          }
+        }
+        if (ctrls.minVotesInput && !ctrls.minVotesTouched) {
+          const nextMinVotes = spec.defaultMinVotes > 0
+            ? spec.defaultMinVotes
+            : (initialTask === "image" ? initialMinVotes : defaultMinVotes);
+          ctrls.minVotesInput.value = String(nextMinVotes);
+        }
+        if (ctrls.eliteInput && !ctrls.eliteTouched) {
+          const nextElite = typeof spec.defaultEliteFrac === "number"
+            ? spec.defaultEliteFrac
+            : initialEliteFrac;
+          ctrls.eliteInput.value = nextElite.toFixed(2);
+        }
+        if (ctrls.popRangeEl) {
+          ctrls.popRangeEl.textContent = `3\u2013${maxPop}`;
+        }
+      }
+
+      function parseMinVotesValue(inputEl, fallback = initialMinVotes) {
+        return parseClampedInt(inputEl, 1, 256, fallback);
       }
 
       function parseMaxVotesValue(inputEl, fallback = initialMaxVotes) {
@@ -2649,6 +3539,9 @@
       let activeGoalName = null;
       let activeGoalRenderToken = 0;
       let gridFilter = "all";
+      let controlSortMode = "steps";
+      let activeHoverAnim = null;
+      let addingExtraGoal = false;
       let lineageFilter = "active";
       let lineageCollapsed = false;
       let throttleTimer = null;
@@ -2785,12 +3678,21 @@
           label.textContent = name;
           btn.appendChild(label);
 
+          if (isControlGoal(goal)) {
+            const tp = document.createElement("span");
+            tp.className = "task-pill";
+            tp.textContent = goalTaskId(goal);
+            btn.appendChild(tp);
+          }
+
           const gen = document.createElement("span");
           gen.className = "gen-pill";
           gen.textContent = `g${goal.generation}`;
           btn.appendChild(gen);
 
           btn.addEventListener("click", () => {
+            addingExtraGoal = false;
+            if (emptyCancelBtn) emptyCancelBtn.hidden = true;
             activeGoalName = name;
             renderGoalTabs();
             renderActiveGoalCached();
@@ -2805,16 +3707,29 @@
 
       function renderRoundStatus() {
         const goal = goalsByName.get(activeGoalName);
-        if (!goal) return;
+        if (!goal || addingExtraGoal) return;
 
-        const minVotes = goal.minVotes || 15;
+        const minVotes = goal.minVotes || 20;
+        const popLen = goal.genomes ? goal.genomes.length : 0;
+        const countByTotalVotes = isControlGoal(goal) || minVotes > popLen;
         const totalVotes = goal.totalVotes || 0;
         const votedCandidates = typeof goal.votedCandidates === "number" ? goal.votedCandidates : totalVotes;
         const likedCandidates = typeof goal.likedCandidates === "number" ? goal.likedCandidates : 1;
         const durMs = goal.countdownDurationMs || 8000;
+        const countdownActive = !goal.evolving && Boolean(goal._deadlinePerfMs && goal._deadlinePerfMs > 0);
+        const progressCount = countByTotalVotes ? totalVotes : votedCandidates;
+        const progressLabel = countByTotalVotes
+          ? `Votes: ${totalVotes} / ${minVotes} (${votedCandidates} cards)`
+          : `Voted: ${votedCandidates} / ${minVotes} (${totalVotes} votes)`;
+
+        const showEvolveNow = canEvolveNow && isConnected && !goal.evolving;
+        if (evolveNowBtn) {
+          evolveNowBtn.hidden = !showEvolveNow;
+          evolveNowBtn.disabled = !showEvolveNow;
+        }
 
         if (goal.evolving) {
-          roundVoteText.textContent = `Voted: ${votedCandidates} / ${minVotes} (${totalVotes} votes)`;
+          roundVoteText.textContent = progressLabel;
           roundTimerEl.textContent = "Evolving next generation...";
           roundTimerEl.className = "round-timer";
           roundProgressEl.style.width = "100%";
@@ -2822,7 +3737,7 @@
           return;
         }
 
-        if (goal._deadlinePerfMs && goal._deadlinePerfMs > 0) {
+        if (countdownActive) {
           const remMs = Math.max(0, goal._deadlinePerfMs - performance.now());
           const pct = Math.max(0, Math.min(100, (remMs / durMs) * 100));
           roundVoteText.textContent = `Countdown active (${votedCandidates} cards, ${totalVotes} votes)`;
@@ -2831,11 +3746,15 @@
           roundProgressEl.style.width = `${pct}%`;
           roundProgressEl.classList.add("counting");
         } else {
-          const remaining = Math.max(0, minVotes - votedCandidates);
-          const pct = Math.max(0, Math.min(100, (votedCandidates / minVotes) * 100));
-          roundVoteText.textContent = `Voted: ${votedCandidates} / ${minVotes} (${totalVotes} votes)`;
+          const remaining = Math.max(0, minVotes - progressCount);
+          const pct = Math.max(0, Math.min(100, (progressCount / minVotes) * 100));
+          roundVoteText.textContent = progressLabel;
           if (remaining === 0 && likedCandidates < 1) {
             roundTimerEl.textContent = "Need at least 1 positive vote";
+          } else if (countByTotalVotes) {
+            roundTimerEl.textContent = remaining === 1
+              ? "Need 1 more vote"
+              : `Need ${remaining} more votes`;
           } else {
             roundTimerEl.textContent = remaining === 1
               ? "Need 1 more card voted"
@@ -2845,6 +3764,11 @@
           roundProgressEl.style.width = `${pct}%`;
           roundProgressEl.classList.remove("counting");
         }
+      }
+
+      function cardGoalIndex(card, fallback) {
+        const parsed = card && card.dataset && card.dataset.idx !== undefined ? Number(card.dataset.idx) : NaN;
+        return Number.isNaN(parsed) ? fallback : parsed;
       }
 
       function hasMyVote(goal, idx) {
@@ -2863,7 +3787,8 @@
         const goal = goalsByName.get(activeGoalName);
         if (!goal) return;
         const cards = genomeGridEl.querySelectorAll(".genome-card");
-        cards.forEach((card, idx) => {
+        cards.forEach((card, domPos) => {
+          const idx = cardGoalIndex(card, domPos);
           const voted = hasMyVote(goal, idx);
           if (gridFilter === "unvoted") {
             if (refilter) {
@@ -2886,17 +3811,18 @@
         if (gridFilter === "unvoted") {
           applyCardFilter(true);
         }
-        const unvotedIndices = [];
-        cards.forEach((_, idx) => {
-          if (!hasMyVote(goal, idx)) unvotedIndices.push(idx);
+        const unvotedPositions = [];
+        cards.forEach((card, domPos) => {
+          const idx = cardGoalIndex(card, domPos);
+          if (!hasMyVote(goal, idx)) unvotedPositions.push(domPos);
         });
-        if (unvotedIndices.length === 0) return;
+        if (unvotedPositions.length === 0) return;
 
-        let targetIdx = unvotedIndices.find((idx) => idx > lastJumpIdx);
-        if (targetIdx === undefined) targetIdx = unvotedIndices[0];
-        lastJumpIdx = targetIdx;
+        let targetPos = unvotedPositions.find((pos) => pos > lastJumpIdx);
+        if (targetPos === undefined) targetPos = unvotedPositions[0];
+        lastJumpIdx = targetPos;
 
-        const targetCard = cards[targetIdx];
+        const targetCard = cards[targetPos];
         if (!targetCard) return;
         targetCard.hidden = false;
         targetCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -2937,7 +3863,8 @@
 
         const cards = genomeGridEl.querySelectorAll(".genome-card");
         let unvotedCount = 0;
-        cards.forEach((card, idx) => {
+        cards.forEach((card, domPos) => {
+          const idx = cardGoalIndex(card, domPos);
           const v = goal.votes[idx] || { up: 0, down: 0, score: 0 };
           const mine = myVotes.get(voteKey(goal.name, goal.generation, idx)) || 0;
           const voted = hasMyVote(goal, idx);
@@ -3040,13 +3967,14 @@
 
       let recentDownloads = loadRecentDownloads();
 
-      function rememberDownloadedStrain(stem, goalName, generation, idx, genome) {
+      function rememberDownloadedStrain(stem, goalName, generation, idx, genome, taskId = "image") {
         const fp = genomeFingerprint(genome);
         recentDownloads = [
           {
             label: stem,
             fp,
             goal: goalName,
+            task: taskId || "image",
             generation,
             index: idx,
             genome,
@@ -3059,28 +3987,7 @@
         renderRecentDownloads();
       }
 
-      async function downloadPolicy(goal, idx) {
-        const genome = goal.genomes && goal.genomes[idx];
-        if (!genome) return;
-        const res = await fetch(`${basePath}/export/bundle/`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": csrfToken,
-          },
-          body: JSON.stringify({
-            goal: goal.name,
-            generation: goal.generation,
-            index: idx,
-            genome,
-          }),
-        });
-        if (!res.ok) return;
-        const disp = res.headers.get("Content-Disposition") || "";
-        const match = /filename="([^"]+)"/.exec(disp);
-        const filename = match ? match[1] : `policy_g${goal.generation}_${idx}.zip`;
-        const stem = filename.replace(/\.zip$/i, "");
-        const blob = await res.blob();
+      function triggerBlobDownload(blob, filename) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -3089,43 +3996,153 @@
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
+      }
 
-        rememberDownloadedStrain(stem, goal.name, goal.generation, idx, genome);
+      async function downloadExportedPolicy(goal, idx, format) {
+        const genome = goal.genomes && goal.genomes[idx];
+        if (!genome) return;
+        const isWeightsOnly = format === "pt";
+        const endpoint = isWeightsOnly ? "export/weights" : "export/bundle";
+        const ext = isWeightsOnly ? "pt" : "zip";
+        const taskId = goalTaskId(goal);
+        const res = await fetch(`${basePath}/${endpoint}/`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrfToken,
+          },
+          body: JSON.stringify({
+            goal: goal.name,
+            task: taskId,
+            generation: goal.generation,
+            index: idx,
+            genome,
+          }),
+        });
+        if (!res.ok) return;
+        const disp = res.headers.get("Content-Disposition") || "";
+        const match = /filename="([^"]+)"/.exec(disp);
+        const filename = match ? match[1] : `policy_g${goal.generation}_${idx}.${ext}`;
+        const stem = filename.replace(/\.(zip|pt)$/i, "");
+        triggerBlobDownload(await res.blob(), filename);
+
+        rememberDownloadedStrain(stem, goal.name, goal.generation, idx, genome, taskId);
 
         dlToastLabel.textContent = `${filename}:`;
-        dlToastCmd.textContent = `unzip ${filename} && cd ${stem} && uv run run.py`;
+        dlToastCmd.textContent = isWeightsOnly
+          ? `Re-upload ${filename} in "New room -> Reseed petri dish" to resume`
+          : `unzip ${filename} && cd ${stem} && uv run run.py`;
         dlToastCopy.textContent = "Copy";
         dlToast.hidden = false;
       }
 
+      function downloadPolicy(goal, idx) {
+        return downloadExportedPolicy(goal, idx, "zip");
+      }
+
+      function downloadWeights(goal, idx) {
+        return downloadExportedPolicy(goal, idx, "pt");
+      }
+
+      function stopCardHoverAnim() {
+        if (!activeHoverAnim) return;
+        cancelAnimationFrame(activeHoverAnim.raf);
+        const { genome, canvas } = activeHoverAnim;
+        activeHoverAnim = null;
+        if (canvas && canvas.isConnected && genome) {
+          canvas.width = CONTROL_CARD_SIZE;
+          canvas.height = CONTROL_CARD_SIZE;
+          renderCartpoleStaticCanvas(genome, canvas, CONTROL_CARD_SIZE);
+        }
+      }
+
+      function startCardHoverAnim(genome, canvas, maxSteps = CARTPOLE_MAX_STEPS) {
+        stopCardHoverAnim();
+        const summary = evaluateCartpoleSummary(genome);
+        const ro = summary.primaryRollout;
+        if (!ro || !ro.states || ro.states.length === 0) return;
+        const startPerf = performance.now();
+        const stateObj = { raf: 0, genome, canvas };
+        activeHoverAnim = stateObj;
+
+        function tick(now) {
+          if (activeHoverAnim !== stateObj || !canvas.isConnected) return;
+          const elapsedSteps = Math.floor(((now - startPerf) / 1000) / CARTPOLE_TAU);
+          const totalFrames = ro.states.length;
+          const frameIdx = totalFrames > 0 ? (elapsedSteps % totalFrames) : 0;
+          const force = ro.forces && ro.forces.length > 0
+            ? ro.forces[Math.min(frameIdx, ro.forces.length - 1)]
+            : 0;
+          renderCartpoleLiveFrame(canvas, ro.states[frameIdx], force, frameIdx, maxSteps);
+          stateObj.raf = requestAnimationFrame(tick);
+        }
+        stateObj.raf = requestAnimationFrame(tick);
+      }
+
+      function formatStepBadge(meanSteps, maxSteps) {
+        const val = Number.isInteger(meanSteps) ? String(meanSteps) : meanSteps.toFixed(1).replace(/\.0$/, "");
+        return `${val}/${maxSteps}`;
+      }
+
       function renderActiveGoal(rerenderCanvases) {
         const goal = goalsByName.get(activeGoalName);
-        if (!goal) {
-          if (lineagePanelEl) lineagePanelEl.hidden = true;
+        if (!goal || addingExtraGoal) {
+          stopCardHoverAnim();
+          if (!goal && lineagePanelEl) lineagePanelEl.hidden = true;
           if (isPrivateRoom) {
             evoWorkspaceEl.hidden = true;
             privateEmptyStateEl.hidden = false;
+            if (emptyCancelBtn) emptyCancelBtn.hidden = !(addingExtraGoal && goal);
             if (emptyGoalInput && document.activeElement !== emptyGoalInput) {
               emptyGoalInput.focus();
             }
           }
           return;
         }
+        if (emptyCancelBtn) emptyCancelBtn.hidden = true;
         privateEmptyStateEl.hidden = true;
         evoWorkspaceEl.hidden = false;
+
+        const isCtrl = isControlGoal(goal);
+        const taskId = goalTaskId(goal);
+        const spec = getTaskSpec(taskId);
+        const maxSteps = spec.maxSteps || CARTPOLE_MAX_STEPS;
         const popSize = typeof goal.populationSize === "number" ? goal.populationSize : goal.genomes.length;
         const sigma = typeof goal.mutationSigma === "number" ? goal.mutationSigma.toFixed(2) : "0.35";
         const elitePct = typeof goal.eliteFrac === "number" ? Math.round(goal.eliteFrac * 100) : Math.round(initialEliteFrac * 100);
         const crossPct = typeof goal.crossoverRate === "number" ? Math.round(goal.crossoverRate * 100) : Math.round(initialCrossoverRate * 100);
         activeGoalTitle.textContent = goal.name;
         const mvLimit = goal.maxVotesPerUser || initialMaxVotes || 5;
-        activeGoalGen.textContent = `gen ${goal.generation} · pop ${popSize} · cap ${mvLimit}v · \u03c3 ${sigma} · elite ${elitePct}% · cross ${crossPct}%`;
+        const taskPrefix = isCtrl ? `${spec.label.split(" ")[0]} \u00b7 ` : "";
+        activeGoalGen.textContent = `${taskPrefix}gen ${goal.generation} \u00b7 pop ${popSize} \u00b7 cap ${mvLimit}v \u00b7 \u03c3 ${sigma} \u00b7 elite ${elitePct}% \u00b7 cross ${crossPct}%`;
+
+        if (sortTabsEl) {
+          sortTabsEl.hidden = !isCtrl;
+          if (sortStepsBtn) sortStepsBtn.classList.toggle("active", controlSortMode === "steps");
+          if (sortSlotBtn) sortSlotBtn.classList.toggle("active", controlSortMode === "slot");
+        }
 
         if (rerenderCanvases) {
+          stopCardHoverAnim();
           genomeGridEl.replaceChildren();
-          goal.genomes.forEach((genome, idx) => {
+          const summaries = isCtrl ? goal.genomes.map((g) => evaluateCartpoleSummary(g)) : null;
+          const orderedIndices = goal.genomes.map((_, i) => i);
+          if (isCtrl && controlSortMode === "steps" && summaries) {
+            orderedIndices.sort((a, b) => {
+              const sa = summaries[a];
+              const sb = summaries[b];
+              if (sb.meanSteps !== sa.meanSteps) return sb.meanSteps - sa.meanSteps;
+              if (sa.meanAbsX !== sb.meanAbsX) return sa.meanAbsX - sb.meanAbsX;
+              return a - b;
+            });
+          }
+
+          const renderer = getTaskRenderer(goal);
+          orderedIndices.forEach((idx) => {
+            const genome = goal.genomes[idx];
             const card = document.createElement("div");
             card.className = "genome-card" + (genome.op === "seed" ? " is-seed" : "");
+            card.dataset.idx = String(idx);
 
             if (genome.op === "seed") {
               const seedBadge = document.createElement("span");
@@ -3135,13 +4152,38 @@
               card.appendChild(seedBadge);
             }
 
+            if (isCtrl && summaries) {
+              const summary = summaries[idx];
+              const slotBadge = document.createElement("span");
+              slotBadge.className = "sim-slot-badge";
+              slotBadge.textContent = `#${idx + 1}`;
+              card.appendChild(slotBadge);
+
+              const simBadge = document.createElement("span");
+              simBadge.className = "sim-badge" + (summary.solved ? " solved" : (summary.meanSteps >= 150 ? " mid" : ""));
+              simBadge.textContent = formatStepBadge(summary.meanSteps, maxSteps);
+              simBadge.title = `Mean ${summary.meanSteps}/${maxSteps} steps across seeds ${CARTPOLE_EVAL_SEEDS.join(", ")} ([${summary.perSeed.join(", ")}])`;
+              card.appendChild(simBadge);
+
+              const playPill = document.createElement("span");
+              playPill.className = "sim-play-pill";
+              playPill.textContent = "\u25b6 live";
+              card.appendChild(playPill);
+            }
+
             const canvas = document.createElement("canvas");
-            canvas.width = CANVAS_SIZE;
-            canvas.height = CANVAS_SIZE;
+            canvas.width = isCtrl ? CONTROL_CARD_SIZE : CANVAS_SIZE;
+            canvas.height = isCtrl ? CONTROL_CARD_SIZE : CANVAS_SIZE;
             canvas.style.cursor = "zoom-in";
-            canvas.title = "Click to open full screen";
-            renderCppnToCanvas(genome, canvas);
+            canvas.title = isCtrl
+              ? "Hover for live rollout · click for interactive player + MP4"
+              : "Click to open full screen";
+            renderer.renderCard(genome, canvas);
             canvas.addEventListener("click", () => openFullscreen(idx));
+            if (isCtrl) {
+              card.addEventListener("mouseenter", () => startCardHoverAnim(genome, canvas, maxSteps));
+              card.addEventListener("mouseleave", () => stopCardHoverAnim());
+            }
             card.appendChild(canvas);
 
             const footer = document.createElement("div");
@@ -3417,12 +4459,18 @@
           col.appendChild(hdr);
 
           const colNodes = byGen.get(gen) || [];
+          const isCtrlGoal = isControlGoal(goal);
+          const lineageRenderer = getTaskRenderer(goal);
           for (const node of colNodes) {
             const op = LINEAGE_OP_META[node.op] ? node.op : "random";
             const opMeta = LINEAGE_OP_META[op];
+            const hasWeights = Array.isArray(node.weights);
+            const nodeSummary = (isCtrlGoal && hasWeights) ? evaluateCartpoleSummary(node) : null;
             const el = document.createElement("div");
             el.className = "lineage-node" + (gen === goal.generation ? " is-live" : "");
             el.title = `#${node.id} · Gen ${node.gen} · ${opMeta.title}` + (
+              nodeSummary ? ` · ${nodeSummary.meanSteps}/${CARTPOLE_MAX_STEPS} steps` : ""
+            ) + (
               Array.isArray(node.parents) && node.parents.length > 0
                 ? ` · parents: ${node.parents.map((p) => `#${p}`).join(", ")}`
                 : ""
@@ -3431,7 +4479,13 @@
             const cvs = document.createElement("canvas");
             cvs.width = LINEAGE_CANVAS_SIZE;
             cvs.height = LINEAGE_CANVAS_SIZE;
-            renderCppnToCanvas(node, cvs, LINEAGE_CANVAS_SIZE);
+            if (hasWeights) {
+              lineageRenderer.renderLineageNode(node, cvs);
+            } else {
+              const lctx = cvs.getContext("2d");
+              lctx.fillStyle = "#141418";
+              lctx.fillRect(0, 0, cvs.width, cvs.height);
+            }
             el.appendChild(cvs);
 
             const meta = document.createElement("div");
@@ -3712,6 +4766,7 @@
       async function preloadGoalImages(goal) {
         if (!goal) return;
         mergeLiveLineage(goal);
+        if (isControlGoal(goal)) return;
         await Promise.all([
           preloadImages(goal.genomes || [], CANVAS_SIZE),
           preloadImages(goal.lineage || [], LINEAGE_CANVAS_SIZE),
@@ -3723,6 +4778,7 @@
         const lineage = [];
         for (const goal of goals) {
           mergeLiveLineage(goal);
+          if (isControlGoal(goal)) continue;
           if (Array.isArray(goal.genomes)) genomes.push(...goal.genomes);
           if (Array.isArray(goal.lineage)) lineage.push(...goal.lineage);
         }
@@ -3748,8 +4804,12 @@
 
       async function handleServerPayload(data) {
         if (data.type === "identity") {
+          savedUsername = data.username;
           nameInput.value = data.username;
           localStorage.setItem("det_username", data.username);
+          canEvolveNow = Boolean(data.canEvolveNow && evolveToken);
+          syncNameDirty();
+          renderRoundStatus();
         } else if (data.type === "history") {
           messagesEl.replaceChildren();
           for (const msg of data.messages || []) {
@@ -3802,7 +4862,9 @@
             g._lineageFull = true;
             g._lineageRequested = false;
             mergeLiveLineage(g);
-            await preloadImages(g.lineage, LINEAGE_CANVAS_SIZE);
+            if (!isControlGoal(g)) {
+              await preloadImages(g.lineage, LINEAGE_CANVAS_SIZE);
+            }
             if (data.goal === activeGoalName && lineageFilter === "all") {
               renderLineageTree(g);
             }
@@ -3890,11 +4952,14 @@
         const params = new URLSearchParams();
         if (currentName) params.set("username", currentName);
         if (isPrivateRoom && initialGoal) params.set("goal", initialGoal);
+        if (isPrivateRoom && initialTask && initialTask !== "image") params.set("task", initialTask);
         if (isPrivateRoom && initialPop) params.set("pop", String(initialPop));
+        if (isPrivateRoom && initialMinVotesExplicit) params.set("min_votes", String(initialMinVotes));
         if (isPrivateRoom && initialMaxVotes) params.set("max_votes", String(initialMaxVotes));
         if (isPrivateRoom && initialMutSigma) params.set("sigma", initialMutSigma.toFixed(2));
         if (isPrivateRoom) params.set("elite_frac", initialEliteFrac.toFixed(2));
         if (isPrivateRoom) params.set("crossover", initialCrossoverRate.toFixed(2));
+        if (evolveToken) params.set("evolve_token", evolveToken);
         if (supportsGzip) params.set("gzip", "1");
         const qs = params.toString() ? `?${params.toString()}` : "";
         const wsUrl = wsViaProxy
@@ -3990,13 +5055,19 @@
           : "Create room";
       }
 
+      function getNewRoomTaskSpec() {
+        return getTaskSpec(newRoomTaskSelect ? newRoomTaskSelect.value : "image");
+      }
+
       function syncSeedCapacityState() {
+        const spec = getNewRoomTaskSpec();
+        const maxPop = spec.maxPopSize || 64;
         const rawPop = parseInt(newRoomPopInput.value, 10);
-        const popInvalid = Number.isNaN(rawPop) || rawPop < 3 || rawPop > 64;
+        const popInvalid = Number.isNaN(rawPop) || rawPop < 3 || rawPop > maxPop;
         const count = stagedStrains.length;
 
         if (popInvalid) {
-          seedCapacityHintEl.textContent = "Population size must be between 3 and 64.";
+          seedCapacityHintEl.textContent = `Population size for ${spec.label} must be between 3 and ${maxPop}.`;
           seedCapacityHintEl.className = "seed-capacity-hint is-invalid";
           seedDropzoneEl.classList.add("is-invalid");
           newRoomSubmitBtn.disabled = true;
@@ -4052,8 +5123,9 @@
           btn.type = "button";
           btn.className = "seed-recent-pill";
           const alreadyAdded = stagedFps.has(item.fp);
+          const itemTask = item.task || (/^cartpole_/i.test(item.label) ? "cartpole" : "image");
           btn.disabled = alreadyAdded || isValidatingStrains || isSubmittingRoom;
-          btn.title = alreadyAdded ? `${item.label} already staged` : `Stage ${item.label}.pt`;
+          btn.title = alreadyAdded ? `${item.label} already staged` : `Stage ${item.label}.pt (${itemTask})`;
 
           const cvs = document.createElement("canvas");
           cvs.width = 20;
@@ -4074,6 +5146,11 @@
           btn.addEventListener("click", async () => {
             if (isValidatingStrains || isSubmittingRoom) return;
             try {
+              if (stagedStrains.length === 0 && newRoomTaskSelect && itemTask !== newRoomTaskSelect.value) {
+                newRoomTaskSelect.value = itemTask;
+                applyTaskDefaults(itemTask, newRoomFormCtrls);
+                syncSeedCapacityState();
+              }
               const res = await fetch(`${basePath}/export/weights/`, {
                 method: "POST",
                 headers: {
@@ -4082,6 +5159,7 @@
                 },
                 body: JSON.stringify({
                   goal: item.goal || item.label,
+                  task: itemTask,
                   generation: item.generation || 0,
                   index: item.index || 0,
                   genome: item.genome,
@@ -4264,14 +5342,32 @@
         syncSeedCapacityState();
       });
       newRoomPopInput.addEventListener("input", () => {
+        newRoomFormCtrls.popTouched = true;
         syncSeedCapacityState();
       });
+      if (newRoomMinVotesInput) {
+        newRoomMinVotesInput.addEventListener("input", () => {
+          newRoomFormCtrls.minVotesTouched = true;
+        });
+      }
+      if (newRoomEliteInput) {
+        newRoomEliteInput.addEventListener("input", () => {
+          newRoomFormCtrls.eliteTouched = true;
+        });
+      }
+      if (newRoomTaskSelect) {
+        newRoomTaskSelect.addEventListener("change", () => {
+          applyTaskDefaults(newRoomTaskSelect.value, newRoomFormCtrls);
+          syncSeedCapacityState();
+        });
+      }
 
       function openNewRoomModal() {
         newRoomErrorEl.hidden = true;
         newRoomModalEl.hidden = false;
         recentDownloads = loadRecentDownloads();
         renderRecentDownloads();
+        applyTaskDefaults(newRoomTaskSelect ? newRoomTaskSelect.value : "image", newRoomFormCtrls);
         syncSeedCapacityState();
         newRoomNameInput.focus();
       }
@@ -4302,17 +5398,23 @@
           newRoomNameInput.focus();
           return;
         }
+        const taskSpec = getNewRoomTaskSpec();
+        const taskId = taskSpec.task || "image";
+        const maxPop = taskSpec.maxPopSize || 64;
         if (!syncSeedCapacityState()) {
           const rawPop = parseInt(newRoomPopInput.value, 10);
-          newRoomErrorEl.textContent = (Number.isNaN(rawPop) || rawPop < 3 || rawPop > 64)
-            ? "Population size must be between 3 and 64."
+          newRoomErrorEl.textContent = (Number.isNaN(rawPop) || rawPop < 3 || rawPop > maxPop)
+            ? `Population size for ${taskSpec.label} must be between 3 and ${maxPop}.`
             : `Uploaded strains (${stagedStrains.length}) cannot exceed total population size (${rawPop}).`;
           newRoomErrorEl.hidden = false;
           newRoomPopInput.focus();
           return;
         }
 
-        const pop = parsePopValue(newRoomPopInput);
+        const fallbackPop = taskSpec.kind === "control" ? (taskSpec.defaultPopSize || 16) : initialPop;
+        const pop = parsePopValue(newRoomPopInput, fallbackPop, maxPop);
+        const taskDefaultMinVotes = taskSpec.defaultMinVotes > 0 ? taskSpec.defaultMinVotes : defaultMinVotes;
+        const minVotes = parseMinVotesValue(newRoomMinVotesInput, taskDefaultMinVotes);
         const mv = parseMaxVotesValue(newRoomMaxVotesInput);
         const sigma = parseSigmaValue(newRoomSigmaInput);
         const eliteFrac = parseEliteValue(newRoomEliteInput);
@@ -4328,8 +5430,10 @@
           if (stagedStrains.length > 0) {
             const formData = new FormData();
             formData.append("name", name);
+            formData.append("task", taskId);
             formData.append("description", description);
             formData.append("population_size", String(pop));
+            formData.append("min_votes", String(minVotes));
             formData.append("max_votes_per_user", String(mv));
             formData.append("mutation_sigma", sigma.toFixed(2));
             formData.append("elite_frac", eliteFrac.toFixed(2));
@@ -4349,7 +5453,17 @@
                 "Content-Type": "application/json",
                 "X-CSRFToken": csrfToken,
               },
-              body: JSON.stringify({ name, description }),
+              body: JSON.stringify({
+                name,
+                task: taskId,
+                description,
+                population_size: pop,
+                min_votes: minVotes,
+                max_votes_per_user: mv,
+                mutation_sigma: sigma,
+                elite_frac: eliteFrac,
+                crossover_rate: crossoverRate,
+              }),
             });
           }
           const data = await res.json().catch(() => ({}));
@@ -4357,12 +5471,16 @@
             throw new Error(data.error || "Could not create room.");
           }
           let targetUrl = data.url;
-          if (stagedStrains.length === 0) {
+          if (stagedStrains.length === 0 && taskId === "image") {
+            const taskDefaultElite = typeof taskSpec.defaultEliteFrac === "number"
+              ? taskSpec.defaultEliteFrac
+              : initialEliteFrac;
             const qp = new URLSearchParams();
             if (pop !== initialPop) qp.set("pop", String(pop));
+            qp.set("min_votes", String(minVotes));
             if (mv !== initialMaxVotes) qp.set("max_votes", String(mv));
             if (Math.abs(sigma - initialMutSigma) > 1e-6) qp.set("sigma", sigma.toFixed(2));
-            if (Math.abs(eliteFrac - initialEliteFrac) > 1e-6) qp.set("elite_frac", eliteFrac.toFixed(2));
+            if (Math.abs(eliteFrac - taskDefaultElite) > 1e-6) qp.set("elite_frac", eliteFrac.toFixed(2));
             if (Math.abs(crossoverRate - initialCrossoverRate) > 1e-6) qp.set("crossover", crossoverRate.toFixed(2));
             const qs = qp.toString();
             if (qs) targetUrl += `?${qs}`;
@@ -4376,25 +5494,71 @@
         }
       });
 
+      if (emptyPopInput) {
+        emptyPopInput.addEventListener("input", () => {
+          emptyFormCtrls.popTouched = true;
+        });
+      }
+      if (emptyMinVotesInput) {
+        emptyMinVotesInput.addEventListener("input", () => {
+          emptyFormCtrls.minVotesTouched = true;
+        });
+      }
+      if (emptyEliteInput) {
+        emptyEliteInput.addEventListener("input", () => {
+          emptyFormCtrls.eliteTouched = true;
+        });
+      }
+      if (emptyTaskSelect) {
+        applyTaskDefaults(emptyTaskSelect.value || initialTask, emptyFormCtrls);
+        emptyTaskSelect.addEventListener("change", () => {
+          applyTaskDefaults(emptyTaskSelect.value, emptyFormCtrls);
+        });
+      }
+      if (addGoalBtn) {
+        addGoalBtn.addEventListener("click", () => {
+          addingExtraGoal = true;
+          applyTaskDefaults(emptyTaskSelect ? emptyTaskSelect.value : initialTask, emptyFormCtrls);
+          renderActiveGoal(false);
+        });
+      }
+      if (emptyCancelBtn) {
+        emptyCancelBtn.addEventListener("click", () => {
+          addingExtraGoal = false;
+          emptyCancelBtn.hidden = true;
+          renderActiveGoal(false);
+        });
+      }
+
       if (emptyGoalForm) {
         emptyGoalForm.addEventListener("submit", (e) => {
           e.preventDefault();
           const goal = emptyGoalInput.value.trim();
-          const pop = parsePopValue(emptyPopInput);
+          const taskId = emptyTaskSelect ? (emptyTaskSelect.value || "image") : "image";
+          const spec = getTaskSpec(taskId);
+          const fallbackPop = spec.kind === "control" ? (spec.defaultPopSize || 16) : initialPop;
+          const pop = parsePopValue(emptyPopInput, fallbackPop, spec.maxPopSize || 64);
+          const taskDefaultMinVotes = spec.defaultMinVotes > 0 ? spec.defaultMinVotes : initialMinVotes;
+          const minVotes = parseMinVotesValue(emptyMinVotesInput, taskDefaultMinVotes);
           const mv = parseMaxVotesValue(emptyMaxVotesInput);
           const sigma = parseSigmaValue(emptySigmaInput);
           const eliteFrac = parseEliteValue(emptyEliteInput);
           const crossoverRate = parseCrossoverValue(emptyCrossoverInput);
           if (emptyPopInput) emptyPopInput.value = String(pop);
+          if (emptyMinVotesInput) emptyMinVotesInput.value = String(minVotes);
           if (emptyMaxVotesInput) emptyMaxVotesInput.value = String(mv);
           if (emptySigmaInput) emptySigmaInput.value = sigma.toFixed(2);
           if (emptyEliteInput) emptyEliteInput.value = eliteFrac.toFixed(2);
           if (emptyCrossoverInput) emptyCrossoverInput.value = crossoverRate.toFixed(2);
           if (!goal || !socket || socket.readyState !== WebSocket.OPEN) return;
+          addingExtraGoal = false;
+          if (emptyCancelBtn) emptyCancelBtn.hidden = true;
           socket.send(JSON.stringify({
             type: "create_goal",
             goal,
+            task: taskId,
             population_size: pop,
+            min_votes: minVotes,
             max_votes_per_user: mv,
             mutation_sigma: sigma,
             elite_frac: eliteFrac,
@@ -4402,6 +5566,19 @@
           }));
           activeGoalName = goal;
           emptyGoalInput.value = "";
+        });
+      }
+
+      if (sortStepsBtn && sortSlotBtn) {
+        sortStepsBtn.addEventListener("click", () => {
+          if (controlSortMode === "steps") return;
+          controlSortMode = "steps";
+          renderActiveGoal(true);
+        });
+        sortSlotBtn.addEventListener("click", () => {
+          if (controlSortMode === "slot") return;
+          controlSortMode = "slot";
+          renderActiveGoal(true);
         });
       }
 
@@ -4438,6 +5615,17 @@
       tabUnvotedBtn.addEventListener("click", () => setGridFilter("unvoted"));
       nextUnvotedBtn.addEventListener("click", () => scrollToNextUnvoted());
 
+      if (evolveNowBtn) {
+        evolveNowBtn.addEventListener("click", () => {
+          const goal = goalsByName.get(activeGoalName);
+          if (!canEvolveNow || !goal || goal.evolving || !socket || socket.readyState !== WebSocket.OPEN) {
+            return;
+          }
+          evolveNowBtn.disabled = true;
+          socket.send(JSON.stringify({ type: "evolve_now", goal: activeGoalName }));
+        });
+      }
+
       chatForm.addEventListener("submit", (e) => {
         e.preventDefault();
         const text = chatInput.value.trim();
@@ -4446,11 +5634,15 @@
         chatInput.value = "";
       });
 
+      nameInput.addEventListener("input", () => syncNameDirty());
+
       nameForm.addEventListener("submit", (e) => {
         e.preventDefault();
         const newName = nameInput.value.trim();
         if (!newName) return;
+        savedUsername = newName;
         localStorage.setItem("det_username", newName);
+        syncNameDirty();
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: "rename", username: newName }));
         }
@@ -4462,13 +5654,169 @@
       const fsScoreEl = document.getElementById("fs-score");
       const fsUpBtn = document.getElementById("fs-up-btn");
       const fsDownBtn = document.getElementById("fs-down-btn");
+      const fsDlPtBtn = document.getElementById("fs-dl-pt-btn");
       const fsDlBtn = document.getElementById("fs-dl-btn");
       const fsCloseBtn = document.getElementById("fs-close-btn");
       const fsPrevBtn = document.getElementById("fs-prev-btn");
       const fsNextBtn = document.getElementById("fs-next-btn");
       const fsCanvasEl = document.getElementById("fs-canvas");
+      const fsSimBarEl = document.getElementById("fs-sim-bar");
+      const fsSimPlayBtn = document.getElementById("fs-sim-play-btn");
+      const fsSimRestartBtn = document.getElementById("fs-sim-restart-btn");
+      const fsSimSeedSelect = document.getElementById("fs-sim-seed-select");
+      const fsSimNudgeLBtn = document.getElementById("fs-sim-nudge-l");
+      const fsSimNudgeRBtn = document.getElementById("fs-sim-nudge-r");
+      const fsSimHeldoutBtn = document.getElementById("fs-sim-heldout-btn");
+      const fsSimVideoBtn = document.getElementById("fs-sim-video-btn");
+      const fsSimTelemetryEl = document.getElementById("fs-sim-telemetry");
+      const fsHeldoutStatusEl = document.getElementById("fs-heldout-status");
+      const fsVideoWrapEl = document.getElementById("fs-video-wrap");
+      const fsVideoEl = document.getElementById("fs-video-el");
+      const fsVideoCaptionEl = document.getElementById("fs-video-caption");
+      const fsVideoDlEl = document.getElementById("fs-video-dl");
+      const HELD_OUT_EVAL_SEEDS = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109];
       let fullscreenIdx = null;
       let fullscreenNode = null;
+      let fsSimState = null;
+
+      function stopFullscreenSim() {
+        if (fsSimState && fsSimState.raf) {
+          cancelAnimationFrame(fsSimState.raf);
+        }
+        fsSimState = null;
+      }
+
+      function clearFullscreenMediaUI() {
+        if (fsHeldoutStatusEl) {
+          fsHeldoutStatusEl.hidden = true;
+          fsHeldoutStatusEl.textContent = "";
+        }
+        if (fsVideoWrapEl) fsVideoWrapEl.hidden = true;
+        if (fsVideoEl) {
+          fsVideoEl.pause();
+          fsVideoEl.removeAttribute("src");
+          fsVideoEl.removeAttribute("poster");
+          fsVideoEl.load();
+        }
+        if (fsSimVideoBtn) {
+          fsSimVideoBtn.disabled = false;
+          fsSimVideoBtn.textContent = "Render .mp4";
+        }
+      }
+
+      function selectedFullscreenSeed() {
+        if (!fsSimSeedSelect) return 0;
+        const raw = fsSimSeedSelect.value;
+        if (raw === "random") return Math.floor(Math.random() * 100000);
+        const parsed = parseInt(raw, 10);
+        return Number.isNaN(parsed) ? 0 : parsed;
+      }
+
+      function renderFullscreenTelemetry() {
+        if (!fsSimTelemetryEl || !fsSimState) return;
+        const [x, , theta] = fsSimState.state;
+        const deg = (theta * 180.0) / Math.PI;
+        const status = fsSimState.terminated
+          ? "fell"
+          : (fsSimState.step >= fsSimState.maxSteps ? "balanced!" : (fsSimState.playing ? "live" : "paused"));
+        fsSimTelemetryEl.innerHTML =
+          `<span>step <strong>${fsSimState.step}/${fsSimState.maxSteps}</strong></span>` +
+          `<span>x <strong>${x >= 0 ? "+" : ""}${x.toFixed(2)}m</strong></span>` +
+          `<span>\u03b8 <strong>${deg >= 0 ? "+" : ""}${deg.toFixed(1)}\u00b0</strong></span>` +
+          `<span>F <strong>${fsSimState.lastForce >= 0 ? "+" : ""}${fsSimState.lastForce.toFixed(1)}N</strong></span>` +
+          `<span><strong>${status}</strong></span>`;
+      }
+
+      function resetFullscreenEpisode(newSeed) {
+        if (!fsSimState) return;
+        const s = typeof newSeed === "number" ? newSeed : fsSimState.seed;
+        fsSimState.seed = s;
+        fsSimState.step = 0;
+        fsSimState.state = cartpoleReset(s);
+        fsSimState.lastForce = 0;
+        fsSimState.terminated = false;
+        fsSimState.doneAtPerf = 0;
+        fsSimState.lastStepPerf = performance.now();
+        renderCartpoleLiveFrame(fsCanvasEl, fsSimState.state, 0, 0, fsSimState.maxSteps);
+        renderFullscreenTelemetry();
+      }
+
+      function startFullscreenSim(genome, taskId) {
+        stopFullscreenSim();
+        clearFullscreenMediaUI();
+        const spec = getTaskSpec(taskId);
+        const maxSteps = spec.maxSteps || CARTPOLE_MAX_STEPS;
+        fsCanvasEl.width = FULLSCREEN_SIM_WIDTH;
+        fsCanvasEl.height = FULLSCREEN_SIM_HEIGHT;
+        fsCanvasEl.style.aspectRatio = `${FULLSCREEN_SIM_WIDTH} / ${FULLSCREEN_SIM_HEIGHT}`;
+        if (fsSimBarEl) fsSimBarEl.hidden = false;
+        if (fsSimPlayBtn) fsSimPlayBtn.textContent = "Pause";
+
+        const seed = selectedFullscreenSeed();
+        const decoded = decodeHyperNeatWeights(genome, [4, 8, 1]);
+        const stateObj = {
+          genome,
+          decoded,
+          taskId,
+          seed,
+          maxSteps,
+          step: 0,
+          state: cartpoleReset(seed),
+          lastForce: 0,
+          terminated: false,
+          playing: true,
+          doneAtPerf: 0,
+          lastStepPerf: performance.now(),
+          raf: 0,
+        };
+        fsSimState = stateObj;
+        renderCartpoleLiveFrame(fsCanvasEl, stateObj.state, 0, 0, maxSteps);
+        renderFullscreenTelemetry();
+
+        function loop(now) {
+          if (fsSimState !== stateObj || fullscreenModalEl.hidden) return;
+          if (stateObj.playing) {
+            if (stateObj.terminated || stateObj.step >= stateObj.maxSteps) {
+              if (!stateObj.doneAtPerf) {
+                stateObj.doneAtPerf = now;
+              } else if (now - stateObj.doneAtPerf >= 900) {
+                resetFullscreenEpisode(
+                  fsSimSeedSelect && fsSimSeedSelect.value === "random"
+                    ? selectedFullscreenSeed()
+                    : stateObj.seed
+                );
+              }
+            } else {
+              const stepMs = CARTPOLE_TAU * 1000;
+              const deltaSteps = Math.min(4, Math.floor((now - stateObj.lastStepPerf) / stepMs));
+              if (deltaSteps > 0) {
+                stateObj.lastStepPerf += deltaSteps * stepMs;
+                for (let k = 0; k < deltaSteps; k++) {
+                  if (stateObj.terminated || stateObj.step >= stateObj.maxSteps) break;
+                  const u = cartpolePolicyAction(stateObj.decoded, stateObj.state);
+                  const res = cartpoleStep(stateObj.state, u);
+                  stateObj.state = res.nextState;
+                  stateObj.lastForce = res.force;
+                  stateObj.step += 1;
+                  stateObj.terminated = res.terminated;
+                }
+                renderCartpoleLiveFrame(
+                  fsCanvasEl,
+                  stateObj.state,
+                  stateObj.lastForce,
+                  stateObj.step,
+                  stateObj.maxSteps
+                );
+                renderFullscreenTelemetry();
+              }
+            }
+          } else {
+            stateObj.lastStepPerf = now;
+          }
+          stateObj.raf = requestAnimationFrame(loop);
+        }
+        stateObj.raf = requestAnimationFrame(loop);
+      }
 
       function renderFullscreenVotes() {
         if (fullscreenNode !== null) {
@@ -4502,9 +5850,33 @@
       function renderFullscreen() {
         if (fullscreenNode !== null) {
           const { goalName, node } = fullscreenNode;
+          const nodeGoal = goalsByName.get(goalName);
+          const taskId = nodeGoal ? goalTaskId(nodeGoal) : "image";
           fsTitleEl.textContent = `${goalName} #${node.id}`;
           fsSubEl.textContent = `lineage gen ${node.gen} (${node.op || "random"})`;
-          renderCppnToCanvas(node, fsCanvasEl, FULLSCREEN_CANVAS_SIZE);
+          if (getTaskSpec(taskId).kind === "control") {
+            if (!Array.isArray(node.weights)) {
+              stopFullscreenSim();
+              clearFullscreenMediaUI();
+              if (fsSimBarEl) fsSimBarEl.hidden = true;
+              fsCanvasEl.width = FULLSCREEN_SIM_WIDTH;
+              fsCanvasEl.height = FULLSCREEN_SIM_HEIGHT;
+              fsCanvasEl.style.aspectRatio = `${FULLSCREEN_SIM_WIDTH} / ${FULLSCREEN_SIM_HEIGHT}`;
+              const ctx = fsCanvasEl.getContext("2d");
+              ctx.fillStyle = "#09090b";
+              ctx.fillRect(0, 0, fsCanvasEl.width, fsCanvasEl.height);
+            } else {
+              startFullscreenSim(node, taskId);
+            }
+          } else {
+            stopFullscreenSim();
+            clearFullscreenMediaUI();
+            if (fsSimBarEl) fsSimBarEl.hidden = true;
+            fsCanvasEl.width = FULLSCREEN_CANVAS_SIZE;
+            fsCanvasEl.height = FULLSCREEN_CANVAS_SIZE;
+            fsCanvasEl.style.aspectRatio = "1 / 1";
+            renderCppnToCanvas(node, fsCanvasEl, FULLSCREEN_CANVAS_SIZE);
+          }
           renderFullscreenVotes();
           return;
         }
@@ -4518,9 +5890,24 @@
           fullscreenIdx = goal.genomes.length - 1;
         }
         const genome = goal.genomes[fullscreenIdx];
+        const taskId = goalTaskId(goal);
+        const isCtrl = isControlGoal(goal);
         fsTitleEl.textContent = `${goal.name} #${fullscreenIdx + 1}`;
-        fsSubEl.textContent = `gen ${goal.generation} (${fullscreenIdx + 1}/${goal.genomes.length})`;
-        renderCppnToCanvas(genome, fsCanvasEl, FULLSCREEN_CANVAS_SIZE);
+        if (isCtrl) {
+          const summary = evaluateCartpoleSummary(genome);
+          const maxSteps = getTaskSpec(taskId).maxSteps || CARTPOLE_MAX_STEPS;
+          fsSubEl.textContent = `gen ${goal.generation} (${fullscreenIdx + 1}/${goal.genomes.length}) \u00b7 mean ${summary.meanSteps}/${maxSteps} steps`;
+          startFullscreenSim(genome, taskId);
+        } else {
+          stopFullscreenSim();
+          clearFullscreenMediaUI();
+          if (fsSimBarEl) fsSimBarEl.hidden = true;
+          fsCanvasEl.width = FULLSCREEN_CANVAS_SIZE;
+          fsCanvasEl.height = FULLSCREEN_CANVAS_SIZE;
+          fsCanvasEl.style.aspectRatio = "1 / 1";
+          fsSubEl.textContent = `gen ${goal.generation} (${fullscreenIdx + 1}/${goal.genomes.length})`;
+          renderCppnToCanvas(genome, fsCanvasEl, FULLSCREEN_CANVAS_SIZE);
+        }
         renderFullscreenVotes();
       }
 
@@ -4539,9 +5926,118 @@
       }
 
       function closeFullscreen() {
+        stopFullscreenSim();
+        clearFullscreenMediaUI();
+        if (fsSimBarEl) fsSimBarEl.hidden = true;
         fullscreenIdx = null;
         fullscreenNode = null;
         fullscreenModalEl.hidden = true;
+      }
+
+      if (fsSimPlayBtn) {
+        fsSimPlayBtn.addEventListener("click", () => {
+          if (!fsSimState) return;
+          fsSimState.playing = !fsSimState.playing;
+          fsSimState.lastStepPerf = performance.now();
+          fsSimPlayBtn.textContent = fsSimState.playing ? "Pause" : "Play";
+          renderFullscreenTelemetry();
+        });
+      }
+      if (fsSimRestartBtn) {
+        fsSimRestartBtn.addEventListener("click", () => {
+          if (!fsSimState) return;
+          fsSimState.playing = true;
+          if (fsSimPlayBtn) fsSimPlayBtn.textContent = "Pause";
+          resetFullscreenEpisode(selectedFullscreenSeed());
+        });
+      }
+      if (fsSimSeedSelect) {
+        fsSimSeedSelect.addEventListener("change", () => {
+          if (!fsSimState) return;
+          fsSimState.playing = true;
+          if (fsSimPlayBtn) fsSimPlayBtn.textContent = "Pause";
+          resetFullscreenEpisode(selectedFullscreenSeed());
+        });
+      }
+      function applyCartpoleNudge(direction) {
+        if (!fsSimState || fsSimState.terminated) return;
+        const [x, xDot, theta, thetaDot] = fsSimState.state;
+        fsSimState.state = [x, xDot + direction * 0.35, theta, thetaDot + direction * 0.55];
+        fsSimState.lastForce = direction * CARTPOLE_FORCE_MAG;
+        renderCartpoleLiveFrame(
+          fsCanvasEl,
+          fsSimState.state,
+          fsSimState.lastForce,
+          fsSimState.step,
+          fsSimState.maxSteps
+        );
+        renderFullscreenTelemetry();
+      }
+      if (fsSimNudgeLBtn) fsSimNudgeLBtn.addEventListener("click", () => applyCartpoleNudge(-1));
+      if (fsSimNudgeRBtn) fsSimNudgeRBtn.addEventListener("click", () => applyCartpoleNudge(1));
+
+      if (fsSimHeldoutBtn) {
+        fsSimHeldoutBtn.addEventListener("click", () => {
+          if (!fsSimState || !fsHeldoutStatusEl) return;
+          const res = evaluateCartpoleSummary(fsSimState.genome, HELD_OUT_EVAL_SEEDS);
+          const status = res.solved
+            ? "SOLVED (all 10 unseen initial states >= 490/500)"
+            : (res.meanSteps >= 200 ? "Partial balance — keep selecting top balancers" : "Unconverged");
+          fsHeldoutStatusEl.style.color = res.solved
+            ? "var(--ok)"
+            : (res.meanSteps >= 200 ? "var(--gold)" : "var(--bad)");
+          fsHeldoutStatusEl.textContent =
+            `10 held-out seeds: mean ${res.meanSteps}/${fsSimState.maxSteps} · min ${res.minSteps}/${fsSimState.maxSteps} · ${status} · [${res.perSeed.join(", ")}]`;
+          fsHeldoutStatusEl.hidden = false;
+        });
+      }
+
+      if (fsSimVideoBtn) {
+        fsSimVideoBtn.addEventListener("click", async () => {
+          if (!fsSimState) return;
+          const targetGenome = fsSimState.genome;
+          const targetTask = fsSimState.taskId;
+          const targetSeed = fsSimState.seed;
+          fsSimVideoBtn.disabled = true;
+          fsSimVideoBtn.textContent = "Rendering...";
+          try {
+            const res = await fetch(`${basePath}/api/render/video/`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-CSRFToken": csrfToken,
+              },
+              body: JSON.stringify({
+                task: targetTask,
+                genome: targetGenome,
+                seed: targetSeed,
+              }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.ok || !data.videoUrl) {
+              throw new Error(data.error || "Could not render MP4 video.");
+            }
+            if (!fsSimState || fsSimState.genome !== targetGenome) return;
+            fsVideoEl.poster = data.posterUrl || "";
+            fsVideoEl.src = data.videoUrl;
+            fsVideoDlEl.href = data.videoUrl;
+            fsVideoCaptionEl.textContent =
+              `Server MP4 · seed=${data.seed} · ${data.steps}/${fsSimState.maxSteps} steps · return=${data.return}`;
+            fsVideoWrapEl.hidden = false;
+            fsVideoEl.play().catch(() => {});
+          } catch (err) {
+            if (fsHeldoutStatusEl) {
+              fsHeldoutStatusEl.style.color = "var(--bad)";
+              fsHeldoutStatusEl.textContent = err.message || "MP4 render failed.";
+              fsHeldoutStatusEl.hidden = false;
+            }
+          } finally {
+            if (fsSimVideoBtn) {
+              fsSimVideoBtn.disabled = false;
+              fsSimVideoBtn.textContent = "Render .mp4";
+            }
+          }
+        });
       }
 
       fsCloseBtn.addEventListener("click", closeFullscreen);
@@ -4556,18 +6052,22 @@
         const goal = goalsByName.get(activeGoalName);
         if (goal && fullscreenIdx !== null) sendVote(goal, fullscreenIdx, -1);
       });
-      fsDlBtn.addEventListener("click", () => {
+      function triggerFullscreenDownload(format) {
         if (fullscreenNode !== null) {
-          downloadPolicy({
+          const parentGoal = goalsByName.get(fullscreenNode.goalName);
+          downloadExportedPolicy({
             name: fullscreenNode.goalName,
+            task: parentGoal ? goalTaskId(parentGoal) : "image",
             generation: fullscreenNode.node.gen,
             genomes: [fullscreenNode.node],
-          }, 0);
+          }, 0, format);
           return;
         }
         const goal = goalsByName.get(activeGoalName);
-        if (goal && fullscreenIdx !== null) downloadPolicy(goal, fullscreenIdx);
-      });
+        if (goal && fullscreenIdx !== null) downloadExportedPolicy(goal, fullscreenIdx, format);
+      }
+      if (fsDlPtBtn) fsDlPtBtn.addEventListener("click", () => triggerFullscreenDownload("pt"));
+      fsDlBtn.addEventListener("click", () => triggerFullscreenDownload("zip"));
       fsPrevBtn.addEventListener("click", () => {
         const goal = goalsByName.get(activeGoalName);
         if (!goal || !goal.genomes.length || fullscreenIdx === null || fullscreenNode !== null) return;

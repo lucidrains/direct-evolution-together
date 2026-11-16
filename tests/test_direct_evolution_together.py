@@ -175,8 +175,14 @@ def test_e2e_chat_persistence_cursor_and_evolution():
         with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice") as a1:
             assert _recv_until(a1, "identity")["username"] == "alice"
             evo0 = _recv_until(a1, "evolution_state")
-            assert [g["name"] for g in evo0["goals"]] == ["Butterfly", "Galaxy", "Creature"]
+            assert [g["name"] for g in evo0["goals"]] == ["CartPole", "Butterfly", "Galaxy", "Creature"]
+            assert evo0["goals"][0]["task"] == "cartpole"
+            assert evo0["goals"][0]["minVotes"] == 30
+            assert evo0["goals"][0]["eliteFrac"] == 0.0
             assert len(evo0["goals"][0]["genomes"]) == 12
+            assert evo0["goals"][1]["task"] == "image"
+            assert evo0["goals"][1]["minVotes"] == 2
+            assert len(evo0["goals"][1]["genomes"]) == 12
 
             with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice") as a2:
                 assert _recv_until(a2, "identity")["username"] == "alice-2"
@@ -457,6 +463,26 @@ def test_ws_voting_threshold_and_generation_guard():
             }))
             v_ok = _recv_until(bob, "votes_updated")
             assert v_ok["totalVotes"] == 1 and v_ok["likedCandidates"] == 1
+
+    # Public CPPN image room always lets one researcher vote up to required quorum (>= minVotes)
+    with _ws_server(seed=False, pop_size=24, min_votes=20, max_votes=5) as port:
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=solo") as ws_solo:
+            evo = _recv_until(ws_solo, "evolution_state")
+            galaxy = next(g for g in evo["goals"] if g["name"] == "Galaxy")
+            assert galaxy["minVotes"] == 20
+            assert galaxy["maxVotesPerUser"] == 20
+            mummy_ws.set_round_config(20, 60)
+            for idx in range(20):
+                ws_solo.send(json.dumps({
+                    "type": "cast_vote",
+                    "goal": "Galaxy",
+                    "generation": 0,
+                    "index": idx,
+                    "vote": 1 if idx == 0 else -1,
+                }))
+                _recv_until(ws_solo, "votes_updated")
+            gen1 = _recv_until(ws_solo, "goal_updated", timeout=3.0)
+            assert gen1["goal"]["name"] == "Galaxy" and gen1["goal"]["generation"] == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -976,3 +1002,461 @@ def test_e2e_download_weights_reseed_new_room_and_evolve(client, monkeypatch):
             assert async_goal["genomes"][0]["op"] == "seed"
             assert async_goal["genomes"][0]["weights"] == saved_gen2_genome["weights"]
             assert all(g["op"] == "random" for g in async_goal["genomes"][1:])
+
+
+def test_cartpole_substrate_js_python_parity_and_convergence():
+    from pathlib import Path
+    import random as py_random
+    from direct_evolution_together.environments import (
+        cartpole_rollout,
+        evaluate_control_genome,
+        get_task_spec,
+        mulberry32,
+    )
+
+    # 1. Exact Python <-> JS physics, PRNG, and HyperNEAT substrate rollout parity
+    html_text = (
+        Path(__file__).resolve().parent.parent
+        / "direct_evolution_together"
+        / "templates"
+        / "direct_evolution_together"
+        / "index.html"
+    ).read_text(encoding="utf-8")
+    p_start = html_text.index("function applyActivation(")
+    p_end = html_text.index("const controlEvalCache =")
+    js_core = "\n".join(
+        [
+            "const genomeFingerprints = new WeakMap();",
+            'function genomeFingerprint(g) { return String((g && g.id) || "g0"); }',
+            html_text[p_start:p_end],
+            """
+            const input = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const prng = mulberry32(input.seed);
+            const prngSamples = [prng(), prng(), prng(), prng()];
+            const ro = cartpoleRollout(input.genome, input.seed, input.maxSteps);
+            process.stdout.write(JSON.stringify({ prngSamples, rollout: ro }));
+            """,
+        ]
+    )
+
+    pop = create_random_population(pop_size=4)
+    for seed in (0, 7, 42):
+        py_rng = mulberry32(seed)
+        py_samples = [py_rng() for _ in range(4)]
+        py_ro = cartpole_rollout(pop[0], seed=seed, max_steps=500)
+        proc = subprocess.run(
+            ["node", "-e", js_core],
+            input=json.dumps({"genome": pop[0], "seed": seed, "maxSteps": 500}),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        js_res = json.loads(proc.stdout)
+        assert py_samples == pytest.approx(js_res["prngSamples"], abs=1e-12)
+        assert py_ro["steps"] == js_res["rollout"]["steps"]
+        for s_py, s_js in zip(py_ro["states"][:10], js_res["rollout"]["states"][:10]):
+            assert list(s_py) == pytest.approx(s_js, abs=1e-5)
+
+    # 2. Fast convergence with Stanley's CPPN + HyperNEAT (4->8->1) and zero elitism on pop=16 within 20 gens
+    spec = get_task_spec("cartpole")
+    assert spec.substrate_dims == (4, 8, 1)
+    assert spec.default_pop_size == 16
+    assert spec.max_pop_size == 32
+    assert spec.default_min_votes == 30
+    assert spec.default_elite_frac == 0.0
+
+    saved_state = py_random.getstate()
+    py_random.seed(2026)
+    torch_state = torch.random.get_rng_state()
+    torch.manual_seed(2026)
+    try:
+        evo_pop = create_random_population(pop_size=16)
+        solved_gen = None
+        best_heldout = None
+        saw_zero_elitism = False
+        for gen in range(20):
+            ranked = sorted(
+                (
+                    (
+                        evaluate_control_genome("cartpole", g, seeds=spec.eval_seeds),
+                        i,
+                    )
+                    for i, g in enumerate(evo_pop)
+                ),
+                key=lambda item: (item[0]["meanSteps"], -item[0]["meanAbsX"]),
+                reverse=True,
+            )
+            top_candidate = evo_pop[ranked[0][1]]
+            heldout = evaluate_control_genome("cartpole", top_candidate, seeds=tuple(range(100, 110)))
+            best_heldout = heldout
+            if heldout["minSteps"] >= 490 and gen > 0:
+                solved_gen = gen
+                break
+            votes = [0] * len(evo_pop)
+            up_counts = [0] * len(evo_pop)
+            for rank_pos, (_, idx) in enumerate(ranked[:3]):
+                votes[idx] = 3 - rank_pos
+                up_counts[idx] = 1
+            evo_pop, _ = evolve_population(
+                evo_pop,
+                votes,
+                up_counts,
+                mut_sigma=0.35,
+                pop_size=16,
+                elite_frac=0.0,
+                crossover_rate=0.75,
+            )
+            assert all(g["op"] != "elite" for g in evo_pop)
+            saw_zero_elitism = True
+        assert saw_zero_elitism
+        assert solved_gen is not None and solved_gen < 20, f"Did not solve in 20 gens: {best_heldout}"
+        assert best_heldout["meanSteps"] >= 495.0
+    finally:
+        py_random.setstate(saved_state)
+        torch.random.set_rng_state(torch_state)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
+    from direct_evolution_together.models import RoomEvolutionState
+
+    # Legacy lobby DB row without CartPole automatically receives CartPole on seed_from_db
+    legacy_state = json.dumps(
+        [
+            {"name": "Butterfly", "genomes": create_random_population(pop_size=8)},
+            {"name": "Galaxy", "genomes": create_random_population(pop_size=8)},
+            {"name": "Creature", "genomes": create_random_population(pop_size=8)},
+        ]
+    )
+    RoomEvolutionState.objects.update_or_create(room="lobby", defaults={"state_json": legacy_state})
+
+    # Control room pop cap enforcement (>32 rejected)
+    bad_resp = client.post(
+        "/api/rooms/",
+        data=json.dumps({"name": "Too Big CartPole", "task": "cartpole", "population_size": 33}),
+        content_type="application/json",
+    )
+    assert bad_resp.status_code == 400
+
+    # Valid CartPole private room creation seeds Gen 0 immediately
+    ok_resp = client.post(
+        "/api/rooms/",
+        data=json.dumps({"name": "CartPole Lab", "task": "cartpole", "population_size": 16}),
+        content_type="application/json",
+    )
+    assert ok_resp.status_code == 200
+    room_data = ok_resp.json()
+    assert room_data["task"] == "cartpole"
+    assert room_data["population_size"] == 16
+    from direct_evolution_together.environments import evaluate_control_genome
+
+    page_html = client.get(room_data["url"]).content.decode()
+    assert "CartPole" in page_html
+    assert "advance-round-btn" not in page_html
+    assert "Evolve now" not in page_html
+    assert '<footer class="site-footer">' in page_html
+    assert "justify-content: flex-end;" in page_html.split(".site-footer {", 1)[1].split("}", 1)[0]
+    footer_part = page_html.split('<footer class="site-footer">', 1)[1].split("</footer>", 1)[0]
+    header_part = page_html.split("<header>", 1)[1].split("</header>", 1)[0]
+    assert "Picbreeder" in footer_part
+    assert "Picbreeder" not in header_part
+    assert '<form id="name-form" class="name-form">' in page_html
+    name_form_html = page_html.split('<form id="name-form"', 1)[1].split("</form>", 1)[0]
+    assert 'class="composer-box"' in name_form_html and 'id="name-btn"' in name_form_html
+    assert 'id="new-room-min-votes"' in page_html and 'id="new-room-max-votes"' in page_html
+    assert 'id="empty-min-votes-input"' in page_html and 'id="empty-max-votes-input"' in page_html
+
+    split_resp = client.post(
+        "/api/rooms/",
+        data=json.dumps({
+            "name": "Quorum Split",
+            "task": "cartpole",
+            "population_size": 8,
+            "min_votes": 12,
+            "max_votes_per_user": 4,
+        }),
+        content_type="application/json",
+    )
+    assert split_resp.status_code == 200
+    split_data = split_resp.json()
+
+    with _ws_server(seed=True, pop_size=12, max_votes=6) as port:
+        seed_from_db()
+        # Check migrated lobby has CartPole prepended with zero elitism, high quorum, and no pre-solved Gen-0 founders
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=mig") as ws_lob:
+            lob_state = _recv_until(ws_lob, "evolution_state")
+            assert [g["name"] for g in lob_state["goals"]] == ["CartPole", "Butterfly", "Galaxy", "Creature"]
+            assert lob_state["goals"][0]["task"] == "cartpole"
+            assert lob_state["goals"][0]["eliteFrac"] == 0.0
+            assert lob_state["goals"][0]["minVotes"] == 30
+            assert all(
+                evaluate_control_genome("cartpole", cand, seeds=(0, 1, 2))["meanSteps"] < 60.0
+                for cand in lob_state["goals"][0]["genomes"]
+            )
+
+        # Verify min_votes (room quorum) and max_votes_per_user are independent on both CartPole & Image rooms
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/{split_data['slug']}/?username=splituser") as ws_split:
+            split_evo = _recv_until(ws_split, "evolution_state")
+            assert split_evo["goals"][0]["minVotes"] == 12
+            assert split_evo["goals"][0]["maxVotesPerUser"] == 4
+
+        with connect(
+            f"ws://127.0.0.1:{port}/ws/chat/p-split-img/?username=imguser&goal=Prism&pop=8&min_votes=6&max_votes=2"
+        ) as ws_img:
+            img_evo = _recv_until(ws_img, "evolution_state")
+            assert img_evo["goals"][0]["minVotes"] == 6
+            assert img_evo["goals"][0]["maxVotesPerUser"] == 2
+
+        # Check pre-seeded CartPole room + create_goal + multi-user high vote quorum -> zero-elite Gen 1
+        mummy_ws.set_round_config(10, 120)
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/{room_data['slug']}/?username=pilot") as ws:
+            evo0 = _recv_until(ws, "evolution_state")
+            goal = evo0["goals"][0]
+            assert goal["task"] == "cartpole"
+            assert goal["minVotes"] == 30
+            assert goal["eliteFrac"] == 0.0
+            assert len(goal["genomes"]) == 16
+            assert all(
+                evaluate_control_genome("cartpole", cand, seeds=(0, 1, 2))["meanSteps"] < 60.0
+                for cand in goal["genomes"]
+            )
+
+            # Create a second CartPole goal in the same private room
+            ws.send(json.dumps({
+                "type": "create_goal",
+                "goal": "Pole Run 2",
+                "task": "cartpole",
+                "population_size": 8,
+                "max_votes_per_user": 6,
+            }))
+            evo_after_create = _recv_until(ws, "evolution_state")
+            created_goals = {g["name"]: g for g in evo_after_create["goals"]}
+            assert "Pole Run 2" in created_goals
+            created = created_goals["Pole Run 2"]
+            assert created["task"] == "cartpole"
+            assert created["minVotes"] == 30
+            assert created["eliteFrac"] == 0.0
+            assert len(created["genomes"]) == 8
+
+            # A small number of votes (6 by one user) must NOT start countdown
+            for idx in range(6):
+                ws.send(json.dumps({
+                    "type": "cast_vote",
+                    "goal": "Pole Run 2",
+                    "generation": 0,
+                    "index": idx,
+                    "vote": 1,
+                }))
+                upd = _recv_until(ws, "votes_updated")
+            assert upd["totalVotes"] == 6
+            assert upd["countdownMs"] == 0
+
+            # Four additional collaborators casting 6 votes each reaches 30 total votes -> evolves Gen 1
+            from contextlib import ExitStack
+
+            with ExitStack() as stack:
+                extra_clients = [
+                    stack.enter_context(
+                        connect(f"ws://127.0.0.1:{port}/ws/chat/{room_data['slug']}/?username=r{c}")
+                    )
+                    for c in range(4)
+                ]
+                for ew in extra_clients:
+                    _recv_until(ew, "evolution_state")
+                for c_idx, ew in enumerate(extra_clients):
+                    for idx in range(6):
+                        ew.send(json.dumps({
+                            "type": "cast_vote",
+                            "goal": "Pole Run 2",
+                            "generation": 0,
+                            "index": (idx + c_idx) % 8,
+                            "vote": 1 if idx < 3 else -1,
+                        }))
+                        _recv_until(ew, "votes_updated")
+                gen1 = _recv_until(ws, "goal_updated", timeout=5.0)["goal"]
+
+            assert gen1["name"] == "Pole Run 2"
+            assert gen1["generation"] == 1
+            assert gen1["task"] == "cartpole"
+            assert gen1["eliteFrac"] == 0.0
+            assert all(g["op"] != "elite" for g in gen1["genomes"])
+
+        # Download Gen 1 CartPole .pt weights directly and resume in a new private CartPole room
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        champ_genome = gen1["genomes"][0]
+        pt_resp = client.post(
+            "/export/weights/",
+            data=json.dumps({
+                "goal": "Pole Run 2",
+                "task": "cartpole",
+                "generation": 1,
+                "index": 0,
+                "genome": champ_genome,
+            }),
+            content_type="application/json",
+        )
+        assert pt_resp.status_code == 200
+        assert 'filename="pole_run_2_g1_0.pt"' in pt_resp["Content-Disposition"]
+
+        resumed_resp = client.post(
+            "/api/rooms/",
+            {
+                "name": "CartPole Resumed",
+                "task": "cartpole",
+                "population_size": "6",
+                "weights": [SimpleUploadedFile("pole_run_2_g1_0.pt", pt_resp.content)],
+            },
+        )
+        assert resumed_resp.status_code == 200
+        resumed_data = resumed_resp.json()
+        assert resumed_data["task"] == "cartpole"
+        assert resumed_data["seeded"] == 1
+
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/{resumed_data['slug']}/?username=resumer") as r_ws:
+            res_evo = _recv_until(r_ws, "evolution_state")
+            res_goal = res_evo["goals"][0]
+            assert res_goal["task"] == "cartpole"
+            assert res_goal["minVotes"] == 30
+            assert res_goal["eliteFrac"] == 0.0
+            assert len(res_goal["genomes"]) == 6
+            assert res_goal["genomes"][0]["op"] == "seed"
+            assert res_goal["genomes"][0]["weights"] == champ_genome["weights"]
+            assert res_goal["genomes"][0]["biases"] == champ_genome["biases"]
+            assert res_goal["genomes"][0]["activations"] == champ_genome["activations"]
+
+
+@pytest.mark.django_db
+def test_lazy_mp4_rendering_range_serving_gzip_exclusion_and_bundle(client, settings, tmp_path):
+    settings.MEDIA_ROOT = tmp_path / "media"
+    genome = create_random_population(pop_size=1)[0]
+
+    # Image task correctly rejects video render endpoint
+    bad_video = client.post(
+        "/api/render/video/",
+        data=json.dumps({"task": "image", "genome": genome}),
+        content_type="application/json",
+    )
+    assert bad_video.status_code == 400
+
+    # Lazy render for CartPole produces MP4 + poster PNG
+    render_resp = client.post(
+        "/api/render/video/",
+        data=json.dumps({"task": "cartpole", "genome": genome, "seed": 0}),
+        content_type="application/json",
+    )
+    assert render_resp.status_code == 200
+    payload = render_resp.json()
+    assert payload["ok"] is True
+    assert payload["videoUrl"].endswith(".mp4")
+    assert payload["posterUrl"].endswith(".png")
+    assert payload["steps"] >= 1
+
+    # Second identical request reuses cached content-addressed files
+    render_resp2 = client.post(
+        "/api/render/video/",
+        data=json.dumps({"task": "cartpole", "genome": genome, "seed": 0}),
+        content_type="application/json",
+    )
+    assert render_resp2.json()["videoUrl"] == payload["videoUrl"]
+
+    # Full MP4 fetch must NOT be gzip-compressed and must advertise byte ranges & immutable cache
+    mp4_resp = client.get(payload["videoUrl"], HTTP_ACCEPT_ENCODING="gzip, deflate")
+    assert mp4_resp.status_code == 200
+    assert mp4_resp["Content-Type"] == "video/mp4"
+    assert mp4_resp["Accept-Ranges"] == "bytes"
+    assert "immutable" in mp4_resp["Cache-Control"]
+    assert not mp4_resp.has_header("Content-Encoding")
+    raw_mp4 = b"".join(mp4_resp.streaming_content) if mp4_resp.streaming else mp4_resp.content
+    assert b"ftyp" in raw_mp4[:64] and b"moov" in raw_mp4
+
+    # Range request -> 206 Partial Content with exact Content-Range slice
+    range_resp = client.get(
+        payload["videoUrl"],
+        HTTP_RANGE="bytes=0-127",
+        HTTP_ACCEPT_ENCODING="gzip",
+    )
+    assert range_resp.status_code == 206
+    assert range_resp["Content-Range"] == f"bytes 0-127/{len(raw_mp4)}"
+    assert not range_resp.has_header("Content-Encoding")
+    part_bytes = b"".join(range_resp.streaming_content) if range_resp.streaming else range_resp.content
+    assert part_bytes == raw_mp4[:128]
+
+    # Poster PNG fetch
+    png_resp = client.get(payload["posterUrl"], HTTP_ACCEPT_ENCODING="gzip")
+    assert png_resp.status_code == 200
+    assert png_resp["Content-Type"] == "image/png"
+    assert not png_resp.has_header("Content-Encoding")
+    raw_png = b"".join(png_resp.streaming_content) if png_resp.streaming else png_resp.content
+    assert raw_png.startswith(b"\x89PNG\r\n\x1a\n")
+
+    # Control bundle export runs standalone via uv run --no-project run.py
+    bundle_resp = client.post(
+        "/export/bundle/",
+        data=json.dumps({"goal": "CartPole", "task": "cartpole", "generation": 1, "index": 0, "genome": genome}),
+        content_type="application/json",
+    )
+    assert bundle_resp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(bundle_resp.content)) as zf:
+        zf.extractall(tmp_path)
+    run_dir = tmp_path / "cartpole_g1_0"
+    proc = subprocess.run(
+        ["uv", "run", "--no-project", "run.py"],
+        cwd=run_dir,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "Evaluated 10 held-out episodes" in proc.stdout
+    assert (run_dir / "out.mp4").is_file()
+
+
+def test_nginx_conf_handles_media_and_compression_for_subpath_and_root():
+    import fabfile
+
+    base_cfg = fabfile.DeployConfig(
+        host="example.com",
+        user="ubuntu",
+        app_name="direct-evolution-together",
+        deploy_dir="/srv/det",
+        domain="example.com",
+        subpath="/evolution",
+        http_port=8000,
+        ws_port=8001,
+        uvicorn_workers=2,
+        python_version="3.11",
+        cuda_visible_devices="",
+        nginx_vhost_file="/etc/nginx/sites-enabled/det",
+        secret_key="secret",
+        admin_password="pw",
+        allowed_hosts="*",
+        csrf_trusted_origins="https://example.com",
+        pop_size=30,
+        min_votes="",
+        max_votes=10,
+        mut_sigma="0.35",
+        elite_frac="0.10",
+        crossover_rate="0.75",
+    )
+    assert base_cfg.media_dir == "/srv/det/data/media"
+    sub_conf = fabfile._render_nginx_conf(base_cfg)
+    assert "location ^~ /evolution/media/ {" in sub_conf
+    assert "alias /srv/det/data/media/;" in sub_conf
+    assert "gzip off;" in sub_conf
+    assert "sendfile on;" in sub_conf
+    assert "expires 365d;" in sub_conf
+    assert 'add_header Cache-Control "public, max-age=31536000, immutable" always;' in sub_conf
+    assert "client_max_body_size 4m;" in sub_conf
+    assert "proxy_buffering off;" in sub_conf
+    assert "proxy_send_timeout 86400;" in sub_conf
+    assert "gzip on;" in sub_conf
+    assert "text/html" not in sub_conf
+
+    root_cfg = fabfile.DeployConfig(**{**base_cfg.__dict__, "subpath": "", "nginx_vhost_file": ""})
+    root_conf = fabfile._render_nginx_conf(root_cfg)
+    assert "location ^~ /media/ {" in root_conf
+    assert "alias /srv/det/data/media/;" in root_conf
+    assert "gzip off;" in root_conf
+    assert "server {" in root_conf
+
+

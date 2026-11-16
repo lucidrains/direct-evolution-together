@@ -8,15 +8,29 @@ from django.db import close_old_connections
 
 from direct_evolution_together import mummy_ws
 from direct_evolution_together.cppn import (
-    create_random_population,
     evolve_population,
     resize_population,
     sync_genome_counter,
 )
+from direct_evolution_together.environments import (
+    clamp_pop_for_task,
+    create_task_population,
+    default_elite_for_task,
+    default_pop_for_task,
+    evaluate_control_genome,
+    get_task_spec,
+    normalize_task_id,
+)
 from direct_evolution_together.models import ChatMessage, RoomEvolutionState
 
 HISTORY_LIMIT = 100
-DEFAULT_GOALS = ("Butterfly", "Galaxy", "Creature")
+DEFAULT_GOAL_SPECS: tuple[tuple[str, str, int | None], ...] = (
+    ("CartPole", "cartpole", 16),
+    ("Butterfly", "image", None),
+    ("Galaxy", "image", None),
+    ("Creature", "image", None),
+)
+DEFAULT_GOALS = tuple(name for name, _, _ in DEFAULT_GOAL_SPECS)
 
 _bridge_lock = threading.Lock()
 _stop_event = threading.Event()
@@ -25,38 +39,11 @@ _started = False
 _persist_to_db = False
 
 
-def _build_goals_payload(
-    goal_names: tuple[str, ...] = DEFAULT_GOALS,
-    pop_size: int = 30,
-) -> str:
-    return json.dumps(
-        [
-            {"name": name, "genomes": create_random_population(pop_size=pop_size)}
-            for name in goal_names
-        ]
-    )
-
-
-def build_room_state_json(
-    goal_name: str,
-    genomes: list[dict],
-    *,
-    max_votes_per_user: int = 20,
-    mut_sigma: float = 0.30,
-    elite_frac: float = 0.20,
-    crossover_rate: float = 0.75,
-) -> str:
-    """Serialize initial Generation-0 room state matching Mummy's RoomEvolutionState schema."""
-    params = {
-        "maxVotesPerUser": int(max_votes_per_user),
-        "mutSigma": float(mut_sigma),
-        "eliteFrac": float(elite_frac),
-        "crossoverRate": float(crossover_rate),
-    }
-    lineage = [
+def _build_lineage_from_genomes(genomes: list[dict], gen: int = 0) -> list[dict]:
+    return [
         {
             "id": int(g["id"]),
-            "gen": 0,
+            "gen": gen,
             "parents": [int(p) for p in g.get("parents", [])],
             "op": str(g.get("op", "random")),
             "weights": g["weights"],
@@ -65,12 +52,78 @@ def build_room_state_json(
         }
         for g in genomes
     ]
+
+
+def _build_goal_entry(
+    name: str,
+    task: str,
+    pop_size: int,
+) -> dict:
+    clean_task = normalize_task_id(task)
+    spec = get_task_spec(clean_task)
+    eff_pop = clamp_pop_for_task(clean_task, pop_size)
+    entry: dict = {
+        "name": name,
+        "task": clean_task,
+        "minVotes": spec.default_min_votes,
+        "genomes": create_task_population(clean_task, eff_pop),
+    }
+    if spec.default_elite_frac is not None:
+        entry["eliteFrac"] = float(spec.default_elite_frac)
+    return entry
+
+
+def _build_goals_payload(
+    goal_specs: tuple[tuple[str, str, int | None], ...] | tuple[str, ...] = DEFAULT_GOAL_SPECS,
+    pop_size: int = 30,
+) -> str:
+    entries: list[dict] = []
+    for item in goal_specs:
+        if isinstance(item, tuple):
+            name, task, cap_pop = item
+            target_pop = min(pop_size, cap_pop) if cap_pop is not None else pop_size
+        else:
+            name, task = str(item), "image"
+            target_pop = pop_size
+        entries.append(_build_goal_entry(name, task, target_pop))
+    return json.dumps(entries)
+
+
+def build_room_state_json(
+    goal_name: str,
+    genomes: list[dict],
+    *,
+    task: str = "image",
+    min_votes: int | None = None,
+    max_votes_per_user: int = 20,
+    mut_sigma: float = 0.30,
+    elite_frac: float | None = None,
+    crossover_rate: float = 0.75,
+) -> str:
+    """Serialize initial Generation-0 room state matching Mummy's RoomEvolutionState schema."""
+    clean_task = normalize_task_id(task)
+    spec = get_task_spec(clean_task)
+    eff_min_votes = spec.default_min_votes if min_votes is None else int(min_votes)
+    eff_elite_frac = (
+        default_elite_for_task(clean_task, 0.20)
+        if elite_frac is None
+        else max(0.0, min(0.5, float(elite_frac)))
+    )
+    params = {
+        "maxVotesPerUser": int(max_votes_per_user),
+        "minVotes": int(eff_min_votes),
+        "mutSigma": float(mut_sigma),
+        "eliteFrac": float(eff_elite_frac),
+        "crossoverRate": float(crossover_rate),
+    }
+    lineage = _build_lineage_from_genomes(genomes, gen=0)
     return json.dumps(
         {
             "defaultParams": params,
             "goals": [
                 {
                     "name": goal_name,
+                    "task": clean_task,
                     "generation": 0,
                     "genomes": genomes,
                     "lineage": lineage,
@@ -101,7 +154,93 @@ def _max_genome_id_in_state(state_json: str) -> int:
     return max_id
 
 
-def seed_from_db() -> None:
+def _ensure_lobby_default_goals(
+    state_json: str,
+    default_pop_size: int = 30,
+    default_max_votes: int | None = None,
+) -> tuple[str, bool]:
+    """Ensure newly added default lobby goals are seeded and vote caps match runtime config."""
+    try:
+        parsed = json.loads(state_json)
+    except ValueError:
+        return state_json, False
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("goals"), list):
+        return state_json, False
+
+    existing = {str(g.get("name", "")) for g in parsed["goals"] if isinstance(g, dict)}
+    base_params = parsed.get("defaultParams") if isinstance(parsed.get("defaultParams"), dict) else {}
+    changed = False
+    if (
+        default_max_votes is not None
+        and isinstance(base_params, dict)
+        and int(base_params.get("maxVotesPerUser", 0)) < int(default_max_votes)
+    ):
+        base_params["maxVotesPerUser"] = int(default_max_votes)
+        changed = True
+    for g in parsed["goals"]:
+        if not isinstance(g, dict):
+            continue
+        p = g.get("params")
+        if (
+            default_max_votes is not None
+            and isinstance(p, dict)
+            and int(p.get("maxVotesPerUser", 0)) < int(default_max_votes)
+        ):
+            p["maxVotesPerUser"] = int(default_max_votes)
+            changed = True
+        if g.get("task") == "cartpole" and int(g.get("generation", 0)) == 0:
+            cp_spec = get_task_spec("cartpole")
+            p = g.get("params")
+            if isinstance(p, dict):
+                if int(p.get("minVotes", 0)) < cp_spec.default_min_votes:
+                    p["minVotes"] = int(cp_spec.default_min_votes)
+                    changed = True
+                if float(p.get("eliteFrac", 0.0)) != 0.0:
+                    p["eliteFrac"] = 0.0
+                    changed = True
+            cur_genomes = g.get("genomes")
+            if isinstance(cur_genomes, list) and cur_genomes and any(
+                evaluate_control_genome("cartpole", cg, seeds=cp_spec.eval_seeds)["meanSteps"] >= 60.0
+                for cg in cur_genomes
+            ):
+                fresh = create_task_population("cartpole", len(cur_genomes))
+                g["genomes"] = fresh
+                g["lineage"] = _build_lineage_from_genomes(fresh, gen=0)
+                changed = True
+    added: list[dict] = []
+    for name, task, cap_pop in DEFAULT_GOAL_SPECS:
+        if name in existing:
+            continue
+        spec = get_task_spec(task)
+        t_pop = min(default_pop_size, cap_pop) if cap_pop is not None else default_pop_size
+        genomes = create_task_population(task, t_pop)
+        params = {
+            "maxVotesPerUser": int(base_params.get("maxVotesPerUser", 20)),
+            "minVotes": int(spec.default_min_votes),
+            "mutSigma": float(base_params.get("mutSigma", 0.30)),
+            "eliteFrac": default_elite_for_task(task, float(base_params.get("eliteFrac", 0.20))),
+            "crossoverRate": float(base_params.get("crossoverRate", 0.75)),
+        }
+        added.append(
+            {
+                "name": name,
+                "task": task,
+                "generation": 0,
+                "genomes": genomes,
+                "lineage": _build_lineage_from_genomes(genomes, gen=0),
+                "params": params,
+            }
+        )
+    if not added and not changed:
+        return state_json, False
+
+    if added:
+        # Place newly added control defaults at the front so visitors immediately see them.
+        parsed["goals"] = added + parsed["goals"]
+    return json.dumps(parsed), True
+
+
+def seed_from_db(default_pop_size: int = 30, default_max_votes: int | None = None) -> None:
     """Seed Mummy's per-room chat history and evolved room states from Django DB."""
     close_old_connections()
     rooms = list(ChatMessage.objects.values_list("room", flat=True).distinct())
@@ -115,8 +254,21 @@ def seed_from_db() -> None:
 
     max_id = 0
     for row in RoomEvolutionState.objects.all():
-        max_id = max(max_id, _max_genome_id_in_state(row.state_json))
-        mummy_ws.restore_room_state(row.room, row.state_json)
+        state_json = row.state_json
+        max_id = max(max_id, _max_genome_id_in_state(state_json))
+        sync_genome_counter(max_id)
+        if row.room == "lobby":
+            updated_json, changed = _ensure_lobby_default_goals(
+                state_json,
+                default_pop_size=default_pop_size,
+                default_max_votes=default_max_votes,
+            )
+            if changed:
+                state_json = updated_json
+                row.state_json = state_json
+                row.save(update_fields=["state_json", "updated_at"])
+                max_id = max(max_id, _max_genome_id_in_state(state_json))
+        mummy_ws.restore_room_state(row.room, state_json)
     sync_genome_counter(max_id)
 
 
@@ -167,7 +319,8 @@ def flush_evo_jobs() -> int:
     for job in jobs:
         kind = job["kind"]
         room = job["room"]
-        pop_size = int(job.get("populationSize") or 30)
+        task = normalize_task_id(job.get("task", "image"))
+        pop_size = clamp_pop_for_task(task, int(job.get("populationSize") or default_pop_for_task(task)))
         if kind == "init_room":
             if _persist_to_db:
                 close_old_connections()
@@ -178,16 +331,16 @@ def flush_evo_jobs() -> int:
                     continue
             initial_goal = (job.get("goal") or "").strip()
             if initial_goal:
-                goal_names: tuple[str, ...] = (initial_goal,)
+                goal_specs: tuple[tuple[str, str, int | None], ...] = ((initial_goal, task, pop_size),)
             elif room != "lobby":
-                goal_names = ()
+                goal_specs = ()
             else:
-                goal_names = DEFAULT_GOALS
+                goal_specs = DEFAULT_GOAL_SPECS
             mummy_ws.apply_room_init(
-                room, _build_goals_payload(goal_names, pop_size=pop_size)
+                room, _build_goals_payload(goal_specs, pop_size=pop_size)
             )
         elif kind == "create":
-            genomes = create_random_population(pop_size=pop_size)
+            genomes = create_task_population(task, pop_size)
             mummy_ws.apply_goal_create(
                 room, job["goal"], job["username"], json.dumps(genomes)
             )
@@ -246,11 +399,14 @@ def start_ws_server(
     seed: bool = True,
     pop_size: int = 30,
     min_votes: int | None = None,
+    min_votes_override: bool = False,
+    countdown_ms: int = 8000,
     max_votes: int = 20,
     mut_sigma: float = 0.30,
     elite_frac: float = 0.20,
     crossover_rate: float = 0.75,
     admin_password: str | None = None,
+    evolve_token: str | None = None,
 ) -> None:
     """Start the Nim Mummy WebSocket server and background PyTorch/ORM bridge loop."""
     global _worker_thread, _started, _persist_to_db
@@ -260,13 +416,18 @@ def start_ws_server(
         _persist_to_db = bool(seed)
         resolved_admin_pw = os.getenv("DET_ADMIN_PASSWORD", "") if admin_password is None else admin_password
         mummy_ws.set_admin_password(resolved_admin_pw)
-        if min_votes is not None:
-            mummy_ws.set_round_config(int(min_votes), 8000)
+        mummy_ws.set_evolve_token(evolve_token or "")
+        if min_votes is not None or countdown_ms != 8000:
+            mummy_ws.set_round_config(
+                0 if min_votes is None else int(min_votes),
+                int(countdown_ms),
+                bool(min_votes_override),
+            )
         mummy_ws.set_default_population_size(int(pop_size))
         mummy_ws.set_default_max_votes(int(max_votes))
         mummy_ws.set_default_ga_params(float(mut_sigma), float(elite_frac), float(crossover_rate))
         if seed:
-            seed_from_db()
+            seed_from_db(default_pop_size=int(pop_size), default_max_votes=int(max_votes))
         if not mummy_ws.has_room_evolution("lobby"):
             mummy_ws.seed_room_goals("lobby", _build_goals_payload(pop_size=int(pop_size)))
         if _persist_to_db:

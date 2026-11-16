@@ -2,7 +2,9 @@ import base64
 import hmac
 import io
 import json
+import mimetypes
 import os
+from pathlib import Path, PurePosixPath
 import secrets
 import urllib.error
 import urllib.parse
@@ -11,7 +13,14 @@ import zipfile
 
 from django.conf import settings
 from django.core.exceptions import RequestDataTooBig, TooManyFilesSent
-from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.http import (
+    FileResponse,
+    Http404,
+    HttpRequest,
+    HttpResponse,
+    HttpResponseBadRequest,
+    JsonResponse,
+)
 from django.shortcuts import render
 from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
@@ -26,13 +35,53 @@ from direct_evolution_together.cppn import (
     MAX_UPLOAD_FILES,
     MIN_POPULATION_SIZE,
     build_runner_script,
-    create_random_population,
     create_seeded_population,
     parse_uploaded_strain_bytes,
     save_cppn_bytes,
     slugify_policy_name,
+    validate_genome_dict,
+)
+from direct_evolution_together.environments import (
+    create_task_population,
+    default_elite_for_task,
+    get_task_spec,
+    get_task_specs_payload,
+    normalize_task_id,
+    render_task_media,
 )
 from direct_evolution_together.models import Room, RoomEvolutionState
+
+
+_LOOPBACK_ADDRS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
+
+
+def _is_loopback_request(request: HttpRequest) -> bool:
+    remote_addr = str(request.META.get("REMOTE_ADDR", "")).strip()
+    if remote_addr not in _LOOPBACK_ADDRS:
+        return False
+    forwarded = str(request.META.get("HTTP_X_FORWARDED_FOR", "")).strip()
+    if forwarded:
+        client_ip = forwarded.split(",", 1)[0].strip()
+        if client_ip not in _LOOPBACK_ADDRS:
+            return False
+    return True
+
+
+def _resolve_evolve_now_access(request: HttpRequest) -> bool:
+    if not settings.EVOLVE_NOW_TOKEN:
+        return False
+    access_key = settings.EVOLVE_NOW_SECRET or settings.ADMIN_PASSWORD
+    raw_param = request.GET.get("evolve", "").strip()
+    if raw_param == "0":
+        request.session.pop("det_evolve_token", None)
+        return False
+    if access_key and raw_param and hmac.compare_digest(raw_param, access_key):
+        request.session["det_evolve_token"] = settings.EVOLVE_NOW_TOKEN
+        return True
+    if settings.EVOLVE_NOW_LOCAL and _is_loopback_request(request):
+        return True
+    sess_token = str(request.session.get("det_evolve_token", ""))
+    return bool(access_key and sess_token and hmac.compare_digest(sess_token, settings.EVOLVE_NOW_TOKEN))
 
 
 def _resolve_base_path(request: HttpRequest) -> str:
@@ -67,43 +116,37 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
             room_title = meta["name"]
             room_description = meta["description"]
     initial_goal = request.GET.get("goal", "").strip()[:32]
-    initial_pop = settings.POPULATION_SIZE
-    raw_pop = request.GET.get("pop", "").strip()
-    if raw_pop:
-        try:
-            initial_pop = max(3, min(64, int(raw_pop)))
-        except ValueError:
-            initial_pop = settings.POPULATION_SIZE
-    initial_max_votes = settings.MAX_VOTES_PER_USER
-    raw_max_votes = request.GET.get("max_votes", "").strip()
-    if raw_max_votes:
-        try:
-            initial_max_votes = max(1, min(64, int(raw_max_votes)))
-        except ValueError:
-            initial_max_votes = settings.MAX_VOTES_PER_USER
-    initial_mut_sigma = settings.MUTATION_SIGMA
-    raw_sigma = request.GET.get("sigma", "").strip()
-    if raw_sigma:
-        try:
-            initial_mut_sigma = max(0.05, min(1.0, float(raw_sigma)))
-        except ValueError:
-            initial_mut_sigma = settings.MUTATION_SIGMA
-    initial_elite_frac = settings.ELITE_FRAC
-    raw_elite = request.GET.get("elite_frac", "").strip()
-    if raw_elite:
-        try:
-            initial_elite_frac = max(0.0, min(0.5, float(raw_elite)))
-        except ValueError:
-            initial_elite_frac = settings.ELITE_FRAC
-    initial_crossover_rate = settings.CROSSOVER_RATE
-    raw_crossover = request.GET.get("crossover", "").strip()
-    if raw_crossover:
-        try:
-            initial_crossover_rate = max(0.0, min(1.0, float(raw_crossover)))
-        except ValueError:
-            initial_crossover_rate = settings.CROSSOVER_RATE
+    initial_task = normalize_task_id(request.GET.get("task", ""))
+    task_spec = get_task_spec(initial_task)
+    default_pop = (
+        min(settings.POPULATION_SIZE, task_spec.default_pop_size)
+        if task_spec.kind == "control"
+        else settings.POPULATION_SIZE
+    )
+    default_min_votes = task_spec.default_min_votes or settings.MIN_VOTES
+    raw_min_votes = request.GET.get("min_votes", "").strip()
+    initial_min_votes_explicit = bool(raw_min_votes) or task_spec.default_min_votes > 0
+    default_elite = default_elite_for_task(initial_task, settings.ELITE_FRAC)
+
+    initial_pop = _parse_clamped_int_param(
+        request.GET.get("pop"), default_pop, MIN_POPULATION_SIZE, task_spec.max_pop_size
+    )
+    initial_min_votes = _parse_clamped_int_param(raw_min_votes, default_min_votes, 1, 256)
+    initial_max_votes = _parse_clamped_int_param(
+        request.GET.get("max_votes"), settings.MAX_VOTES_PER_USER, 1, 64
+    )
+    initial_mut_sigma = _parse_clamped_float_param(
+        request.GET.get("sigma"), settings.MUTATION_SIGMA, 0.05, 1.0
+    )
+    initial_elite_frac = _parse_clamped_float_param(
+        request.GET.get("elite_frac"), default_elite, 0.0, 0.5
+    )
+    initial_crossover_rate = _parse_clamped_float_param(
+        request.GET.get("crossover"), settings.CROSSOVER_RATE, 0.0, 1.0
+    )
     base_path = _resolve_base_path(request)
     ws_via_proxy = bool(getattr(settings, "WS_VIA_PROXY", False) or base_path)
+    can_evolve_now = _resolve_evolve_now_access(request)
     return render(
         request,
         "direct_evolution_together/index.html",
@@ -116,12 +159,19 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
             "room_title": room_title,
             "room_description": room_description,
             "is_private": room != "lobby",
+            "can_evolve_now": can_evolve_now,
+            "evolve_token": settings.EVOLVE_NOW_TOKEN if can_evolve_now else "",
             "initial_goal": initial_goal,
+            "initial_task": initial_task,
             "initial_pop": initial_pop,
+            "initial_min_votes": initial_min_votes,
+            "initial_min_votes_explicit": initial_min_votes_explicit,
+            "default_min_votes": settings.MIN_VOTES,
             "initial_max_votes": initial_max_votes,
             "initial_mut_sigma": f"{initial_mut_sigma:.2f}",
             "initial_elite_frac": f"{initial_elite_frac:.2f}",
             "initial_crossover_rate": f"{initial_crossover_rate:.2f}",
+            "task_specs": get_task_specs_payload(),
         },
     )
 
@@ -300,6 +350,8 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
 
     name = str(payload.get("name") or "").strip()[:64]
     description = str(payload.get("description") or "").strip()[:280]
+    task = normalize_task_id(str(payload.get("task") or "image"))
+    task_spec = get_task_spec(task)
     if not name:
         return JsonResponse({"error": "Room name is required."}, status=400)
 
@@ -312,55 +364,72 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
                 {
                     "error": (
                         f"Population size must be an integer between "
-                        f"{MIN_POPULATION_SIZE} and {MAX_POPULATION_SIZE}."
+                        f"{MIN_POPULATION_SIZE} and {task_spec.max_pop_size}."
                     )
                 },
                 status=400,
             )
-        if not (MIN_POPULATION_SIZE <= pop_size <= MAX_POPULATION_SIZE):
+        if not (MIN_POPULATION_SIZE <= pop_size <= task_spec.max_pop_size):
             return JsonResponse(
                 {
                     "error": (
                         f"Population size must be between "
-                        f"{MIN_POPULATION_SIZE} and {MAX_POPULATION_SIZE}."
+                        f"{MIN_POPULATION_SIZE} and {task_spec.max_pop_size}."
                     )
                 },
                 status=400,
             )
     else:
-        pop_size = int(settings.POPULATION_SIZE)
+        pop_size = (
+            min(int(settings.POPULATION_SIZE), task_spec.default_pop_size)
+            if task_spec.kind == "control"
+            else int(settings.POPULATION_SIZE)
+        )
 
     base_path = _resolve_base_path(request)
     seeded_meta: dict | None = None
 
-    if uploaded_files:
-        try:
-            seed_genomes = [
-                genome
-                for _, genome, _ in _extract_uploaded_strains(uploaded_files, MAX_POPULATION_SIZE)
-            ]
-        except ValueError as exc:
-            return JsonResponse({"error": str(exc)}, status=400)
+    if uploaded_files or task != "image":
+        if uploaded_files:
+            try:
+                seed_genomes = [
+                    genome
+                    for _, genome, _ in _extract_uploaded_strains(uploaded_files, task_spec.max_pop_size)
+                ]
+            except ValueError as exc:
+                return JsonResponse({"error": str(exc)}, status=400)
 
-        if len(seed_genomes) > pop_size:
-            return JsonResponse(
-                {
-                    "error": (
-                        f"Uploaded strains ({len(seed_genomes)}) cannot exceed "
-                        f"total population size ({pop_size})."
-                    )
-                },
-                status=400,
-            )
+            if len(seed_genomes) > pop_size:
+                return JsonResponse(
+                    {
+                        "error": (
+                            f"Uploaded strains ({len(seed_genomes)}) cannot exceed "
+                            f"total population size ({pop_size})."
+                        )
+                    },
+                    status=400,
+                )
 
-        try:
-            genomes = create_seeded_population(seed_genomes, pop_size=pop_size)
-        except ValueError as exc:
-            return JsonResponse({"error": str(exc)}, status=400)
+            try:
+                genomes = create_seeded_population(seed_genomes, pop_size=pop_size)
+            except ValueError as exc:
+                return JsonResponse({"error": str(exc)}, status=400)
+            seeded_count = len(seed_genomes)
+        else:
+            genomes = create_task_population(task, pop_size)
+            seeded_count = 0
 
+        default_elite = default_elite_for_task(task, settings.ELITE_FRAC)
+        raw_min_votes = payload.get("min_votes")
+        min_votes_val = (
+            _parse_clamped_int_param(raw_min_votes, task_spec.default_min_votes, 1, 256)
+            if (raw_min_votes is not None and str(raw_min_votes).strip() != "")
+            else task_spec.default_min_votes
+        )
         seeded_meta = {
             "genomes": genomes,
-            "seeded": len(seed_genomes),
+            "seeded": seeded_count,
+            "min_votes": min_votes_val,
             "max_votes": _parse_clamped_int_param(
                 payload.get("max_votes_per_user"), settings.MAX_VOTES_PER_USER, 1, 64
             ),
@@ -368,7 +437,7 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
                 payload.get("mutation_sigma"), settings.MUTATION_SIGMA, 0.05, 1.0
             ),
             "elite_frac": _parse_clamped_float_param(
-                payload.get("elite_frac"), settings.ELITE_FRAC, 0.0, 0.5
+                payload.get("elite_frac"), default_elite, 0.0, 0.5
             ),
             "crossover_rate": _parse_clamped_float_param(
                 payload.get("crossover_rate"), settings.CROSSOVER_RATE, 0.0, 1.0
@@ -385,6 +454,7 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
         "slug": room.slug,
         "name": room.name,
         "description": room.description,
+        "task": task,
         "url": f"{base_path}/p/{room.slug}/",
     }
 
@@ -394,6 +464,8 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
         state_json = ws_bridge.build_room_state_json(
             goal_name,
             seeded_meta["genomes"],
+            task=task,
+            min_votes=seeded_meta["min_votes"],
             max_votes_per_user=seeded_meta["max_votes"],
             mut_sigma=seeded_meta["mut_sigma"],
             elite_frac=seeded_meta["elite_frac"],
@@ -416,7 +488,7 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
     return JsonResponse(resp_data)
 
 
-def _parse_export_payload(request: HttpRequest) -> tuple[dict, str]:
+def _parse_export_payload(request: HttpRequest) -> tuple[dict, str, str]:
     payload = json.loads(request.body.decode("utf-8"))
     genome = payload.get("genome")
     if not isinstance(genome, dict) or not {"weights", "biases", "activations"} <= set(genome):
@@ -424,16 +496,17 @@ def _parse_export_payload(request: HttpRequest) -> tuple[dict, str]:
     genome = dict(genome)
     genome.setdefault("id", 0)
     goal = str(payload.get("goal", "policy"))
+    task = normalize_task_id(str(payload.get("task") or "image"))
     generation = int(payload.get("generation", 0))
     index = int(payload.get("index", 0))
-    return genome, slugify_policy_name(goal, generation, index)
+    return genome, slugify_policy_name(goal, generation, index), task
 
 
 @require_POST
 def export_weights(request: HttpRequest) -> HttpResponse:
     """Download a trained/evolved CPPN genome as a save_load .pt checkpoint."""
     try:
-        genome, slug = _parse_export_payload(request)
+        genome, slug, _ = _parse_export_payload(request)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         return HttpResponseBadRequest(str(exc))
 
@@ -445,8 +518,9 @@ def export_weights(request: HttpRequest) -> HttpResponse:
 
 @require_GET
 def export_script(request: HttpRequest) -> HttpResponse:
-    """Download the <=10 LOC uv runner script for CPPN checkpoints."""
-    script = build_runner_script("weights.pt")
+    """Download the standalone uv runner script for CPPN checkpoints."""
+    task = normalize_task_id(request.GET.get("task", "image"))
+    script = build_runner_script("weights.pt", task=task)
     resp = HttpResponse(script, content_type="text/x-python; charset=utf-8")
     resp["Content-Disposition"] = 'attachment; filename="run.py"'
     return resp
@@ -454,23 +528,157 @@ def export_script(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def export_bundle(request: HttpRequest) -> HttpResponse:
-    """Download a zip containing weights.pt and the <=10 LOC uv runner script."""
+    """Download a zip containing weights.pt and the standalone uv runner script."""
     try:
-        genome, slug = _parse_export_payload(request)
+        genome, slug, task = _parse_export_payload(request)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         return HttpResponseBadRequest(str(exc))
 
     weights_bytes = save_cppn_bytes(genome)
-    script_text = build_runner_script("weights.pt")
+    script_text = build_runner_script("weights.pt", task=task)
 
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         zf.writestr(f"{slug}/weights.pt", weights_bytes)
         zf.writestr(f"{slug}/run.py", script_text)
 
     resp = HttpResponse(buf.getvalue(), content_type="application/zip")
     resp["Content-Disposition"] = f'attachment; filename="{slug}.zip"'
     return resp
+
+
+_ALLOWED_MEDIA_SUFFIXES = {".mp4", ".webm", ".png", ".webp", ".jpg", ".jpeg"}
+
+
+@require_POST
+def api_render_video(request: HttpRequest) -> JsonResponse:
+    """Render and cache a control rollout video + poster PNG lazily on demand."""
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return JsonResponse({"ok": False, "error": "Invalid JSON."}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"ok": False, "error": "Invalid render payload."}, status=400)
+
+    task = normalize_task_id(str(payload.get("task") or "cartpole"))
+    spec = get_task_spec(task)
+    if not spec.supports_video:
+        return JsonResponse({"ok": False, "error": f"Task '{task}' does not support video rendering."}, status=400)
+
+    try:
+        genome = validate_genome_dict(payload.get("genome"))
+        seed = max(0, min(10_000_000, int(payload.get("seed", 0))))
+    except (ValueError, TypeError) as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+
+    res = render_task_media(
+        task,
+        genome,
+        seed=seed,
+        media_root=settings.MEDIA_ROOT,
+        max_cache_bytes=settings.MAX_MEDIA_CACHE_BYTES,
+    )
+    base_path = _resolve_base_path(request)
+    return JsonResponse(
+        {
+            "ok": True,
+            "videoUrl": f"{base_path}/media/{res['mp4_rel']}",
+            "posterUrl": f"{base_path}/media/{res['png_rel']}",
+            "steps": res["steps"],
+            "return": res["return"],
+            "meanAbsX": res["meanAbsX"],
+            "seed": res["seed"],
+        }
+    )
+
+
+def _parse_single_byte_range(header: str, total_size: int) -> tuple[int, int] | None:
+    if not header or not header.startswith("bytes="):
+        return None
+    spec = header[len("bytes="):].strip()
+    if "," in spec or "-" not in spec:
+        return None
+    start_s, end_s = spec.split("-", 1)
+    if not start_s and not end_s:
+        return None
+    if not start_s:
+        suffix = int(end_s)
+        if suffix <= 0:
+            raise ValueError("Invalid suffix byte range")
+        start = max(0, total_size - suffix)
+        end = total_size - 1
+        return start, end
+    start = int(start_s)
+    end = int(end_s) if end_s else total_size - 1
+    if start < 0 or start >= total_size or end < start:
+        raise ValueError("Byte range out of bounds")
+    return start, min(end, total_size - 1)
+
+
+def _attach_media_cache_headers(resp: HttpResponse, etag: str) -> HttpResponse:
+    resp["Accept-Ranges"] = "bytes"
+    resp["ETag"] = etag
+    resp["Cache-Control"] = "public, max-age=31536000, immutable"
+    resp["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@require_GET
+def serve_media(request: HttpRequest, rel_path: str) -> HttpResponse:
+    """Serve cached media assets with byte-range seeking and immutable cache headers."""
+    clean_rel = PurePosixPath(rel_path)
+    if (
+        clean_rel.is_absolute()
+        or ".." in clean_rel.parts
+        or not clean_rel.parts
+        or clean_rel.suffix.lower() not in _ALLOWED_MEDIA_SUFFIXES
+    ):
+        raise Http404("Media not found")
+
+    media_root = Path(settings.MEDIA_ROOT).resolve()
+    target = (media_root / Path(*clean_rel.parts)).resolve()
+    try:
+        target.relative_to(media_root)
+    except ValueError as exc:
+        raise Http404("Media not found") from exc
+    if not target.is_file():
+        raise Http404("Media not found")
+
+    stat = target.stat()
+    size = stat.st_size
+    etag = f'W/"{size:x}-{stat.st_mtime_ns:x}"'
+    if request.headers.get("If-None-Match") == etag:
+        return _attach_media_cache_headers(HttpResponse(status=304), etag)
+
+    content_type, _ = mimetypes.guess_type(target.name)
+    if target.suffix.lower() == ".mp4":
+        content_type = "video/mp4"
+    elif target.suffix.lower() == ".webm":
+        content_type = "video/webm"
+    content_type = content_type or "application/octet-stream"
+
+    range_header = request.headers.get("Range", "").strip()
+    if range_header and size > 0:
+        try:
+            byte_range = _parse_single_byte_range(range_header, size)
+        except ValueError:
+            resp = HttpResponse(status=416)
+            resp["Content-Range"] = f"bytes */{size}"
+            return resp
+        if byte_range is not None:
+            start, end = byte_range
+            length = end - start + 1
+            with target.open("rb") as fh:
+                fh.seek(start)
+                chunk = fh.read(length)
+            resp = HttpResponse(chunk, status=206, content_type=content_type)
+            resp["Content-Range"] = f"bytes {start}-{end}/{size}"
+            resp["Content-Length"] = str(length)
+            return _attach_media_cache_headers(resp, etag)
+
+    resp = FileResponse(target.open("rb"), content_type=content_type)
+    resp["Content-Length"] = str(size)
+    return _attach_media_cache_headers(resp, etag)
 
 
 def _configured_admin_password() -> str:
@@ -589,6 +797,26 @@ def _clear_persisted_room_state(room: str, goal: str) -> None:
     row.save(update_fields=["state_json", "updated_at"])
 
 
+def _room_goal_tasks(room: str) -> dict[str, str]:
+    tasks: dict[str, str] = (
+        {name: task for name, task, _ in ws_bridge.DEFAULT_GOAL_SPECS}
+        if room == "lobby"
+        else {}
+    )
+    row = RoomEvolutionState.objects.filter(room=room).first()
+    if row is None:
+        return tasks
+    try:
+        parsed = json.loads(row.state_json)
+    except ValueError:
+        return tasks
+    if isinstance(parsed, dict) and isinstance(parsed.get("goals"), list):
+        for g in parsed["goals"]:
+            if isinstance(g, dict) and g.get("name"):
+                tasks[str(g["name"])] = normalize_task_id(str(g.get("task", "image")))
+    return tasks
+
+
 def _perform_admin_reset(room: str, goal: str, configured: str) -> tuple[bool, int, str, list[str]]:
     room = (room or "lobby").strip() or "lobby"
     goal = (goal or "").strip()
@@ -606,9 +834,10 @@ def _perform_admin_reset(room: str, goal: str, configured: str) -> tuple[bool, i
         available = ", ".join(pop_map.keys())
         return False, 404, f"Goal '{goal}' not found in room '{room}' (available: {available}).", []
 
+    task_map = _room_goal_tasks(room)
     reset_goals: list[str] = []
     for goal_name, pop_size in targets:
-        genomes = create_random_population(pop_size=int(pop_size))
+        genomes = create_task_population(task_map.get(goal_name, "image"), int(pop_size))
         r_status, r_err = _apply_goal_reset_dispatch(room, goal_name, genomes, configured)
         if r_status != 200:
             return False, r_status, r_err or "Failed to reset goal.", reset_goals
@@ -627,14 +856,15 @@ def _perform_admin_clear(room: str, goal: str, configured: str) -> tuple[bool, i
 
     if room == "lobby":
         known_goals = list(pop_map.keys()) if pop_map else list(ws_bridge.DEFAULT_GOALS)
+        task_by_goal = _room_goal_tasks(room)
+        cap_by_goal = {name: cap for name, _, cap in ws_bridge.DEFAULT_GOAL_SPECS}
         if is_all:
             goals_payload = [
-                {
-                    "name": g_name,
-                    "genomes": create_random_population(
-                        pop_size=int(pop_map.get(g_name, settings.POPULATION_SIZE))
-                    ),
-                }
+                ws_bridge._build_goal_entry(
+                    g_name,
+                    task_by_goal.get(g_name, "image"),
+                    int(pop_map.get(g_name, cap_by_goal.get(g_name) or settings.POPULATION_SIZE)),
+                )
                 for g_name in known_goals
             ]
             _clear_persisted_room_state(room, "")
@@ -646,8 +876,9 @@ def _perform_admin_clear(room: str, goal: str, configured: str) -> tuple[bool, i
         if goal not in known_goals:
             available = ", ".join(known_goals)
             return False, 404, f"Goal '{goal}' not found in room '{room}' (available: {available}).", []
-        genomes = create_random_population(
-            pop_size=int(pop_map.get(goal, settings.POPULATION_SIZE))
+        default_p = cap_by_goal.get(goal) or settings.POPULATION_SIZE
+        genomes = create_task_population(
+            task_by_goal.get(goal, "image"), int(pop_map.get(goal, default_p))
         )
         _clear_persisted_room_state(room, goal)
         c_status, c_err = _apply_room_clear_dispatch(room, genomes, goal, configured)

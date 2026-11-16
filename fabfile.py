@@ -114,7 +114,7 @@ class DeployConfig:
             allowed_hosts=allowed_hosts,
             csrf_trusted_origins=csrf_origins,
             pop_size=int(os.getenv("MUMMY_POP_SIZE", "30")),
-            min_votes=os.getenv("MUMMY_MIN_VOTES", "").strip(),
+            min_votes=os.getenv("MUMMY_MIN_VOTES", "20").strip(),
             max_votes=int(os.getenv("MUMMY_MAX_VOTES", "20")),
             mut_sigma=os.getenv("MUMMY_MUT_SIGMA", "0.30"),
             elite_frac=os.getenv("MUMMY_ELITE_FRAC", "0.20"),
@@ -128,6 +128,10 @@ class DeployConfig:
     @property
     def data_dir(self) -> str:
         return f"{self.deploy_dir}/data"
+
+    @property
+    def media_dir(self) -> str:
+        return f"{self.data_dir}/media"
 
     @property
     def run_dir(self) -> str:
@@ -164,6 +168,7 @@ def _render_runtime_env(cfg: DeployConfig) -> str:
         f"DJANGO_ALLOWED_HOSTS={cfg.allowed_hosts}",
         f"DJANGO_CSRF_TRUSTED_ORIGINS={cfg.csrf_trusted_origins}",
         f"DET_DB_PATH={cfg.data_dir}/db.sqlite3",
+        f"DET_MEDIA_DIR={cfg.media_dir}",
         f"DET_SUBPATH={cfg.subpath}",
         f"DET_WS_PROXY={'1' if cfg.subpath else '0'}",
         "MUMMY_WS_HOST=127.0.0.1",
@@ -181,48 +186,40 @@ def _render_runtime_env(cfg: DeployConfig) -> str:
 
 
 def _render_nginx_conf(cfg: DeployConfig) -> str:
-    if cfg.subpath:
-        locations = NGINX_TEMPLATE.read_text(encoding="utf-8")
-        for k, v in (
-            ("{{SUBPATH}}", cfg.subpath),
-            ("{{HTTP_PORT}}", str(cfg.http_port)),
-            ("{{WS_PORT}}", str(cfg.ws_port)),
-        ):
-            locations = locations.replace(k, v)
-    else:
-        locations = (
-            "    location ^~ /ws/ {\n"
-            f"        proxy_pass http://127.0.0.1:{cfg.ws_port}/ws/;\n"
-            "        proxy_http_version 1.1;\n"
-            "        proxy_set_header Upgrade $http_upgrade;\n"
-            '        proxy_set_header Connection "upgrade";\n'
-            "        proxy_set_header Host $http_host;\n"
-            "        proxy_set_header X-Real-IP $remote_addr;\n"
-            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
-            "        proxy_set_header X-Forwarded-Proto $scheme;\n"
-            "        proxy_read_timeout 86400;\n"
-            "    }\n\n"
-            "    location / {\n"
-            f"        proxy_pass http://127.0.0.1:{cfg.http_port}/;\n"
-            "        proxy_http_version 1.1;\n"
-            "        proxy_set_header Host $http_host;\n"
-            "        proxy_set_header X-Real-IP $remote_addr;\n"
-            "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
-            "        proxy_set_header X-Forwarded-Proto $scheme;\n"
-            "        client_max_body_size 16m;\n"
-            "    }\n"
-        )
-
-    if cfg.nginx_vhost_file:
-        return locations
-    return (
-        "server {\n"
-        "    listen 80;\n"
-        "    listen [::]:80;\n"
-        f"    server_name {cfg.domain};\n\n"
-        f"{locations}\n"
-        "}\n"
+    subpath = cfg.subpath
+    redirect_block = (
+        f"location = {subpath} {{\n"
+        f"    return 301 $scheme://$http_host{subpath}/;\n"
+        "}\n\n"
+        if subpath
+        else ""
     )
+    http_loc_mod = "^~ " if subpath else ""
+    forwarded_prefix_line = f"    proxy_set_header X-Forwarded-Prefix {subpath};\n" if subpath else ""
+
+    locations = NGINX_TEMPLATE.read_text(encoding="utf-8")
+    for k, v in (
+        ("{{SUBPATH_REDIRECT_BLOCK}}", redirect_block),
+        ("{{SUBPATH}}", subpath),
+        ("{{HTTP_PORT}}", str(cfg.http_port)),
+        ("{{WS_PORT}}", str(cfg.ws_port)),
+        ("{{MEDIA_DIR}}", cfg.media_dir),
+        ("{{HTTP_LOC_MOD}}", http_loc_mod),
+        ("{{FORWARDED_PREFIX_LINE}}", forwarded_prefix_line),
+    ):
+        locations = locations.replace(k, v)
+
+    if not cfg.nginx_vhost_file:
+        indented = "\n".join(f"    {line}" if line else "" for line in locations.splitlines())
+        return (
+            "server {\n"
+            "    listen 80;\n"
+            "    listen [::]:80;\n"
+            f"    server_name {cfg.domain};\n\n"
+            f"{indented}\n"
+            "}\n"
+        )
+    return locations
 
 
 def _render_systemd_units(cfg: DeployConfig) -> tuple[str, str]:
@@ -410,7 +407,7 @@ def _bash_health_check_snippet(cfg: DeployConfig) -> str:
 
 def _sync_source(cfg: DeployConfig) -> None:
     ssh_target = f"{cfg.user}@{cfg.host}" if cfg.user else cfg.host
-    mkdir_cmd = f"mkdir -p {shlex.quote(cfg.src_dir)} {shlex.quote(cfg.data_dir)} {shlex.quote(cfg.run_dir)} && rsync"
+    mkdir_cmd = f"mkdir -p {shlex.quote(cfg.src_dir)} {shlex.quote(cfg.data_dir)} {shlex.quote(cfg.media_dir)} {shlex.quote(cfg.run_dir)} && rsync"
     ssh_cmd = "ssh -o ControlMaster=auto -o ControlPath=/tmp/det-ssh-%C -o ControlPersist=60"
     cmd = [
         "rsync",
@@ -435,12 +432,20 @@ def _sync_source(cfg: DeployConfig) -> None:
         "--exclude=*.so",
         "--exclude=*.sqlite3",
         "--exclude=*.sqlite3-*",
+        "--exclude=media/",
         "--exclude=nimcache/",
         "--exclude=direct_evolution_together/nimble.paths",
         f"{REPO_ROOT}/",
         f"{ssh_target}:{cfg.src_dir}/",
     ]
     subprocess.run(cmd, check=True)
+
+
+def _ensure_media_dir_cmd(cfg: DeployConfig) -> str:
+    return (
+        f"mkdir -p {shlex.quote(cfg.media_dir)} && "
+        f"chmod 755 {shlex.quote(cfg.deploy_dir)} {shlex.quote(cfg.data_dir)} {shlex.quote(cfg.media_dir)}"
+    )
 
 
 @task
@@ -451,6 +456,7 @@ def setup(c):
         "set -euo pipefail",
         'export PATH="$HOME/.local/bin:$HOME/.nimble/bin:$PATH"',
         f"mkdir -p {shlex.quote(cfg.src_dir)} {shlex.quote(cfg.data_dir)} {shlex.quote(cfg.run_dir)}",
+        _ensure_media_dir_cmd(cfg),
         _bash_write_if_changed_fn(),
         _bash_bootstrap_snippet(cfg),
         _bash_systemd_snippet(cfg),
@@ -476,6 +482,7 @@ def deploy(c, force_deps: bool = False):
     script = "\n".join([
         "set -euo pipefail",
         'export PATH="$HOME/.local/bin:$HOME/.nimble/bin:$PATH"',
+        _ensure_media_dir_cmd(cfg),
         _bash_write_if_changed_fn(),
         _bash_bootstrap_snippet(cfg),
         f"write_if_changed {shlex.quote(cfg.env_file)} 600 {shlex.quote(env_b64)} || true",
@@ -529,6 +536,7 @@ def reload(c):
     env_b64 = _b64(_render_runtime_env(cfg))
     script = "\n".join([
         "set -euo pipefail",
+        _ensure_media_dir_cmd(cfg),
         _bash_write_if_changed_fn(),
         f"write_if_changed {shlex.quote(cfg.env_file)} 600 {shlex.quote(env_b64)} || true",
         f"systemctl restart {shlex.quote(cfg.ws_service)} {shlex.quote(cfg.uvicorn_service)}",
@@ -545,6 +553,7 @@ def nginx(c):
     script = "\n".join([
         "set -euo pipefail",
         f"mkdir -p {shlex.quote(cfg.run_dir)}",
+        _ensure_media_dir_cmd(cfg),
         _bash_write_if_changed_fn(),
         _bash_nginx_snippet(cfg),
     ]) + "\n"

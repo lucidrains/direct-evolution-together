@@ -1,5 +1,7 @@
+import hashlib
 import io
 import itertools
+import math
 from pathlib import Path, PurePosixPath
 import re
 import tempfile
@@ -7,6 +9,7 @@ import threading
 from typing import Iterable, Sequence
 import zipfile
 
+from populora.operators import parent_select_tournament
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -271,14 +274,18 @@ def _sample_parents(
     scores: list[int],
     crossover_rate: float = DEFAULT_CROSSOVER_RATE,
 ) -> tuple[int, int, bool]:
-    """Sample fitness-weighted parent indices, pairing distinct parents when possible."""
+    """Sample parent indices using PopuLoRA's tournament parent selector."""
     if len(pool) == 1:
         return pool[0], pool[0], False
-    min_s = min(scores[i] for i in pool)
-    weights = torch.tensor([float(scores[i] - min_s + 1) for i in pool])
-    picks = torch.multinomial(weights, 2, replacement=False)
+    fitnesses = torch.tensor([float(scores[i]) for i in pool], dtype=torch.float32)
+    picked = parent_select_tournament(
+        fitnesses,
+        num_children=1,
+        num_parents_per_child=2,
+        tournament_size=min(3, len(pool)),
+    )
     use_cross = bool(torch.rand(1).item() < max(0.0, min(1.0, float(crossover_rate))))
-    return pool[int(picks[0].item())], pool[int(picks[1].item())], use_cross
+    return pool[int(picked[0, 0].item())], pool[int(picked[0, 1].item())], use_cross
 
 
 def evolve_population(
@@ -444,12 +451,71 @@ def slugify_policy_name(goal: str, generation: int, index: int) -> str:
     return f"{clean or 'policy'}_g{generation}_{index}"
 
 
+def validate_genome_dict(raw: object) -> dict:
+    """Validate an untrusted genome dict for topology, finiteness, and activation range."""
+    if not isinstance(raw, dict):
+        raise ValueError("Invalid genome payload.")
+    weights_raw = raw.get("weights")
+    biases_raw = raw.get("biases")
+    acts_raw = raw.get("activations")
+    if (
+        not isinstance(weights_raw, list)
+        or not isinstance(biases_raw, list)
+        or not isinstance(acts_raw, list)
+        or len(weights_raw) != NUM_WEIGHTS
+        or len(biases_raw) != NUM_BIASES
+        or len(acts_raw) != NUM_HIDDEN
+    ):
+        raise ValueError("Invalid CPPN genome dimensions.")
+
+    weights = [float(v) for v in weights_raw]
+    biases = [float(v) for v in biases_raw]
+    if not all(math.isfinite(v) for v in weights) or not all(math.isfinite(v) for v in biases):
+        raise ValueError("Genome parameters must be finite.")
+
+    acts: list[int] = []
+    for a in acts_raw:
+        if isinstance(a, bool) or not isinstance(a, int):
+            raise ValueError("Activation codes must be integers.")
+        if a < 0 or a >= NUM_ACTIVATIONS:
+            raise ValueError(f"Activation codes must be in [0, {NUM_ACTIVATIONS - 1}].")
+        acts.append(a)
+
+    return {
+        "id": int(raw.get("id", 0) or 0),
+        "parents": [int(p) for p in raw.get("parents", []) if isinstance(p, int)],
+        "op": str(raw.get("op", "random")),
+        "weights": weights,
+        "biases": biases,
+        "activations": acts,
+    }
+
+
+def genome_content_hash(genome: dict, length: int = 16) -> str:
+    """Deterministic content hash of a CPPN genome's weights, biases, and activations."""
+    w = ",".join(f"{float(v):.4f}" for v in genome["weights"])
+    b = ",".join(f"{float(v):.4f}" for v in genome["biases"])
+    a = ",".join(str(int(v)) for v in genome["activations"])
+    digest = hashlib.sha256(f"{w}|{b}|{a}".encode("ascii")).hexdigest()
+    return digest[:length]
+
+
 def save_cppn_bytes(data: dict) -> bytes:
-    """Serialize a CPPN genome dict using `torch_einops_utils.save_load`."""
+    """Serialize and deflate-compress a CPPN genome dict using `torch_einops_utils.save_load`."""
     net = CPPN.from_dict(data)
     with tempfile.NamedTemporaryFile(suffix=".pt") as tmp:
         net.save(tmp.name)
-        return Path(tmp.name).read_bytes()
+        raw = Path(tmp.name).read_bytes()
+    if not zipfile.is_zipfile(io.BytesIO(raw)):
+        return raw
+    dst = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(raw), "r") as zin,
+        zipfile.ZipFile(dst, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout,
+    ):
+        for info in zin.infolist():
+            zout.writestr(info.filename, zin.read(info.filename))
+    return dst.getvalue()
 
 
 def _clean_strain_label(raw: str) -> str:
@@ -715,23 +781,29 @@ def create_seeded_population(
     return seeded + random_fill
 
 
-def build_runner_script(weights_filename: str = "weights.pt") -> str:
-    """Return a standalone <=10 LOC uv script that loads and renders a CPPN."""
+def build_uv_script_header(extra_deps: Sequence[str] = ()) -> list[str]:
+    """Build PEP 723 uv inline script header referencing this package."""
     repo_root = Path(__file__).resolve().parent.parent
     pkg_spec = (
         f"direct-evolution-together @ {repo_root.as_uri()}"
         if (repo_root / "pyproject.toml").exists()
         else "direct-evolution-together"
     )
-    deps = (
-        '["torch-einops-utils", "numpy", "packaging", "pillow", '
-        f'"{pkg_spec}"]'
-    )
+    deps = ["torch-einops-utils", "numpy", "packaging", "pillow", *extra_deps, pkg_spec]
+    deps_json = ", ".join(f'"{d}"' for d in deps)
+    return ["# /// script", f"# dependencies = [{deps_json}]", "# ///"]
+
+
+def build_runner_script(weights_filename: str = "weights.pt", task: str = "image") -> str:
+    """Return a standalone uv script that loads a CPPN checkpoint and runs its task."""
+    if task != "image":
+        from direct_evolution_together.environments import build_control_runner_script
+
+        return build_control_runner_script(task, weights_filename)
+
     return "\n".join(
         [
-            "# /// script",
-            f"# dependencies = {deps}",
-            "# ///",
+            *build_uv_script_header(),
             "import sys",
             "from PIL import Image",
             "from direct_evolution_together.cppn import CPPN",

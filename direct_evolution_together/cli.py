@@ -1,5 +1,7 @@
 import argparse
+import importlib
 import os
+import secrets
 import shutil
 import socket
 import subprocess
@@ -102,6 +104,18 @@ def main() -> None:
         help="Fixed population size for public rooms and default for private rooms (3-64, default: 30)",
     )
     parser.add_argument(
+        "--min-votes",
+        type=int,
+        default=None,
+        help="Quick local override for required votes per round across all rooms/goals (1-256)",
+    )
+    parser.add_argument(
+        "--countdown-ms",
+        type=int,
+        default=int(os.getenv("MUMMY_COUNTDOWN_MS", "8000")),
+        help="Round countdown timer duration in milliseconds once quorum is reached (100-60000, default: 8000)",
+    )
+    parser.add_argument(
         "--max-votes-per-user",
         type=int,
         default=int(os.getenv("MUMMY_MAX_VOTES", "20")),
@@ -125,6 +139,17 @@ def main() -> None:
         default=float(os.getenv("MUMMY_CROSSOVER_RATE", "0.75")),
         help="Crossover probability for breeding for public rooms and default for private rooms (0.0-1.0, default: 0.75)",
     )
+    parser.add_argument(
+        "--evolve-now",
+        action="store_true",
+        default=os.getenv("DET_EVOLVE_NOW", "0") == "1",
+        help="Enable operator-only 'Evolve now' button on localhost sessions",
+    )
+    parser.add_argument(
+        "--admin-password",
+        default=os.getenv("DET_ADMIN_PASSWORD", ""),
+        help="Admin/operator password for /reset/ and ?evolve=<password> unlock",
+    )
     parser.add_argument("--reload", action="store_true", help="Enable Django dev autoreloader")
     parser.add_argument("--noreload", action="store_true", help="Disable Django autoreloader (default)")
     parser.add_argument("--no-browser", action="store_true", help="Do not automatically open the Web UI in a browser")
@@ -147,6 +172,8 @@ def main() -> None:
             return
 
     pop_size = max(3, min(64, args.population_size))
+    min_votes_override = args.min_votes is not None
+    countdown_ms = max(100, min(60000, args.countdown_ms))
     max_votes = max(1, min(64, args.max_votes_per_user))
     mut_sigma = max(0.05, min(1.0, float(args.mutation_sigma)))
     elite_frac = max(0.0, min(0.5, float(args.elite_frac)))
@@ -154,20 +181,29 @@ def main() -> None:
     os.environ["MUMMY_WS_HOST"] = args.ws_host
     os.environ["MUMMY_WS_PORT"] = str(args.ws_port)
     os.environ["MUMMY_POP_SIZE"] = str(pop_size)
+    if min_votes_override:
+        os.environ["MUMMY_MIN_VOTES"] = str(max(1, min(256, args.min_votes)))
+        os.environ["MUMMY_MIN_VOTES_OVERRIDE"] = "1"
+    os.environ["MUMMY_COUNTDOWN_MS"] = str(countdown_ms)
     os.environ["MUMMY_MAX_VOTES"] = str(max_votes)
     os.environ["MUMMY_MUT_SIGMA"] = f"{mut_sigma:.2f}"
     os.environ["MUMMY_ELITE_FRAC"] = f"{elite_frac:.2f}"
     os.environ["MUMMY_CROSSOVER_RATE"] = f"{crossover_rate:.2f}"
+    if args.admin_password:
+        os.environ["DET_ADMIN_PASSWORD"] = args.admin_password
+    if args.evolve_now:
+        os.environ["DET_EVOLVE_NOW"] = "1"
+        os.environ.setdefault("DET_EVOLVE_SECRET", secrets.token_hex(16))
 
     from direct_evolution_together import settings as det_settings
 
-    det_settings.WS_HOST = args.ws_host
-    det_settings.WS_PORT = int(args.ws_port)
-    det_settings.POPULATION_SIZE = pop_size
-    det_settings.MAX_VOTES_PER_USER = max_votes
-    det_settings.MUTATION_SIGMA = mut_sigma
-    det_settings.ELITE_FRAC = elite_frac
-    det_settings.CROSSOVER_RATE = crossover_rate
+    importlib.reload(det_settings)
+
+    eff_min_votes = (
+        det_settings.MIN_VOTES
+        if (min_votes_override or det_settings.MIN_VOTES_EXPLICIT)
+        else None
+    )
 
     import django
     from django.core.management import call_command, execute_from_command_line
@@ -183,6 +219,15 @@ def main() -> None:
             f"| WebSocket (Nim + Mummy): ws://{args.ws_host}:{args.ws_port}",
             flush=True,
         )
+        overrides: list[str] = []
+        if min_votes_override:
+            overrides.append(f"min_votes={eff_min_votes}")
+        if countdown_ms != 8000:
+            overrides.append(f"countdown_ms={countdown_ms}")
+        if args.evolve_now:
+            overrides.append("evolve_now=localhost-only")
+        if overrides:
+            print(f"Local overrides active: {', '.join(overrides)}", flush=True)
         if use_noreload:
             from direct_evolution_together.ws_bridge import start_ws_server
 
@@ -190,10 +235,15 @@ def main() -> None:
                 host=args.ws_host,
                 port=args.ws_port,
                 pop_size=pop_size,
+                min_votes=eff_min_votes,
+                min_votes_override=min_votes_override,
+                countdown_ms=countdown_ms,
                 max_votes=max_votes,
                 mut_sigma=mut_sigma,
                 elite_frac=elite_frac,
                 crossover_rate=crossover_rate,
+                admin_password=det_settings.ADMIN_PASSWORD,
+                evolve_token=det_settings.EVOLVE_NOW_TOKEN,
             )
         if not args.no_browser:
             open_browser_when_ready(args.host, args.port)

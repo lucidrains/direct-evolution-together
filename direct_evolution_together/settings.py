@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import os
 from pathlib import Path
 
@@ -46,6 +48,19 @@ def _resolve_db_path() -> Path:
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir / "db.sqlite3"
 
+def _resolve_media_dir() -> Path:
+    """Store cached media renders beside db.sqlite3 in dev or XDG data dir."""
+    env_path = os.getenv("DET_MEDIA_DIR")
+    if env_path:
+        p = Path(env_path)
+    elif (BASE_DIR / "manage.py").exists():
+        p = BASE_DIR / "media"
+    else:
+        p = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "direct-evolution-together" / "media"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "").strip()
 if not SECRET_KEY:
@@ -78,7 +93,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    "django.middleware.gzip.GZipMiddleware",
+    "direct_evolution_together.middleware.MediaSafeGZipMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -120,12 +135,28 @@ WS_HOST = os.getenv("MUMMY_WS_HOST", "127.0.0.1")
 WS_PORT = int(os.getenv("MUMMY_WS_PORT", "8001"))
 POPULATION_SIZE = max(3, min(64, int(os.getenv("MUMMY_POP_SIZE", "30"))))
 MIN_VOTES_EXPLICIT = bool(os.getenv("MUMMY_MIN_VOTES", "").strip())
-MIN_VOTES = max(1, min(100, int(os.getenv("MUMMY_MIN_VOTES", "15"))))
+MIN_VOTES_OVERRIDE = os.getenv("MUMMY_MIN_VOTES_OVERRIDE", "0") == "1"
+MIN_VOTES = max(1, min(256, int(os.getenv("MUMMY_MIN_VOTES", "20"))))
+COUNTDOWN_MS = max(100, min(60000, int(os.getenv("MUMMY_COUNTDOWN_MS", "8000"))))
 MAX_VOTES_PER_USER = max(1, min(64, int(os.getenv("MUMMY_MAX_VOTES", "20"))))
 MUTATION_SIGMA = max(0.05, min(1.0, float(os.getenv("MUMMY_MUT_SIGMA", "0.30"))))
 ELITE_FRAC = max(0.0, min(0.5, float(os.getenv("MUMMY_ELITE_FRAC", "0.20"))))
 CROSSOVER_RATE = max(0.0, min(1.0, float(os.getenv("MUMMY_CROSSOVER_RATE", "0.75"))))
 ADMIN_PASSWORD = os.getenv("DET_ADMIN_PASSWORD", "")
+EVOLVE_NOW_LOCAL = os.getenv("DET_EVOLVE_NOW", "0") == "1"
+EVOLVE_NOW_SECRET = os.getenv("DET_EVOLVE_SECRET", "").strip()
+if EVOLVE_NOW_LOCAL and not EVOLVE_NOW_SECRET:
+    EVOLVE_NOW_SECRET = "local-loopback"
+_evolve_seed = EVOLVE_NOW_SECRET or ADMIN_PASSWORD
+EVOLVE_NOW_TOKEN = (
+    hmac.new(
+        SECRET_KEY.encode("utf-8"),
+        f"det-evolve:{_evolve_seed}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    if _evolve_seed
+    else ""
+)
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
@@ -133,6 +164,9 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+MEDIA_URL = "media/"
+MEDIA_ROOT = _resolve_media_dir()
+MAX_MEDIA_CACHE_BYTES = int(os.getenv("DET_MAX_MEDIA_CACHE_BYTES", str(256 * 1024 * 1024)))
 DATA_UPLOAD_MAX_MEMORY_SIZE = 4 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 256 * 1024
 DATA_UPLOAD_MAX_NUMBER_FILES = 64

@@ -31,9 +31,12 @@ class DirectEvolutionTogetherConfig(AppConfig):
                 host=settings.WS_HOST,
                 port=settings.WS_PORT,
                 pop_size=settings.POPULATION_SIZE,
-                min_votes=settings.MIN_VOTES,
+                min_votes=settings.MIN_VOTES if settings.MIN_VOTES_EXPLICIT else None,
+                min_votes_override=settings.MIN_VOTES_OVERRIDE,
+                countdown_ms=settings.COUNTDOWN_MS,
                 max_votes=settings.MAX_VOTES_PER_USER,
                 mut_sigma=settings.MUTATION_SIGMA,
                 elite_frac=settings.ELITE_FRAC,
                 crossover_rate=settings.CROSSOVER_RATE,
+                evolve_token=settings.EVOLVE_NOW_TOKEN,
             )

@@ -24,9 +24,11 @@ classifiers=[
 
 dependencies = [
     "django>=5.1",
+    "imageio-ffmpeg>=0.5",
     "nimporter-plus>=0.0.10",
     "numpy>=2.2.6",
     "packaging>=26.3",
+    "pillow>=10.0",
     "populora>=0.6.0",
     "torch>=2.5",
     "torch-einops-utils>=0.2.6",
