@@ -17,8 +17,8 @@ const
   max_population_size = 64
   control_max_population_size = 32
   default_population_size = 30
-  default_control_population_size = 16
-  default_control_min_votes = 30
+  default_control_population_size = 30
+  default_control_min_votes = 20
   max_round_min_votes = 256
 
   min_votes_per_user = 1
@@ -247,6 +247,11 @@ func clamp_goal_params(p: GoalParams): GoalParams {.inline.} =
     elite_frac: clamp(p.elite_frac, min_elite_frac, max_elite_frac),
     crossover_rate: clamp(p.crossover_rate, min_crossover_rate, max_crossover_rate),
   )
+
+func clamp_control_min_votes(task: string; p: var GoalParams) {.inline.} =
+  # Control tasks should be clearable by one person's vote budget.
+  if task != "image" and p.min_votes > p.max_votes_per_user:
+    p.min_votes = max(min_votes_per_user, p.max_votes_per_user)
 
 proc parse_clamped_int(raw: string; fallback, lo, hi: int): int {.gcsafe.} =
   let s = raw.strip()
@@ -772,6 +777,8 @@ proc init_goal_population(
   gp: GoalParams;
 ): GoalPopulation {.gcsafe.} =
   let clean_task = sanitize_task_name(task)
+  var params = gp
+  clamp_control_min_votes(clean_task, params)
   GoalPopulation(
     name: name,
     task: clean_task,
@@ -781,7 +788,7 @@ proc init_goal_population(
     votes: empty_votes(max(1, pop_len)),
     countdown_ends_at_ms: 0,
     evolving: false,
-    params: gp,
+    params: params,
   )
 
 proc populate_room_goals(
@@ -1937,6 +1944,7 @@ proc restore_room_state*(room, state_json: string) {.exportpy.} =
       var gp = parse_goal_params_json(item.getOrDefault("params"), dp)
       if gp.min_votes <= 0:
         gp.min_votes = default_min_votes_for_task(task)
+      clamp_control_min_votes(task, gp)
       let g_json = $genomes_arr
       let lin_node = item.getOrDefault("lineage")
       let l_json =

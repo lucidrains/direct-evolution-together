@@ -25,7 +25,7 @@ from direct_evolution_together.models import ChatMessage, RoomEvolutionState
 
 HISTORY_LIMIT = 100
 DEFAULT_GOAL_SPECS: tuple[tuple[str, str, int | None], ...] = (
-    ("CartPole", "cartpole", 16),
+    ("CartPole", "cartpole", 30),
     ("Butterfly", "image", None),
     ("Galaxy", "image", None),
     ("Creature", "image", None),
@@ -104,6 +104,8 @@ def build_room_state_json(
     clean_task = normalize_task_id(task)
     spec = get_task_spec(clean_task)
     eff_min_votes = spec.default_min_votes if min_votes is None else int(min_votes)
+    if spec.kind == "control":
+        eff_min_votes = max(1, min(eff_min_votes, int(max_votes_per_user)))
     eff_elite_frac = (
         default_elite_for_task(clean_task, 0.20)
         if elite_frac is None
@@ -192,22 +194,41 @@ def _ensure_lobby_default_goals(
             cp_spec = get_task_spec("cartpole")
             p = g.get("params")
             if isinstance(p, dict):
-                if int(p.get("minVotes", 0)) < cp_spec.default_min_votes:
-                    p["minVotes"] = int(cp_spec.default_min_votes)
+                cp_max_votes = max(
+                    1,
+                    int(p.get("maxVotesPerUser", base_params.get("maxVotesPerUser", 20))),
+                )
+                cp_min_votes = max(1, min(cp_spec.default_min_votes, cp_max_votes))
+                if int(p.get("minVotes", 0)) != cp_min_votes:
+                    p["minVotes"] = cp_min_votes
                     changed = True
                 if float(p.get("eliteFrac", 0.0)) != 0.0:
                     p["eliteFrac"] = 0.0
                     changed = True
             cur_genomes = g.get("genomes")
-            if isinstance(cur_genomes, list) and cur_genomes and any(
-                evaluate_control_genome("cartpole", cg, seeds=cp_spec.eval_seeds)["meanSteps"] >= 60.0
-                for cg in cur_genomes
-            ):
-                fresh = create_task_population("cartpole", len(cur_genomes))
-                g["genomes"] = fresh
-                g["lineage"] = _build_lineage_from_genomes(fresh, gen=0)
-                changed = True
+            if isinstance(cur_genomes, list) and cur_genomes:
+                target_pop = clamp_pop_for_task(
+                    "cartpole",
+                    min(default_pop_size, cp_spec.default_pop_size),
+                )
+                needs_resize = len(cur_genomes) != target_pop
+                needs_refresh = any(
+                    evaluate_control_genome("cartpole", cg, seeds=cp_spec.eval_seeds)["meanSteps"] >= 60.0
+                    for cg in cur_genomes
+                )
+                if needs_resize or needs_refresh:
+                    fresh = create_task_population(
+                        "cartpole",
+                        target_pop if needs_resize else len(cur_genomes),
+                    )
+                    g["genomes"] = fresh
+                    g["lineage"] = _build_lineage_from_genomes(fresh, gen=0)
+                    changed = True
     added: list[dict] = []
+    default_goal_max_votes = max(
+        1,
+        int(base_params.get("maxVotesPerUser", default_max_votes or 20)),
+    )
     for name, task, cap_pop in DEFAULT_GOAL_SPECS:
         if name in existing:
             continue
@@ -215,8 +236,8 @@ def _ensure_lobby_default_goals(
         t_pop = min(default_pop_size, cap_pop) if cap_pop is not None else default_pop_size
         genomes = create_task_population(task, t_pop)
         params = {
-            "maxVotesPerUser": int(base_params.get("maxVotesPerUser", 20)),
-            "minVotes": int(spec.default_min_votes),
+            "maxVotesPerUser": default_goal_max_votes,
+            "minVotes": max(0, min(int(spec.default_min_votes), default_goal_max_votes)),
             "mutSigma": float(base_params.get("mutSigma", 0.30)),
             "eliteFrac": default_elite_for_task(task, float(base_params.get("eliteFrac", 0.20))),
             "crossoverRate": float(base_params.get("crossoverRate", 0.75)),

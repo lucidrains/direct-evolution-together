@@ -165,7 +165,7 @@ def test_e2e_chat_persistence_cursor_and_evolution():
         [ChatMessage(room="histroom", username="seed", message=f"m-{i}") for i in range(105)]
     )
     with _ws_server(seed=True, pop_size=12, max_votes=2) as port:
-        seed_from_db()
+        seed_from_db(default_pop_size=12, default_max_votes=2)
         with connect(f"ws://127.0.0.1:{port}/ws/chat/histroom/?username=viewer") as v:
             hist = _recv_until(v, "history")
             assert len(hist["messages"]) == 100
@@ -177,7 +177,7 @@ def test_e2e_chat_persistence_cursor_and_evolution():
             evo0 = _recv_until(a1, "evolution_state")
             assert [g["name"] for g in evo0["goals"]] == ["CartPole", "Butterfly", "Galaxy", "Creature"]
             assert evo0["goals"][0]["task"] == "cartpole"
-            assert evo0["goals"][0]["minVotes"] == 30
+            assert evo0["goals"][0]["minVotes"] == 2
             assert evo0["goals"][0]["eliteFrac"] == 0.0
             assert len(evo0["goals"][0]["genomes"]) == 12
             assert evo0["goals"][1]["task"] == "image"
@@ -1060,9 +1060,9 @@ def test_cartpole_substrate_js_python_parity_and_convergence():
     # 2. Fast convergence with Stanley's CPPN + HyperNEAT (4->8->1) and zero elitism on pop=16 within 20 gens
     spec = get_task_spec("cartpole")
     assert spec.substrate_dims == (4, 8, 1)
-    assert spec.default_pop_size == 16
+    assert spec.default_pop_size == 30
     assert spec.max_pop_size == 32
-    assert spec.default_min_votes == 30
+    assert spec.default_min_votes == 20
     assert spec.default_elite_frac == 0.0
 
     saved_state = py_random.getstate()
@@ -1181,23 +1181,23 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
     split_data = split_resp.json()
 
     with _ws_server(seed=True, pop_size=12, max_votes=6) as port:
-        seed_from_db()
+        seed_from_db(default_pop_size=12, default_max_votes=6)
         # Check migrated lobby has CartPole prepended with zero elitism, high quorum, and no pre-solved Gen-0 founders
         with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=mig") as ws_lob:
             lob_state = _recv_until(ws_lob, "evolution_state")
             assert [g["name"] for g in lob_state["goals"]] == ["CartPole", "Butterfly", "Galaxy", "Creature"]
             assert lob_state["goals"][0]["task"] == "cartpole"
             assert lob_state["goals"][0]["eliteFrac"] == 0.0
-            assert lob_state["goals"][0]["minVotes"] == 30
+            assert lob_state["goals"][0]["minVotes"] == 6
             assert all(
                 evaluate_control_genome("cartpole", cand, seeds=(0, 1, 2))["meanSteps"] < 60.0
                 for cand in lob_state["goals"][0]["genomes"]
             )
 
-        # Verify min_votes (room quorum) and max_votes_per_user are independent on both CartPole & Image rooms
+        # CartPole quorum is capped by the per-person vote budget; image quorum stays independent
         with connect(f"ws://127.0.0.1:{port}/ws/chat/{split_data['slug']}/?username=splituser") as ws_split:
             split_evo = _recv_until(ws_split, "evolution_state")
-            assert split_evo["goals"][0]["minVotes"] == 12
+            assert split_evo["goals"][0]["minVotes"] == 4
             assert split_evo["goals"][0]["maxVotesPerUser"] == 4
 
         with connect(
@@ -1207,13 +1207,13 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
             assert img_evo["goals"][0]["minVotes"] == 6
             assert img_evo["goals"][0]["maxVotesPerUser"] == 2
 
-        # Check pre-seeded CartPole room + create_goal + multi-user high vote quorum -> zero-elite Gen 1
+        # Check pre-seeded CartPole room + create_goal + one-person quorum -> zero-elite Gen 1
         mummy_ws.set_round_config(10, 120)
         with connect(f"ws://127.0.0.1:{port}/ws/chat/{room_data['slug']}/?username=pilot") as ws:
             evo0 = _recv_until(ws, "evolution_state")
             goal = evo0["goals"][0]
             assert goal["task"] == "cartpole"
-            assert goal["minVotes"] == 30
+            assert goal["minVotes"] == 20
             assert goal["eliteFrac"] == 0.0
             assert len(goal["genomes"]) == 16
             assert all(
@@ -1234,11 +1234,11 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
             assert "Pole Run 2" in created_goals
             created = created_goals["Pole Run 2"]
             assert created["task"] == "cartpole"
-            assert created["minVotes"] == 30
+            assert created["minVotes"] == 6
             assert created["eliteFrac"] == 0.0
             assert len(created["genomes"]) == 8
 
-            # A small number of votes (6 by one user) must NOT start countdown
+            # One person's full vote budget now satisfies the cartpole quorum
             for idx in range(6):
                 ws.send(json.dumps({
                     "type": "cast_vote",
@@ -1249,31 +1249,8 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
                 }))
                 upd = _recv_until(ws, "votes_updated")
             assert upd["totalVotes"] == 6
-            assert upd["countdownMs"] == 0
-
-            # Four additional collaborators casting 6 votes each reaches 30 total votes -> evolves Gen 1
-            from contextlib import ExitStack
-
-            with ExitStack() as stack:
-                extra_clients = [
-                    stack.enter_context(
-                        connect(f"ws://127.0.0.1:{port}/ws/chat/{room_data['slug']}/?username=r{c}")
-                    )
-                    for c in range(4)
-                ]
-                for ew in extra_clients:
-                    _recv_until(ew, "evolution_state")
-                for c_idx, ew in enumerate(extra_clients):
-                    for idx in range(6):
-                        ew.send(json.dumps({
-                            "type": "cast_vote",
-                            "goal": "Pole Run 2",
-                            "generation": 0,
-                            "index": (idx + c_idx) % 8,
-                            "vote": 1 if idx < 3 else -1,
-                        }))
-                        _recv_until(ew, "votes_updated")
-                gen1 = _recv_until(ws, "goal_updated", timeout=5.0)["goal"]
+            assert upd["countdownMs"] > 0
+            gen1 = _recv_until(ws, "goal_updated", timeout=5.0)["goal"]
 
             assert gen1["name"] == "Pole Run 2"
             assert gen1["generation"] == 1
@@ -1317,7 +1294,7 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
             res_evo = _recv_until(r_ws, "evolution_state")
             res_goal = res_evo["goals"][0]
             assert res_goal["task"] == "cartpole"
-            assert res_goal["minVotes"] == 30
+            assert res_goal["minVotes"] == 20
             assert res_goal["eliteFrac"] == 0.0
             assert len(res_goal["genomes"]) == 6
             assert res_goal["genomes"][0]["op"] == "seed"

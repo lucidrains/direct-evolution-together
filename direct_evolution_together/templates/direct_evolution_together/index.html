@@ -951,6 +951,29 @@
       .genome-card[hidden] {
         display: none;
       }
+      .genome-card.is-skeleton-card {
+        pointer-events: none;
+      }
+      .genome-card.is-skeleton-card .skel-bar {
+        animation: none;
+        background: rgba(255, 255, 255, 0.07);
+      }
+      .skel-thumb {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border-radius: 5px;
+        display: block;
+        background: linear-gradient(
+          90deg,
+          rgba(255, 255, 255, 0.035) 0%,
+          rgba(255, 255, 255, 0.06) 22%,
+          rgba(255, 255, 255, 0.12) 50%,
+          rgba(255, 255, 255, 0.06) 78%,
+          rgba(255, 255, 255, 0.035) 100%
+        );
+        background-size: 220% 100%;
+        animation: skeleton-shimmer 1.6s ease-in-out infinite;
+      }
       .genome-card.voted-done {
         opacity: 0.45;
       }
@@ -1101,6 +1124,30 @@
         padding: 0.7rem 0.9rem;
         border-bottom: 1px solid var(--border);
       }
+      .handle-section { position: relative; }
+      .section-loading-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 3;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 0.45rem;
+        padding: 0.7rem 0.9rem;
+        background: rgba(15, 15, 18, 0.72);
+        backdrop-filter: blur(3px);
+        -webkit-backdrop-filter: blur(3px);
+      }
+      .section-loading-overlay[hidden] { display: none; }
+      .section-loading-overlay .skel-bar {
+        --skel-w: 72%;
+        --skel-h: 6px;
+      }
+      .section-loading-copy {
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        color: var(--dim);
+      }
       .rail-label {
         margin: 0 0 0.45rem;
         font-family: var(--mono);
@@ -1205,6 +1252,10 @@
       input[type="text"]:focus {
         outline: none;
         border-color: var(--border-strong);
+      }
+      input[type="text"]:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
       }
       button {
         padding: 0.42rem 0.75rem;
@@ -1391,33 +1442,67 @@
         display: flex;
         justify-content: flex-end;
       }
-      .loading-overlay {
+      .panel-loading-sheen {
         position: absolute;
-        inset: 0;
-        border-radius: 12px;
-        background: rgba(15, 15, 18, 0.86);
-        backdrop-filter: blur(4px);
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 0.65rem;
-        z-index: 35;
-        font-family: var(--mono);
-        font-size: 0.76rem;
-        color: var(--muted);
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 2px;
+        z-index: 36;
+        border-radius: 12px 12px 0 0;
+        background: linear-gradient(
+          90deg,
+          rgba(192, 132, 252, 0) 0%,
+          rgba(192, 132, 252, 0.85) 22%,
+          rgba(56, 189, 248, 0.9) 50%,
+          rgba(52, 211, 153, 0.8) 76%,
+          rgba(52, 211, 153, 0) 100%
+        );
+        background-size: 220% 100%;
+        animation: loading-sheen 1.35s ease-in-out infinite;
+        pointer-events: none;
       }
-      .loading-overlay[hidden] { display: none; }
-      .spinner {
-        width: 18px;
-        height: 18px;
-        border: 1.5px solid var(--border-strong);
-        border-top-color: var(--text);
-        border-radius: 50%;
-        animation: spin 0.7s linear infinite;
+      .panel-loading-sheen[hidden] { display: none; }
+      @keyframes loading-sheen {
+        0% { background-position: 180% 0; }
+        100% { background-position: -80% 0; }
       }
-      @keyframes spin {
-        to { transform: rotate(360deg); }
+      .skel-bar {
+        --skel-w: 120px;
+        --skel-h: 10px;
+        display: inline-block;
+        width: var(--skel-w);
+        height: var(--skel-h);
+        max-width: 100%;
+        border-radius: 999px;
+        vertical-align: middle;
+        background: linear-gradient(
+          90deg,
+          rgba(255, 255, 255, 0.05) 0%,
+          rgba(255, 255, 255, 0.09) 22%,
+          rgba(255, 255, 255, 0.18) 50%,
+          rgba(255, 255, 255, 0.09) 78%,
+          rgba(255, 255, 255, 0.05) 100%
+        );
+        background-size: 220% 100%;
+        animation: skeleton-shimmer 1.5s ease-in-out infinite;
+      }
+      @keyframes skeleton-shimmer {
+        0% { background-position: 180% 0; }
+        100% { background-position: -80% 0; }
+      }
+      .goal-tab.is-skeleton,
+      .filter-tab.is-skeleton {
+        pointer-events: none;
+        cursor: default;
+      }
+      .goal-tab.is-skeleton:hover { color: var(--muted); }
+      @media (prefers-reduced-motion: reduce) {
+        .skel-bar,
+        .skel-thumb,
+        .panel-loading-sheen {
+          animation: none;
+        }
       }
       .evo-workspace[hidden] { display: none; }
       .evo-workspace {
@@ -2017,7 +2102,7 @@
       }
     </style>
   </head>
-  <body>
+  <body class="is-population-loading">
     <header>
       <div class="title">
         <svg class="brand-mark" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -2065,14 +2150,18 @@
     </header>
 
     <main>
-      <section class="card evo-panel" id="evo-panel">
+      <section class="card evo-panel" id="evo-panel" aria-busy="true">
+        <div id="panel-loading-sheen" class="panel-loading-sheen" aria-hidden="true"></div>
         <div id="cursor-layer" class="cursor-layer"></div>
-        <div id="loading-overlay" class="loading-overlay">
-          <span class="spinner" aria-hidden="true"></span>
-          <span>Loading population...</span>
-        </div>
         <div class="goal-bar">
-          <div id="goal-tabs" class="goal-tabs"></div>
+          <div id="goal-tabs" class="goal-tabs">
+            <div class="goal-tab is-skeleton" aria-hidden="true">
+              <span class="skel-bar" style="--skel-w: 76px; --skel-h: 11px;"></span>
+            </div>
+            <div class="goal-tab is-skeleton" aria-hidden="true">
+              <span class="skel-bar" style="--skel-w: 54px; --skel-h: 11px;"></span>
+            </div>
+          </div>
           <div style="display:inline-flex;align-items:center;gap:0.45rem;flex-shrink:0;">
             {% if is_private %}
               <button id="add-goal-btn" type="button" class="ghost new-room-btn" title="Add another evolution tab in this room">+ Goal</button>
@@ -2149,17 +2238,27 @@
           <div id="evo-workspace" class="evo-workspace">
             <div class="controls-bar">
               <div class="goal-meta">
-                <h2 id="active-goal-title">Loading...</h2>
-                <span id="active-goal-gen" class="gen-tag">gen 0</span>
+                <h2 id="active-goal-title" aria-busy="true">
+                  <span class="skel-bar" style="--skel-w: 168px; --skel-h: 14px;" aria-hidden="true"></span>
+                </h2>
+                <span id="active-goal-gen" class="gen-tag" aria-busy="true">
+                  <span class="skel-bar" style="--skel-w: min(340px, 48vw); --skel-h: 9px;" aria-hidden="true"></span>
+                </span>
               </div>
             </div>
 
             <div class="round-banner">
               <div class="round-banner-top">
-                <span id="round-vote-text">Voted: 0 / {{ initial_min_votes|default:20 }}</span>
-                <span id="user-vote-budget" class="vote-budget-pill" title="Active vote budget per person each round — click an active vote again to free a slot">Your votes: 0 / {{ initial_max_votes|default:20 }}</span>
+                <span id="round-vote-text" aria-busy="true">
+                  <span class="skel-bar" style="--skel-w: 148px; --skel-h: 9px;" aria-hidden="true"></span>
+                </span>
+                <span id="user-vote-budget" class="vote-budget-pill" title="Active vote budget per person each round — click an active vote again to free a slot" aria-busy="true">
+                  <span class="skel-bar" style="--skel-w: 92px; --skel-h: 8px;" aria-hidden="true"></span>
+                </span>
                 <span class="round-status-right">
-                  <span id="round-timer" class="round-timer waiting">Need {{ initial_min_votes|default:20 }} more votes</span>
+                  <span id="round-timer" class="round-timer waiting" aria-busy="true">
+                    <span class="skel-bar" style="--skel-w: 118px; --skel-h: 9px;" aria-hidden="true"></span>
+                  </span>
                   {% if can_evolve_now %}
                     <button id="evolve-now-btn" type="button" class="ghost evolve-now-btn" title="Operator override: breed the next generation immediately" hidden>Evolve now</button>
                   {% endif %}
@@ -2173,8 +2272,8 @@
 
             <div class="grid-toolbar">
               <div class="filter-tabs" role="tablist" aria-label="Candidate filter">
-                <button id="tab-all" type="button" class="filter-tab active" data-filter="all">All <span id="tab-all-count" class="tab-cnt">{{ initial_pop|default:30 }}</span></button>
-                <button id="tab-unvoted" type="button" class="filter-tab" data-filter="unvoted">Needs vote <span id="tab-unvoted-count" class="tab-cnt">{{ initial_pop|default:30 }}</span></button>
+                <button id="tab-all" type="button" class="filter-tab active" data-filter="all">All <span id="tab-all-count" class="tab-cnt"><span class="skel-bar" style="--skel-w: 13px; --skel-h: 8px;" aria-hidden="true"></span></span></button>
+                <button id="tab-unvoted" type="button" class="filter-tab" data-filter="unvoted">Needs vote <span id="tab-unvoted-count" class="tab-cnt"><span class="skel-bar" style="--skel-w: 13px; --skel-h: 8px;" aria-hidden="true"></span></span></button>
               </div>
               <div class="grid-toolbar-right">
                 <div id="sort-tabs" class="filter-tabs" role="tablist" aria-label="Sort candidates" hidden>
@@ -2197,18 +2296,22 @@
       </section>
 
       <aside class="card rail">
-        <div class="rail-section">
+        <div class="rail-section handle-section" aria-busy="true">
           <div class="rail-label">Handle</div>
           <form id="name-form" class="name-form">
             <div class="composer-box">
-              <input id="name-input" type="text" placeholder="Nickname" maxlength="24" />
-              <button id="name-btn" class="send-btn" type="submit" aria-label="Set username" title="Set username">
+              <input id="name-input" type="text" placeholder="Nickname" maxlength="24" disabled />
+              <button id="name-btn" class="send-btn" type="submit" aria-label="Set username" title="Set username" disabled>
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M3 8.5 6.4 11.8 13.2 4.5" />
                 </svg>
               </button>
             </div>
           </form>
+          <div id="handle-loading-overlay" class="section-loading-overlay" role="status" aria-live="polite">
+            <span class="skel-bar" aria-hidden="true"></span>
+            <span class="section-loading-copy">Loading population...</span>
+          </div>
         </div>
 
         <div class="rail-section">
@@ -2220,7 +2323,7 @@
           <div id="messages" class="messages"></div>
           <form id="chat-form" class="composer">
             <div class="composer-box">
-              <input id="chat-input" type="text" placeholder="Message..." autocomplete="off" maxlength="2000" />
+              <input id="chat-input" type="text" placeholder="Message..." autocomplete="off" maxlength="2000" disabled />
               <button id="send-btn" class="send-btn" type="submit" aria-label="Send message" title="Send message" disabled>
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M14.2 1.8 7.1 8.9" />
@@ -3080,6 +3183,7 @@
       }
 
       function drawCartpolePose(ctx, state, force, width, height, trackY, scale, alpha, colorOverride) {
+        if (!state) return;
         const x = state[0];
         const theta = state[2];
         const cx = width * 0.5 + x * scale;
@@ -3259,6 +3363,7 @@
       }
 
       function renderCartpoleLiveFrame(canvas, state, force, stepIdx, maxSteps) {
+        if (!state) return;
         const ctx = canvas.getContext("2d");
         const w = canvas.width;
         const h = canvas.height;
@@ -3356,11 +3461,12 @@
       const sendBtn = document.getElementById("send-btn");
       const nameForm = document.getElementById("name-form");
       const nameBtn = document.getElementById("name-btn");
+      let populationReady = false;
 
       function syncNameDirty() {
         const cur = nameInput.value.trim();
-        nameForm.classList.toggle("is-dirty", Boolean(cur) && cur !== savedUsername);
-        if (nameBtn) nameBtn.disabled = !cur;
+        nameForm.classList.toggle("is-dirty", populationReady && Boolean(cur) && cur !== savedUsername);
+        if (nameBtn) nameBtn.disabled = !populationReady || !cur;
       }
       syncNameDirty();
       const usersList = document.getElementById("users-list");
@@ -3370,7 +3476,9 @@
 
       const evoPanelEl = document.getElementById("evo-panel");
       const cursorLayerEl = document.getElementById("cursor-layer");
-      const loadingOverlayEl = document.getElementById("loading-overlay");
+      const panelLoadingSheenEl = document.getElementById("panel-loading-sheen");
+      const handleSectionEl = document.querySelector(".handle-section");
+      const handleLoadingOverlayEl = document.getElementById("handle-loading-overlay");
       const goalTabsEl = document.getElementById("goal-tabs");
       const addGoalBtn = document.getElementById("add-goal-btn");
       const newRoomBtn = document.getElementById("new-room-btn");
@@ -3478,7 +3586,7 @@
           ctrls.popInput.max = String(maxPop);
           if (!ctrls.popTouched) {
             const nextDefault = spec.kind === "control"
-              ? (spec.defaultPopSize || 16)
+              ? (spec.defaultPopSize || 30)
               : Math.min(maxPop, initialPop);
             ctrls.popInput.value = String(nextDefault);
           } else {
@@ -3545,6 +3653,7 @@
       let lineageFilter = "active";
       let lineageCollapsed = false;
       let throttleTimer = null;
+      let roundStatusTimer = null;
       let lastJumpIdx = -1;
       // Track local client's thumbs-up/down highlights per "goal:generation:index" -> -1|0|1
       const myVotes = new Map();
@@ -3658,11 +3767,37 @@
         }
       }
 
+      function syncTextInputAccess() {
+        nameInput.disabled = !populationReady;
+        chatInput.disabled = !populationReady;
+        if (nameBtn) nameBtn.disabled = !populationReady || !nameInput.value.trim();
+        if (sendBtn) sendBtn.disabled = !populationReady || !isConnected;
+      }
+
+      function setPopulationLoading(loading) {
+        populationReady = !loading;
+        document.body.classList.toggle("is-population-loading", loading);
+        if (panelLoadingSheenEl) panelLoadingSheenEl.hidden = !loading;
+        if (handleLoadingOverlayEl) handleLoadingOverlayEl.hidden = !loading;
+        if (handleSectionEl) handleSectionEl.setAttribute("aria-busy", loading ? "true" : "false");
+        if (evoPanelEl) {
+          evoPanelEl.setAttribute("aria-busy", loading ? "true" : "false");
+          evoPanelEl.querySelectorAll("[aria-busy]").forEach((el) => {
+            el.setAttribute("aria-busy", loading ? "true" : "false");
+          });
+        }
+        if (!loading) {
+          document.querySelectorAll(".goal-tab.is-skeleton").forEach((el) => el.remove());
+        }
+        syncNameDirty();
+        syncTextInputAccess();
+      }
+
       function setConnected(connected) {
         isConnected = connected;
         statusDot.classList.toggle("connected", connected);
         statusText.textContent = connected ? "live" : "offline";
-        sendBtn.disabled = !connected;
+        syncTextInputAccess();
       }
 
       function renderGoalTabs() {
@@ -3705,9 +3840,25 @@
         }
       }
 
+      function stopRoundStatusTimer() {
+        if (!roundStatusTimer) return;
+        clearInterval(roundStatusTimer);
+        roundStatusTimer = null;
+      }
+
+      function startRoundStatusTimer() {
+        if (roundStatusTimer) return;
+        roundStatusTimer = setInterval(() => {
+          if (!renderRoundStatus()) stopRoundStatusTimer();
+        }, 100);
+      }
+
       function renderRoundStatus() {
         const goal = goalsByName.get(activeGoalName);
-        if (!goal || addingExtraGoal) return;
+        if (!goal || addingExtraGoal) {
+          stopRoundStatusTimer();
+          return false;
+        }
 
         const minVotes = goal.minVotes || 20;
         const popLen = goal.genomes ? goal.genomes.length : 0;
@@ -3734,7 +3885,8 @@
           roundTimerEl.className = "round-timer";
           roundProgressEl.style.width = "100%";
           roundProgressEl.classList.add("counting");
-          return;
+          stopRoundStatusTimer();
+          return false;
         }
 
         if (countdownActive) {
@@ -3745,6 +3897,8 @@
           roundTimerEl.className = "round-timer";
           roundProgressEl.style.width = `${pct}%`;
           roundProgressEl.classList.add("counting");
+          startRoundStatusTimer();
+          return true;
         } else {
           const remaining = Math.max(0, minVotes - progressCount);
           const pct = Math.max(0, Math.min(100, (progressCount / minVotes) * 100));
@@ -3764,6 +3918,8 @@
           roundProgressEl.style.width = `${pct}%`;
           roundProgressEl.classList.remove("counting");
         }
+        stopRoundStatusTimer();
+        return false;
       }
 
       function cardGoalIndex(card, fallback) {
@@ -4067,13 +4223,18 @@
 
         function tick(now) {
           if (activeHoverAnim !== stateObj || !canvas.isConnected) return;
-          const elapsedSteps = Math.floor(((now - startPerf) / 1000) / CARTPOLE_TAU);
+          const elapsedSteps = Math.max(0, Math.floor(((now - startPerf) / 1000) / CARTPOLE_TAU));
           const totalFrames = ro.states.length;
-          const frameIdx = totalFrames > 0 ? (elapsedSteps % totalFrames) : 0;
+          const frameIdx = totalFrames > 0 ? elapsedSteps % totalFrames : 0;
+          const frame = ro.states[frameIdx];
+          if (!frame) {
+            stateObj.raf = requestAnimationFrame(tick);
+            return;
+          }
           const force = ro.forces && ro.forces.length > 0
             ? ro.forces[Math.min(frameIdx, ro.forces.length - 1)]
             : 0;
-          renderCartpoleLiveFrame(canvas, ro.states[frameIdx], force, frameIdx, maxSteps);
+          renderCartpoleLiveFrame(canvas, frame, force, frameIdx, maxSteps);
           stateObj.raf = requestAnimationFrame(tick);
         }
         stateObj.raf = requestAnimationFrame(tick);
@@ -4096,6 +4257,18 @@
             if (emptyGoalInput && document.activeElement !== emptyGoalInput) {
               emptyGoalInput.focus();
             }
+          } else if (!goal) {
+            evoWorkspaceEl.hidden = false;
+            activeGoalTitle.textContent = "No goals yet";
+            activeGoalGen.textContent = "waiting for a goal";
+            roundVoteText.textContent = "No active round";
+            userVoteBudgetEl.textContent = "Your votes: 0 / 0";
+            roundTimerEl.textContent = "Waiting for a goal";
+            roundTimerEl.className = "round-timer waiting";
+            roundProgressEl.style.width = "0%";
+            tabAllCountEl.textContent = "0";
+            tabUnvotedCountEl.textContent = "0";
+            genomeGridEl.replaceChildren();
           }
           return;
         }
@@ -4124,7 +4297,7 @@
 
         if (rerenderCanvases) {
           stopCardHoverAnim();
-          genomeGridEl.replaceChildren();
+          const cardFrag = document.createDocumentFragment();
           const summaries = isCtrl ? goal.genomes.map((g) => evaluateCartpoleSummary(g)) : null;
           const orderedIndices = goal.genomes.map((_, i) => i);
           if (isCtrl && controlSortMode === "steps" && summaries) {
@@ -4236,8 +4409,9 @@
             footer.appendChild(btns);
             card.appendChild(footer);
 
-            genomeGridEl.appendChild(card);
+            cardFrag.appendChild(card);
           });
+          genomeGridEl.replaceChildren(cardFrag);
           lastJumpIdx = -1;
           applyCardFilter(true);
           renderLineageTree(goal);
@@ -4533,8 +4707,6 @@
         });
       }
 
-      setInterval(renderRoundStatus, 100);
-
       const CHAT_LINK_RE =
         /\[([^\]\n]{1,160})\]\(((?:https?:\/\/|www\.|\/)[^\s<>)]+)\)|(https?:\/\/[^\s<>]+)|(www\.[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+[^\s<>]*)|(\/(?:[a-zA-Z0-9_-]+\/)?p\/[a-z0-9][a-z0-9-]{0,63}\/?(?:\?[^\s<>]*)?)/gi;
 
@@ -4816,13 +4988,17 @@
             appendChat(msg.username, msg.message, msg.timestamp);
           }
         } else if (data.type === "evolution_state") {
-          loadingOverlayEl.hidden = true;
+          // Keep skeletons visible while the render cache warms up.
           const goals = data.goals || [];
           for (const g of goals) {
             g._lineageFull = false;
             g._lineageRequested = false;
           }
-          await preloadStateImages(goals);
+          try {
+            await preloadStateImages(goals);
+          } catch (err) {
+            console.error("Population image preload failed", err);
+          }
           goalsByName = new Map();
           goalOrder = [];
           for (const g of goals) {
@@ -4835,7 +5011,11 @@
           }
           activeGoalRenderToken += 1;
           renderGoalTabs();
-          renderActiveGoal(true);
+          try {
+            renderActiveGoal(true);
+          } finally {
+            setPopulationLoading(false);
+          }
         } else if (data.type === "goal_updated") {
           const g = data.goal;
           if (g) {
@@ -4984,7 +5164,6 @@
             g.countdownDeadlineMs = 0;
             g.evolving = false;
           }
-          loadingOverlayEl.hidden = true;
           renderRoundStatus();
           updateVoteCards();
           clearAllCursors();
@@ -5411,7 +5590,7 @@
           return;
         }
 
-        const fallbackPop = taskSpec.kind === "control" ? (taskSpec.defaultPopSize || 16) : initialPop;
+        const fallbackPop = taskSpec.kind === "control" ? (taskSpec.defaultPopSize || 30) : initialPop;
         const pop = parsePopValue(newRoomPopInput, fallbackPop, maxPop);
         const taskDefaultMinVotes = taskSpec.defaultMinVotes > 0 ? taskSpec.defaultMinVotes : defaultMinVotes;
         const minVotes = parseMinVotesValue(newRoomMinVotesInput, taskDefaultMinVotes);
@@ -5536,7 +5715,7 @@
           const goal = emptyGoalInput.value.trim();
           const taskId = emptyTaskSelect ? (emptyTaskSelect.value || "image") : "image";
           const spec = getTaskSpec(taskId);
-          const fallbackPop = spec.kind === "control" ? (spec.defaultPopSize || 16) : initialPop;
+          const fallbackPop = spec.kind === "control" ? (spec.defaultPopSize || 30) : initialPop;
           const pop = parsePopValue(emptyPopInput, fallbackPop, spec.maxPopSize || 64);
           const taskDefaultMinVotes = spec.defaultMinVotes > 0 ? spec.defaultMinVotes : initialMinVotes;
           const minVotes = parseMinVotesValue(emptyMinVotesInput, taskDefaultMinVotes);
@@ -5599,7 +5778,14 @@
           lineageCollapsed = !lineageCollapsed;
           renderLineageTree(goalsByName.get(activeGoalName));
         });
-        window.addEventListener("resize", () => drawLineageEdges());
+        let lineageResizeRaf = 0;
+        window.addEventListener("resize", () => {
+          if (lineageResizeRaf) return;
+          lineageResizeRaf = requestAnimationFrame(() => {
+            lineageResizeRaf = 0;
+            drawLineageEdges();
+          });
+        });
       }
 
       function setGridFilter(nextFilter) {
@@ -5712,19 +5898,48 @@
         return Number.isNaN(parsed) ? 0 : parsed;
       }
 
-      function renderFullscreenTelemetry() {
+      let fsTelemetryParts = null;
+      let fsTelemetryLastPaint = 0;
+
+      function ensureFullscreenTelemetryParts() {
+        if (fsTelemetryParts || !fsSimTelemetryEl) return fsTelemetryParts;
+        fsSimTelemetryEl.replaceChildren();
+        const make = (label) => {
+          const span = document.createElement("span");
+          if (label) span.appendChild(document.createTextNode(`${label} `));
+          const strong = document.createElement("strong");
+          span.appendChild(strong);
+          fsSimTelemetryEl.appendChild(span);
+          return strong;
+        };
+        fsTelemetryParts = {
+          step: make("step"),
+          x: make("x"),
+          theta: make("\u03b8"),
+          force: make("F"),
+          status: make(""),
+        };
+        return fsTelemetryParts;
+      }
+
+      function renderFullscreenTelemetry(force = false) {
         if (!fsSimTelemetryEl || !fsSimState) return;
+        // Telemetry only needs a few updates per second; the canvas carries the motion.
+        const now = performance.now();
+        if (!force && now - fsTelemetryLastPaint < 100) return;
+        fsTelemetryLastPaint = now;
+        const parts = ensureFullscreenTelemetryParts();
+        if (!parts) return;
         const [x, , theta] = fsSimState.state;
         const deg = (theta * 180.0) / Math.PI;
         const status = fsSimState.terminated
           ? "fell"
           : (fsSimState.step >= fsSimState.maxSteps ? "balanced!" : (fsSimState.playing ? "live" : "paused"));
-        fsSimTelemetryEl.innerHTML =
-          `<span>step <strong>${fsSimState.step}/${fsSimState.maxSteps}</strong></span>` +
-          `<span>x <strong>${x >= 0 ? "+" : ""}${x.toFixed(2)}m</strong></span>` +
-          `<span>\u03b8 <strong>${deg >= 0 ? "+" : ""}${deg.toFixed(1)}\u00b0</strong></span>` +
-          `<span>F <strong>${fsSimState.lastForce >= 0 ? "+" : ""}${fsSimState.lastForce.toFixed(1)}N</strong></span>` +
-          `<span><strong>${status}</strong></span>`;
+        parts.step.textContent = `${fsSimState.step}/${fsSimState.maxSteps}`;
+        parts.x.textContent = `${x >= 0 ? "+" : ""}${x.toFixed(2)}m`;
+        parts.theta.textContent = `${deg >= 0 ? "+" : ""}${deg.toFixed(1)}\u00b0`;
+        parts.force.textContent = `${fsSimState.lastForce >= 0 ? "+" : ""}${fsSimState.lastForce.toFixed(1)}N`;
+        parts.status.textContent = status;
       }
 
       function resetFullscreenEpisode(newSeed) {
@@ -5738,7 +5953,7 @@
         fsSimState.doneAtPerf = 0;
         fsSimState.lastStepPerf = performance.now();
         renderCartpoleLiveFrame(fsCanvasEl, fsSimState.state, 0, 0, fsSimState.maxSteps);
-        renderFullscreenTelemetry();
+        renderFullscreenTelemetry(true);
       }
 
       function startFullscreenSim(genome, taskId) {
@@ -5771,7 +5986,7 @@
         };
         fsSimState = stateObj;
         renderCartpoleLiveFrame(fsCanvasEl, stateObj.state, 0, 0, maxSteps);
-        renderFullscreenTelemetry();
+        renderFullscreenTelemetry(true);
 
         function loop(now) {
           if (fsSimState !== stateObj || fullscreenModalEl.hidden) return;
@@ -5940,7 +6155,7 @@
           fsSimState.playing = !fsSimState.playing;
           fsSimState.lastStepPerf = performance.now();
           fsSimPlayBtn.textContent = fsSimState.playing ? "Pause" : "Play";
-          renderFullscreenTelemetry();
+          renderFullscreenTelemetry(true);
         });
       }
       if (fsSimRestartBtn) {
@@ -5971,7 +6186,7 @@
           fsSimState.step,
           fsSimState.maxSteps
         );
-        renderFullscreenTelemetry();
+        renderFullscreenTelemetry(true);
       }
       if (fsSimNudgeLBtn) fsSimNudgeLBtn.addEventListener("click", () => applyCartpoleNudge(-1));
       if (fsSimNudgeRBtn) fsSimNudgeRBtn.addEventListener("click", () => applyCartpoleNudge(1));
@@ -6087,6 +6302,44 @@
         else if (e.key === "ArrowRight" && fullscreenNode === null) fsNextBtn.click();
       });
 
+      function renderLoadingSkeletons() {
+        const count = Math.max(3, Math.min(12, initialPop || 12));
+        const frag = document.createDocumentFragment();
+        for (let i = 0; i < count; i++) {
+          const card = document.createElement("div");
+          card.className = "genome-card is-skeleton-card";
+          card.setAttribute("aria-hidden", "true");
+
+          const thumb = document.createElement("span");
+          thumb.className = "skel-thumb";
+          card.appendChild(thumb);
+
+          const footer = document.createElement("div");
+          footer.className = "genome-footer";
+          const score = document.createElement("span");
+          score.className = "skel-bar";
+          score.style.setProperty("--skel-w", "34px");
+          score.style.setProperty("--skel-h", "8px");
+          footer.appendChild(score);
+
+          const btns = document.createElement("span");
+          btns.className = "vote-btns";
+          for (let b = 0; b < 3; b++) {
+            const chip = document.createElement("span");
+            chip.className = "skel-bar";
+            chip.style.setProperty("--skel-w", b === 0 ? "20px" : "16px");
+            chip.style.setProperty("--skel-h", "8px");
+            btns.appendChild(chip);
+          }
+          footer.appendChild(btns);
+          card.appendChild(footer);
+          frag.appendChild(card);
+        }
+        genomeGridEl.replaceChildren(frag);
+      }
+
+      renderLoadingSkeletons();
+      setPopulationLoading(true);
       connect();
     </script>
   </body>
