@@ -162,6 +162,9 @@ venv.bak/
 justfile
 uv_publish.sh
 .pypi
+ecosystem.config.*
+pm2*.config.*
+pm2*.json
 deploy/*.rendered*
 deploy/*.local*
 *.secret*

@@ -189,7 +189,7 @@ def _ensure_lobby_default_goals(
             changed = True
         task_id = normalize_task_id(str(g.get("task", "image")))
         task_spec = get_task_spec(task_id)
-        if task_spec.kind == "control" and int(g.get("generation", 0)) == 0:
+        if task_spec.kind == "control":
             p = g.get("params")
             if isinstance(p, dict):
                 t_max_votes = max(
@@ -204,25 +204,26 @@ def _ensure_lobby_default_goals(
                 if abs(float(p.get("eliteFrac", 0.0)) - exp_elite) > 1e-6:
                     p["eliteFrac"] = exp_elite
                     changed = True
-            cur_genomes = g.get("genomes")
-            if isinstance(cur_genomes, list) and cur_genomes:
-                target_pop = clamp_pop_for_task(
-                    task_id,
-                    min(default_pop_size, task_spec.default_pop_size),
-                )
-                needs_resize = len(cur_genomes) != target_pop
-                needs_refresh = any(
-                    is_gen0_founder_presolved(task_id, cg)
-                    for cg in cur_genomes
-                )
-                if needs_resize or needs_refresh:
-                    fresh = create_task_population(
+            if int(g.get("generation", 0)) == 0:
+                cur_genomes = g.get("genomes")
+                if isinstance(cur_genomes, list) and cur_genomes:
+                    target_pop = clamp_pop_for_task(
                         task_id,
-                        target_pop if needs_resize else len(cur_genomes),
+                        min(default_pop_size, task_spec.default_pop_size),
                     )
-                    g["genomes"] = fresh
-                    g["lineage"] = _build_lineage_from_genomes(fresh, gen=0)
-                    changed = True
+                    needs_resize = len(cur_genomes) != target_pop
+                    needs_refresh = any(
+                        is_gen0_founder_presolved(task_id, cg)
+                        for cg in cur_genomes
+                    )
+                    if needs_resize or needs_refresh:
+                        fresh = create_task_population(
+                            task_id,
+                            target_pop if needs_resize else len(cur_genomes),
+                        )
+                        g["genomes"] = fresh
+                        g["lineage"] = _build_lineage_from_genomes(fresh, gen=0)
+                        changed = True
     added: list[dict] = []
     default_goal_max_votes = max(
         1,
@@ -295,6 +296,8 @@ def seed_from_db(default_pop_size: int = 30, default_max_votes: int | None = Non
 def flush_room_states() -> int:
     """Drain dirty room evolution snapshots from Mummy and persist them via Django ORM."""
     raw = mummy_ws.drain_dirty_room_states()
+    if not raw or raw == "[]":
+        return 0
     items = json.loads(raw)
     if not items:
         return 0
@@ -311,6 +314,8 @@ def flush_room_states() -> int:
 def flush_pending_messages() -> int:
     """Drain queued chat messages from Mummy and persist them via Django ORM."""
     raw = mummy_ws.drain_pending_messages()
+    if not raw or raw == "[]":
+        return 0
     items = json.loads(raw)
     if not items:
         return 0
@@ -332,63 +337,88 @@ def flush_pending_messages() -> int:
 def flush_evo_jobs() -> int:
     """Process pending PyTorch CPPN initialization/evolution jobs from Mummy."""
     raw = mummy_ws.drain_evo_jobs()
+    if not raw or raw == "[]":
+        return 0
     jobs = json.loads(raw)
     if not jobs:
         return 0
 
+    processed = 0
     for job in jobs:
-        kind = job["kind"]
-        room = job["room"]
-        task = normalize_task_id(job.get("task", "image"))
-        pop_size = clamp_pop_for_task(task, int(job.get("populationSize") or default_pop_for_task(task)))
-        if kind == "init_room":
-            if _persist_to_db:
-                close_old_connections()
-                saved_row = RoomEvolutionState.objects.filter(room=room).first()
-                if saved_row is not None:
-                    sync_genome_counter(_max_genome_id_in_state(saved_row.state_json))
-                    mummy_ws.restore_room_state(room, saved_row.state_json)
-                    continue
-            initial_goal = (job.get("goal") or "").strip()
-            if initial_goal:
-                goal_specs: tuple[tuple[str, str, int | None], ...] = ((initial_goal, task, pop_size),)
-            elif room != "lobby":
-                goal_specs = ()
-            else:
-                goal_specs = get_config().get_lobby_goal_specs()
-            mummy_ws.apply_room_init(
-                room, _build_goals_payload(goal_specs, pop_size=pop_size)
-            )
-        elif kind == "create":
-            genomes = create_task_population(task, pop_size)
-            mummy_ws.apply_goal_create(
-                room, job["goal"], job["username"], json.dumps(genomes)
-            )
-        elif kind == "evolve":
-            next_genomes, top_score = evolve_population(
-                job["genomes"],
-                job["scores"],
-                job["upCounts"],
-                mut_sigma=float(job.get("mutSigma", 0.30)),
-                pop_size=pop_size,
-                elite_frac=float(job.get("eliteFrac", 0.20)),
-                crossover_rate=float(job.get("crossoverRate", 0.75)),
-            )
-            mummy_ws.apply_goal_evolve(
-                room, job["goal"], json.dumps(next_genomes), int(top_score)
-            )
-        elif kind == "resize":
-            resized = resize_population(
-                job["genomes"],
-                pop_size,
-                job["scores"],
-                job["upCounts"],
-                mut_sigma=float(job.get("mutSigma", 0.30)),
-            )
-            mummy_ws.apply_goal_resize(
-                room, job["goal"], job["username"], json.dumps(resized)
-            )
-    return len(jobs)
+        kind = str(job.get("kind") or "")
+        room = str(job.get("room") or "")
+        goal_name = str(job.get("goal") or "")
+        try:
+            task = normalize_task_id(job.get("task", "image"))
+            pop_size = clamp_pop_for_task(task, int(job.get("populationSize") or default_pop_for_task(task)))
+            if kind == "init_room":
+                if _persist_to_db:
+                    close_old_connections()
+                    saved_row = RoomEvolutionState.objects.filter(room=room).first()
+                    if saved_row is not None:
+                        sync_genome_counter(_max_genome_id_in_state(saved_row.state_json))
+                        mummy_ws.restore_room_state(room, saved_row.state_json)
+                        processed += 1
+                        continue
+                initial_goal = goal_name.strip()
+                if initial_goal:
+                    goal_specs: tuple[tuple[str, str, int | None], ...] = ((initial_goal, task, pop_size),)
+                elif room != "lobby":
+                    goal_specs = ()
+                else:
+                    goal_specs = get_config().get_lobby_goal_specs()
+                mummy_ws.apply_room_init(
+                    room, _build_goals_payload(goal_specs, pop_size=pop_size)
+                )
+            elif kind == "create":
+                genomes = create_task_population(task, pop_size)
+                mummy_ws.apply_goal_create(
+                    room, goal_name, job["username"], json.dumps(genomes)
+                )
+            elif kind == "evolve":
+                next_genomes, top_score = evolve_population(
+                    job["genomes"],
+                    job["scores"],
+                    job["upCounts"],
+                    mut_sigma=float(job.get("mutSigma", 0.30)),
+                    pop_size=pop_size,
+                    elite_frac=float(job.get("eliteFrac", 0.20)),
+                    crossover_rate=float(job.get("crossoverRate", 0.75)),
+                )
+                mummy_ws.apply_goal_evolve(
+                    room, goal_name, json.dumps(next_genomes), int(top_score)
+                )
+            elif kind == "resize":
+                resized = resize_population(
+                    job["genomes"],
+                    pop_size,
+                    job["scores"],
+                    job["upCounts"],
+                    mut_sigma=float(job.get("mutSigma", 0.30)),
+                )
+                mummy_ws.apply_goal_resize(
+                    room, goal_name, job["username"], json.dumps(resized)
+                )
+            processed += 1
+        except Exception as exc:
+            import sys
+            print(f"[ws_bridge] Evo job failed ({kind} {room}/{goal_name}): {exc}", file=sys.stderr, flush=True)
+            if kind == "evolve" and room and goal_name:
+                try:
+                    mummy_ws.cancel_goal_evolve(room, goal_name)
+                except Exception:
+                    pass
+            elif kind == "create" and room and goal_name:
+                try:
+                    mummy_ws.cancel_goal_create(room, goal_name)
+                except Exception:
+                    pass
+            elif kind == "init_room" and room:
+                try:
+                    mummy_ws.apply_room_init(room, "[]")
+                except Exception:
+                    pass
+    return processed
 
 
 def _worker_loop() -> None:

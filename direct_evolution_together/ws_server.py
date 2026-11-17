@@ -11,6 +11,10 @@ def main() -> None:
 
     import django
     from django.conf import settings
+    import torch
+
+    if not torch.cuda.is_available():
+        torch.set_num_threads(1)
 
     django.setup()
 

@@ -41,6 +41,10 @@ def _get_render_lock(key: str) -> threading.Lock:
     with _MEDIA_LOCKS_GUARD:
         lock = _MEDIA_RENDER_LOCKS.get(key)
         if lock is None:
+            if len(_MEDIA_RENDER_LOCKS) > 512:
+                unlocked = [k for k, lk in _MEDIA_RENDER_LOCKS.items() if not lk.locked()]
+                for k in unlocked[:256]:
+                    _MEDIA_RENDER_LOCKS.pop(k, None)
             lock = threading.Lock()
             _MEDIA_RENDER_LOCKS[key] = lock
         return lock
@@ -86,9 +90,10 @@ def render_task_media(
     g_hash = genome_content_hash(genome, length=20)
     key = f"{spec.task_id}_{g_hash}_s{seed}"
     renders_dir = Path(media_root) / "renders"
-    renders_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(Path(media_root), 0o755)
-    os.chmod(renders_dir, 0o755)
+    if not renders_dir.is_dir():
+        renders_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(Path(media_root), 0o755)
+        os.chmod(renders_dir, 0o755)
 
     mp4_path = renders_dir / f"{key}.mp4"
     png_path = renders_dir / f"{key}.png"

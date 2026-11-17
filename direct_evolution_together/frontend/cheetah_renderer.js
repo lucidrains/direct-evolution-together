@@ -2,10 +2,48 @@
 (function (global) {
   "use strict";
 
+  const HEAD_SIN = Math.sin(0.87);
+  const HEAD_COS = Math.cos(0.87);
+  const BACK_LEG_SPECS = [
+    ["bthigh", -0.5, 0.0, 3, 0.1, -0.13, Math.sin(-3.8), Math.cos(-3.8), 0.145],
+    ["bshin", 0.16, -0.25, 4, -0.14, -0.07, Math.sin(-2.03), Math.cos(-2.03), 0.15],
+    ["bfoot", -0.28, -0.14, 5, 0.03, -0.097, Math.sin(-0.27), Math.cos(-0.27), 0.094],
+  ];
+  const FRONT_LEG_SPECS = [
+    ["fthigh", 0.5, 0.0, 6, -0.07, -0.12, Math.sin(0.52), Math.cos(0.52), 0.133],
+    ["fshin", -0.14, -0.24, 7, 0.065, -0.09, Math.sin(-0.6), Math.cos(-0.6), 0.106],
+    ["ffoot", 0.13, -0.18, 8, 0.045, -0.07, Math.sin(-0.6), Math.cos(-0.6), 0.07],
+  ];
+
   function rotXZ(x, z, a) {
     const c = Math.cos(a);
     const s = Math.sin(a);
     return [x * c + z * s, -x * s + z * c];
+  }
+
+  function appendLegSegments(segs, frame, px, pz, pa, specs) {
+    let x = px;
+    let z = pz;
+    let a = pa;
+    for (let i = 0; i < specs.length; i++) {
+      const [name, ox, oz, qIdx, gx, gz, sga, cga, h] = specs[i];
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      x += ox * ca + oz * sa;
+      z += -ox * sa + oz * ca;
+      a += frame[qIdx];
+      const ca2 = Math.cos(a);
+      const sa2 = Math.sin(a);
+      const cx = gx * ca2 + gz * sa2;
+      const cz = -gx * sa2 + gz * ca2;
+      const ax0 = sga * ca2 + cga * sa2;
+      const ax1 = -sga * sa2 + cga * ca2;
+      segs.push([
+        name,
+        [x + cx - h * ax0, z + cz - h * ax1],
+        [x + cx + h * ax0, z + cz + h * ax1],
+      ]);
+    }
   }
 
   function cheetahFkSegments(frame) {
@@ -13,53 +51,20 @@
     const rx = frame[0];
     const rz = frame[1];
     const ry = frame[2];
-    const bth = frame[3];
-    const bsh = frame[4];
-    const bft = frame[5];
-    const fth = frame[6];
-    const fsh = frame[7];
-    const fft = frame[8];
     const rzw = rz + 0.7;
 
     const t1 = rotXZ(-0.5, 0.0, ry);
     const t2 = rotXZ(0.5, 0.0, ry);
     const hc = rotXZ(0.6, 0.1, ry);
-    const ha = rotXZ(Math.sin(0.87), Math.cos(0.87), ry);
+    const ha = rotXZ(HEAD_SIN, HEAD_COS, ry);
 
     const segs = [
       ["torso", [rx + t1[0], rzw + t1[1]], [rx + t2[0], rzw + t2[1]]],
       ["head", [rx + hc[0] - 0.15 * ha[0], rzw + hc[1] - 0.15 * ha[1]], [rx + hc[0] + 0.15 * ha[0], rzw + hc[1] + 0.15 * ha[1]]],
     ];
 
-    function appendLeg(px, pz, pa, specs) {
-      let x = px;
-      let z = pz;
-      let a = pa;
-      for (const [name, ox, oz, dq, gx, gz, ga, h] of specs) {
-        const d = rotXZ(ox, oz, a);
-        x += d[0];
-        z += d[1];
-        a += dq;
-        const c = rotXZ(gx, gz, a);
-        const ax = rotXZ(Math.sin(ga), Math.cos(ga), a);
-        segs.push([
-          name,
-          [x + c[0] - h * ax[0], z + c[1] - h * ax[1]],
-          [x + c[0] + h * ax[0], z + c[1] + h * ax[1]],
-        ]);
-      }
-    }
-
-    appendLeg(rx, rzw, ry, [
-      ["bthigh", -0.5, 0.0, bth, 0.1, -0.13, -3.8, 0.145],
-      ["bshin", 0.16, -0.25, bsh, -0.14, -0.07, -2.03, 0.15],
-      ["bfoot", -0.28, -0.14, bft, 0.03, -0.097, -0.27, 0.094],
-    ]);
-    appendLeg(rx, rzw, ry, [
-      ["fthigh", 0.5, 0.0, fth, -0.07, -0.12, 0.52, 0.133],
-      ["fshin", -0.14, -0.24, fsh, 0.065, -0.09, -0.6, 0.106],
-      ["ffoot", 0.13, -0.18, fft, 0.045, -0.07, -0.6, 0.07],
-    ]);
+    appendLegSegments(segs, frame, rx, rzw, ry, BACK_LEG_SPECS);
+    appendLegSegments(segs, frame, rx, rzw, ry, FRONT_LEG_SPECS);
     return segs;
   }
 

@@ -124,7 +124,10 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": _resolve_db_path(),
-        "OPTIONS": {"timeout": 20},
+        "OPTIONS": {
+            "timeout": 20,
+            "transaction_mode": "IMMEDIATE",
+        },
     }
 }
 

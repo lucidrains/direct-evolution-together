@@ -7,7 +7,7 @@ import statistics
 from typing import Iterable
 
 from django.db import transaction
-from django.db.models import F
+from django.utils import timezone
 
 from direct_evolution_together.config import TrustPolicyConfig, get_config
 from direct_evolution_together.models import ContributorTrust, ExternalEvalResult
@@ -114,22 +114,72 @@ def _aggregate_cluster(cluster: list[dict], trust_cfg: TrustPolicyConfig) -> dic
     return rep_sum
 
 
-def _adjust_reputation(room: str, cids: Iterable[str], agreed: bool, trust_cfg: TrustPolicyConfig) -> None:
-    delta = trust_cfg.agree_reward if agreed else -trust_cfg.mismatch_penalty
+def _queue_reputation_delta(
+    rep_deltas: dict[str, list[bool]],
+    cids: Iterable[str],
+    agreed: bool,
+) -> None:
     for cid in cids:
         if not cid or cid.startswith("worker:"):
             continue
-        obj, _ = ContributorTrust.objects.get_or_create(
-            room=room,
-            contributor_id=cid,
-            defaults={"reputation": trust_cfg.initial_reputation},
+        rep_deltas.setdefault(cid, []).append(agreed)
+
+
+def _flush_reputation_deltas(
+    room: str,
+    rep_deltas: dict[str, list[bool]],
+    trust_cfg: TrustPolicyConfig,
+    seed_contrib: ContributorTrust | None = None,
+    submission_count: int = 0,
+) -> None:
+    target_cids = set(rep_deltas.keys())
+    if seed_contrib is not None and submission_count > 0:
+        target_cids.add(seed_contrib.contributor_id)
+    if not target_cids:
+        return
+
+    by_cid: dict[str, ContributorTrust] = {}
+    if seed_contrib is not None:
+        by_cid[seed_contrib.contributor_id] = seed_contrib
+
+    missing_lookup = [c for c in target_cids if c not in by_cid]
+    if missing_lookup:
+        for obj in ContributorTrust.objects.filter(room=room, contributor_id__in=missing_lookup):
+            by_cid[obj.contributor_id] = obj
+
+    to_create = [
+        ContributorTrust(room=room, contributor_id=cid, reputation=trust_cfg.initial_reputation)
+        for cid in target_cids
+        if cid not in by_cid
+    ]
+    if to_create:
+        ContributorTrust.objects.bulk_create(to_create, ignore_conflicts=True)
+        for obj in ContributorTrust.objects.filter(room=room, contributor_id__in=[c.contributor_id for c in to_create]):
+            by_cid[obj.contributor_id] = obj
+
+    now = timezone.now()
+    dirty: list[ContributorTrust] = []
+    for cid in target_cids:
+        obj = by_cid.get(cid)
+        if obj is None:
+            continue
+        if seed_contrib is not None and cid == seed_contrib.contributor_id and submission_count > 0:
+            obj.submissions += submission_count
+        for agreed in rep_deltas.get(cid, ()):
+            delta = trust_cfg.agree_reward if agreed else -trust_cfg.mismatch_penalty
+            new_rep = max(0.0, min(1.0, float(obj.reputation) + delta))
+            obj.reputation = round(new_rep, 4)
+            obj.agreements += int(agreed)
+            obj.mismatches += int(not agreed)
+            obj.quarantined = new_rep < trust_cfg.min_trusted_reputation
+        obj.updated_at = now
+        dirty.append(obj)
+
+    if dirty:
+        ContributorTrust.objects.bulk_update(
+            dirty,
+            ["submissions", "reputation", "agreements", "mismatches", "quarantined", "updated_at"],
         )
-        new_rep = max(0.0, min(1.0, float(obj.reputation) + delta))
-        obj.reputation = round(new_rep, 4)
-        obj.agreements += int(agreed)
-        obj.mismatches += int(not agreed)
-        obj.quarantined = new_rep < trust_cfg.min_trusted_reputation
-        obj.save(update_fields=["reputation", "agreements", "mismatches", "quarantined", "updated_at"])
 
 
 def _ingest_authority(
@@ -165,7 +215,6 @@ def _ingest_authority(
 
 
 def _ingest_peer(
-    room: str,
     gh: str,
     clean_sum: dict[str, object],
     prev_status: str,
@@ -173,6 +222,7 @@ def _ingest_peer(
     atts: list[dict],
     contrib: ContributorTrust,
     trust_cfg: TrustPolicyConfig,
+    rep_deltas: dict[str, list[bool]],
 ) -> tuple[str, list[dict], dict[str, object]]:
     pval = float(clean_sum["primaryValue"])  # type: ignore[arg-type]
     already_idx = next((i for i, a in enumerate(atts) if a.get("cid") == contrib.contributor_id), None)
@@ -198,19 +248,23 @@ def _ingest_peer(
         newly_agreed = [c["cid"] for c in atts if c.get("cid") in cluster_cids and not c.get("scored")]
         newly_outlier = [c["cid"] for c in atts if c.get("cid") not in cluster_cids and not c.get("scored")]
         if newly_agreed:
-            _adjust_reputation(room, newly_agreed, True, trust_cfg)
+            _queue_reputation_delta(rep_deltas, newly_agreed, True)
         if newly_outlier:
-            _adjust_reputation(room, newly_outlier, False, trust_cfg)
+            _queue_reputation_delta(rep_deltas, newly_outlier, False)
         for c in atts:
             c["scored"] = True
         if already_idx is None and len(atts) >= trust_cfg.max_attestations:
-            _adjust_reputation(room, [contrib.contributor_id], values_agree(pval, float(eff_summary["primaryValue"]), trust_cfg), trust_cfg)
+            _queue_reputation_delta(
+                rep_deltas,
+                [contrib.contributor_id],
+                values_agree(pval, float(eff_summary["primaryValue"]), trust_cfg),
+            )
     elif prev_status == "verified" and existing_payload.get("summary"):
         status = "verified"
         eff_summary = existing_payload["summary"]
         if already_idx is None:
             matches = values_agree(pval, float(eff_summary.get("primaryValue", 0.0)), trust_cfg)
-            _adjust_reputation(room, [contrib.contributor_id], matches, trust_cfg)
+            _queue_reputation_delta(rep_deltas, [contrib.contributor_id], matches)
             for a in atts:
                 if a.get("cid") == contrib.contributor_id:
                     a["scored"] = True
@@ -243,8 +297,28 @@ def submit_eval_attestations(
 ) -> dict[str, object]:
     trust_cfg = get_config().trust
     stored_items: list[dict] = []
+    changed_items: list[dict] = []
     verified_count = 0
     contrib: ContributorTrust | None = None
+
+    parsed_batch: list[tuple[str, dict, dict[str, object]]] = []
+    for raw_item in results[:64]:
+        if not isinstance(raw_item, dict):
+            continue
+        gh = str(raw_item.get("hash") or "").strip()[:32]
+        raw_sum = raw_item.get("summary")
+        if not gh or not isinstance(raw_sum, dict):
+            continue
+        parsed_batch.append((gh, raw_item, sanitize_summary(raw_sum)))
+
+    if not parsed_batch:
+        return {
+            "items": [],
+            "changedItems": [],
+            "contributorReputation": 1.0 if authority else float(trust_cfg.initial_reputation),
+            "quarantined": False,
+            "verifiedCount": 0,
+        }
 
     with transaction.atomic():
         if not authority:
@@ -256,60 +330,102 @@ def submit_eval_attestations(
             if contrib.quarantined or contrib.reputation < trust_cfg.min_trusted_reputation:
                 return {
                     "items": [],
+                    "changedItems": [],
                     "contributorReputation": float(contrib.reputation),
                     "quarantined": True,
                     "verifiedCount": 0,
                 }
-            # Acquire SQLite write lock before any SELECT to avoid BUSY_SNAPSHOT across uvicorn workers.
-            ContributorTrust.objects.filter(pk=contrib.pk).update(submissions=F("submissions") + len(results[:64]))
 
-        for raw_item in results[:64]:
-            if not isinstance(raw_item, dict):
-                continue
-            gh = str(raw_item.get("hash") or "").strip()[:32]
-            raw_sum = raw_item.get("summary")
-            if not gh or not isinstance(raw_sum, dict):
-                continue
-            clean_sum = sanitize_summary(raw_sum)
-
-            row = ExternalEvalResult.objects.filter(
-                room=room, goal=goal, generation=generation, genome_hash=gh
-            ).first()
-            existing_payload = _loads_safe(row.payload_json, dict) if row else {}
-            attestations = _loads_safe(row.attestations_json, list) if row else []
-
-            if authority:
-                status, attestations, entry = _ingest_authority(raw_item, gh, clean_sum, existing_payload, contributor_id)
-            else:
-                assert contrib is not None
-                prev_status = row.status if row else "pending"
-                status, attestations, entry = _ingest_peer(
-                    room, gh, clean_sum, prev_status, existing_payload, attestations, contrib, trust_cfg
-                )
-
-            ExternalEvalResult.objects.update_or_create(
+        unique_hashes = list({gh for gh, _, _ in parsed_batch})
+        rows_by_hash: dict[str, ExternalEvalResult] = {
+            r.genome_hash: r
+            for r in ExternalEvalResult.objects.filter(
                 room=room,
                 goal=goal,
                 generation=generation,
-                genome_hash=gh,
-                defaults={
-                    "status": status,
-                    "attestations_json": json.dumps(attestations),
-                    "payload_json": json.dumps(entry),
-                },
+                genome_hash__in=unique_hashes,
             )
+        }
+
+        rep_deltas: dict[str, list[bool]] = {}
+        new_rows: dict[str, ExternalEvalResult] = {}
+        dirty_rows: dict[str, ExternalEvalResult] = {}
+        now = timezone.now()
+
+        for gh, raw_item, clean_sum in parsed_batch:
+            row = rows_by_hash.get(gh)
+            existing_payload = _loads_safe(row.payload_json, dict) if row else {}
+            attestations = _loads_safe(row.attestations_json, list) if row else []
+            prev_status = row.status if row else ""
+
+            if authority:
+                status, attestations, entry = _ingest_authority(raw_item, gh, clean_sum, existing_payload, contributor_id)
+                did_change = True
+            else:
+                assert contrib is not None
+                eff_prev = prev_status or "pending"
+                status, attestations, entry = _ingest_peer(
+                    gh, clean_sum, eff_prev, existing_payload, attestations, contrib, trust_cfg, rep_deltas
+                )
+                did_change = (
+                    row is None
+                    or status != prev_status
+                    or entry.get("summary") != existing_payload.get("summary")
+                    or (status != "verified" and entry.get("trust") != existing_payload.get("trust"))
+                )
+
+            atts_json = json.dumps(attestations)
+            payload_json = json.dumps(entry)
+            if row is None:
+                created = ExternalEvalResult(
+                    room=room,
+                    goal=goal,
+                    generation=generation,
+                    genome_hash=gh,
+                    status=status,
+                    attestations_json=atts_json,
+                    payload_json=payload_json,
+                )
+                rows_by_hash[gh] = created
+                new_rows[gh] = created
+            else:
+                row.status = status
+                row.attestations_json = atts_json
+                row.payload_json = payload_json
+                row.updated_at = now
+                if gh not in new_rows:
+                    dirty_rows[gh] = row
+
             if status == "verified":
                 verified_count += 1
             stored_items.append(entry)
+            if did_change:
+                changed_items.append(entry)
+
+        if new_rows:
+            ExternalEvalResult.objects.bulk_create(list(new_rows.values()))
+        if dirty_rows:
+            ExternalEvalResult.objects.bulk_update(
+                list(dirty_rows.values()),
+                ["status", "attestations_json", "payload_json", "updated_at"],
+            )
+        if not authority and contrib is not None:
+            _flush_reputation_deltas(
+                room,
+                rep_deltas,
+                trust_cfg,
+                seed_contrib=contrib,
+                submission_count=len(results[:64]),
+            )
 
     rep_val, quarantined = 1.0, False
     if contrib is not None:
-        contrib.refresh_from_db()
         rep_val = float(contrib.reputation)
         quarantined = bool(contrib.quarantined)
 
     return {
         "items": stored_items,
+        "changedItems": changed_items,
         "contributorReputation": rep_val,
         "quarantined": quarantined,
         "verifiedCount": verified_count,

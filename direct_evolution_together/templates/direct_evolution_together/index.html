@@ -3449,7 +3449,7 @@
         if (imageFlushTimer === null) imageFlushTimer = setTimeout(flushImageWrites, 200);
       }
 
-      async function hydrateControlEvalsFromDb(taskId, genomes, seeds, targetMap) {
+      async function hydrateControlEvalsFromDb(taskId, genomes, seeds, targetMap, altSeeds = null) {
         if (renderDbDisabled || !Array.isArray(genomes) || !genomes.length) return;
         const db = await openRenderDb();
         if (!db || renderDbDisabled) return;
@@ -3461,7 +3461,9 @@
           const mapKey = `${taskId}:${fp}`;
           if (seen.has(mapKey) || targetMap.has(mapKey)) continue;
           seen.add(mapKey);
-          checks.push({ mapKey, dbKey: evalDbKey(taskId, seeds, fp) });
+          const primaryKey = evalDbKey(taskId, seeds, fp);
+          const fallbackKey = Array.isArray(altSeeds) && altSeeds.length ? evalDbKey(taskId, altSeeds, fp) : "";
+          checks.push({ mapKey, dbKey: primaryKey, altDbKey: fallbackKey !== primaryKey ? fallbackKey : "" });
         }
         if (!checks.length) return;
         await new Promise((resolve) => {
@@ -3477,13 +3479,31 @@
           let settled = false;
           const done = () => { if (--rem <= 0 && !settled) { settled = true; resolve(); } };
           tx.onabort = tx.onerror = () => { if (!settled) { settled = true; resolve(); } };
-          checks.forEach(({ mapKey, dbKey }) => {
+          checks.forEach(({ mapKey, dbKey, altDbKey }) => {
             try {
               const req = store.get(dbKey);
               req.onsuccess = () => {
                 const v = req.result && req.result.val;
-                if (v && v.summary) targetMap.set(mapKey, v);
-                done();
+                if (v && v.summary) {
+                  targetMap.set(mapKey, v);
+                  done();
+                  return;
+                }
+                if (!altDbKey) {
+                  done();
+                  return;
+                }
+                try {
+                  const req2 = store.get(altDbKey);
+                  req2.onsuccess = () => {
+                    const v2 = req2.result && req2.result.val;
+                    if (v2 && v2.summary) targetMap.set(mapKey, v2);
+                    done();
+                  };
+                  req2.onerror = done;
+                } catch (_) {
+                  done();
+                }
               };
               req.onerror = done;
             } catch (_) {
@@ -4195,7 +4215,10 @@
       }
 
       async function callSimWorkerPoolEval(taskId, genomes, evalSeeds, timeoutMs = 45000) {
-        const poolCount = genomes.length >= 2 ? Math.min(SIM_POOL_MAX, genomes.length) : 1;
+        const maxPool = taskId === "halfcheetah"
+          ? (genomes.length >= 6 ? Math.min(2, SIM_POOL_MAX) : 1)
+          : SIM_POOL_MAX;
+        const poolCount = genomes.length >= 2 ? Math.min(maxPool, genomes.length) : 1;
         if (poolCount === 1) {
           return callSimWorker("evalBatch", { taskId, genomes, seeds: evalSeeds }, timeoutMs, 0);
         }
@@ -4882,10 +4905,11 @@
         return TaskRenderers[tid] || TaskRenderers.image;
       }
 
-      const storedName = localStorage.getItem("det_username") || "";
+      let preferredUsername = localStorage.getItem("det_username") || "";
       const nameInput = document.getElementById("name-input");
-      let savedUsername = storedName;
-      nameInput.value = storedName;
+      let savedUsername = preferredUsername;
+      let pendingExplicitRename = false;
+      nameInput.value = preferredUsername;
 
       const messagesEl = document.getElementById("messages");
       const chatForm = document.getElementById("chat-form");
@@ -5072,8 +5096,43 @@
         return parseClampedFloat(inputEl, 0.0, 1.0, fallback);
       }
 
+      const RELOAD_CID_STORAGE_KEY = `det_reload_cid_${roomName}`;
+      function generateClientCid() {
+        if (window.crypto && typeof window.crypto.randomUUID === "function") {
+          return window.crypto.randomUUID().replace(/-/g, "");
+        }
+        let out = "";
+        for (let i = 0; i < 4; i++) {
+          out += Math.floor((Math.random() + 1) * 0x100000000).toString(16).slice(1);
+        }
+        return out;
+      }
+      let reusedReloadCid = false;
+      const clientCid = (() => {
+        try {
+          const raw = sessionStorage.getItem(RELOAD_CID_STORAGE_KEY);
+          if (raw) {
+            sessionStorage.removeItem(RELOAD_CID_STORAGE_KEY);
+            const parsed = JSON.parse(raw);
+            if (
+              parsed &&
+              typeof parsed.cid === "string" &&
+              parsed.cid.length >= 8 &&
+              Date.now() - Number(parsed.ts || 0) < 30000
+            ) {
+              reusedReloadCid = true;
+              return parsed.cid;
+            }
+          }
+        } catch {}
+        return generateClientCid();
+      })();
+
       let socket = null;
       let isConnected = false;
+      let isPageUnloading = false;
+      let clientHeartbeatTimer = null;
+      let lastServerMsgAt = 0;
       let goalsByName = new Map();
       let goalOrder = [];
       let activeGoalName = null;
@@ -5325,12 +5384,18 @@
           const remMs = Math.max(0, goal._deadlinePerfMs - performance.now());
           const pct = Math.max(0, Math.min(100, (remMs / durMs) * 100));
           roundVoteText.textContent = `Countdown active (${votedCandidates} cards, ${totalVotes} votes)`;
-          roundTimerEl.textContent = `Advancing in ${(remMs / 1000).toFixed(1)}s`;
+          roundTimerEl.textContent = remMs <= 50
+            ? "Evolving next generation..."
+            : `Advancing in ${(remMs / 1000).toFixed(1)}s`;
           roundTimerEl.className = "round-timer";
-          roundProgressEl.style.width = `${pct}%`;
+          roundProgressEl.style.width = remMs <= 50 ? "100%" : `${pct}%`;
           roundProgressEl.classList.add("counting");
-          startRoundStatusTimer();
-          return true;
+          if (remMs > 0) {
+            startRoundStatusTimer();
+            return true;
+          }
+          stopRoundStatusTimer();
+          return false;
         } else {
           const remaining = Math.max(0, minVotes - progressCount);
           const pct = Math.max(0, Math.min(100, (progressCount / minVotes) * 100));
@@ -5359,11 +5424,35 @@
         return Number.isNaN(parsed) ? fallback : parsed;
       }
 
+      function syncMyVotesFromGoal(goal) {
+        if (!goal || !Array.isArray(goal.votes)) return;
+        const prefix = `${goal.name}:`;
+        const activePrefix = `${goal.name}:${goal.generation}:`;
+        for (const key of Array.from(myVotes.keys())) {
+          if (key.startsWith(prefix) && !key.startsWith(activePrefix)) {
+            myVotes.delete(key);
+          }
+        }
+        const me = (savedUsername || nameInput.value || "").trim();
+        if (!me) return;
+        for (let i = 0; i < goal.votes.length; i++) {
+          const v = goal.votes[i];
+          const k = voteKey(goal.name, goal.generation, i);
+          if (v && Array.isArray(v.upUsers) && v.upUsers.includes(me)) {
+            myVotes.set(k, 1);
+          } else if (v && Array.isArray(v.downUsers) && v.downUsers.includes(me)) {
+            myVotes.set(k, -1);
+          } else {
+            myVotes.delete(k);
+          }
+        }
+      }
+
       function hasMyVote(goal, idx) {
         const mine = myVotes.get(voteKey(goal.name, goal.generation, idx)) || 0;
         if (mine !== 0) return true;
         const v = (goal.votes && goal.votes[idx]) || null;
-        const me = (nameInput.value || "").trim();
+        const me = (savedUsername || nameInput.value || "").trim();
         if (!v || !me) return false;
         return (
           (Array.isArray(v.upUsers) && v.upUsers.includes(me)) ||
@@ -5511,14 +5600,15 @@
           showThrottleNotice(`Vote cap reached (${maxVotesPerUser} active votes/round) — click an existing vote to free a slot.`);
           return;
         }
-        myVotes.set(k, prev === val ? 0 : val);
+        const nextVote = prev === val ? 0 : val;
+        myVotes.set(k, nextVote);
         updateVoteCards();
         socket.send(JSON.stringify({
           type: "cast_vote",
           goal: goal.name,
           generation: goal.generation,
           index: idx,
-          vote: val,
+          vote: nextVote,
         }));
       }
 
@@ -5667,6 +5757,7 @@
             .catch(() => {});
         }
 
+        let lastFrameIdx = -1;
         function tick(now) {
           if (activeHoverAnim !== stateObj || !canvas.isConnected) return;
           const ro = stateObj.rollout;
@@ -5677,16 +5768,22 @@
           if (taskId === "halfcheetah" && ro.frames && ro.frames.length > 0 && window.DetCheetahRenderer) {
             const elapsedSteps = Math.max(0, Math.floor(((now - startPerf) / 1000) / dt));
             const frameIdx = elapsedSteps % ro.frames.length;
-            window.DetCheetahRenderer.renderCheetahLiveFrame(canvas, ro.frames, frameIdx, maxSteps);
+            if (frameIdx !== lastFrameIdx) {
+              lastFrameIdx = frameIdx;
+              window.DetCheetahRenderer.renderCheetahLiveFrame(canvas, ro.frames, frameIdx, maxSteps);
+            }
           } else if (ro.states && ro.states.length > 0) {
             const elapsedSteps = Math.max(0, Math.floor(((now - startPerf) / 1000) / dt));
             const frameIdx = elapsedSteps % ro.states.length;
-            const frame = ro.states[frameIdx];
-            if (frame) {
-              const force = ro.forces && ro.forces.length > 0
-                ? ro.forces[Math.min(frameIdx, ro.forces.length - 1)]
-                : 0;
-              renderCartpoleLiveFrame(canvas, frame, force, frameIdx, maxSteps);
+            if (frameIdx !== lastFrameIdx) {
+              lastFrameIdx = frameIdx;
+              const frame = ro.states[frameIdx];
+              if (frame) {
+                const force = ro.forces && ro.forces.length > 0
+                  ? ro.forces[Math.min(frameIdx, ro.forces.length - 1)]
+                  : 0;
+                renderCartpoleLiveFrame(canvas, frame, force, frameIdx, maxSteps);
+              }
             }
           }
           stateObj.raf = requestAnimationFrame(tick);
@@ -5820,7 +5917,21 @@
         ]);
         if (isStale()) return;
 
-        const toPostExisting = [];
+        const pendingCrowdPosts = [];
+        const maybeQueueCrowdPost = (genome, summary, crowdEnt) => {
+          if (!summary || !crowdConfig.enabled || crowdContributorState.quarantined) return;
+          const sha = getKnownGenomeSha(genome);
+          if (!sha) return;
+          const subKey = `${goalSnap.name}:${goalSnap.generation}:${sha}`;
+          if (crowdSubmittedKeys.has(subKey)) return;
+          const isVerified = Boolean(crowdEnt && crowdEnt.trust && crowdEnt.trust.status === "verified");
+          const rate = Number(crowdConfig.spotCheckRate ?? 0.15);
+          if (!isVerified || Math.random() < rate) {
+            crowdSubmittedKeys.add(subKey);
+            pendingCrowdPosts.push({ hash: sha, summary });
+          }
+        };
+
         cardRefs.forEach((r) => {
           const localEnt = getCachedControlEntry(taskId, r.genome);
           const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
@@ -5831,155 +5942,104 @@
             renderer.renderCard(r.genome, r.canvas, eff);
           } else if (r.simBadge) {
             r.simBadge.dataset.queued = "1";
-            r.simBadge.textContent = "queued";
-            r.simBadge.title = "Evaluates automatically when scrolled into view";
+            r.simBadge.textContent = "evaluating...";
+            r.simBadge.title = "Evaluating policy locally...";
           }
-          if (localEnt && crowdConfig.enabled && !crowdContributorState.quarantined) {
-            const sha = getKnownGenomeSha(r.genome);
-            const subKey = `${goalSnap.name}:${goalSnap.generation}:${sha}`;
-            const isVerified = Boolean(crowdEnt && crowdEnt.trust && crowdEnt.trust.status === "verified");
-            const rate = Number(crowdConfig.spotCheckRate ?? 0.15);
-            if (sha && !crowdSubmittedKeys.has(subKey) && (!isVerified || Math.random() < rate)) {
-              crowdSubmittedKeys.add(subKey);
-              toPostExisting.push({ hash: sha, summary: localEnt.summary });
-            }
+          if (localEnt) {
+            maybeQueueCrowdPost(r.genome, localEnt.summary, crowdEnt);
           }
         });
         updateCrowdTrustPill(goalSnap, spec);
         refreshControlLineageNodes(goalSnap);
 
-        if (toPostExisting.length) {
-          await postCrowdRoomResults(goalSnap, toPostExisting);
+        const sortAndFinalize = () => {
           if (isStale()) return;
-          syncCrowdBadgesInDom(goalSnap);
-        }
-
-        const missingRefs = cardRefs.filter((r) => !getCachedControlEntry(taskId, r.genome));
-        if (!missingRefs.length) {
           const summariesByIdx = {};
           cardRefs.forEach((r) => {
-            const localEnt = getCachedControlEntry(taskId, r.genome);
-            const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
-            const eff = localEnt || crowdEnt;
-            summariesByIdx[r.idx] = eff ? eff.summary : null;
+            const ent = getCachedControlEntry(taskId, r.genome) || getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
+            summariesByIdx[r.idx] = ent ? ent.summary : null;
           });
           if (controlSortMode === "steps") {
             sortControlCardRefs(cardRefs, summariesByIdx);
             applyCardFilter(false);
           }
           if (fullscreenIdx !== null || fullscreenNode !== null) renderFullscreen();
+        };
+
+        const flushCrowdPostsAsync = () => {
+          if (!pendingCrowdPosts.length) return;
+          const batch = pendingCrowdPosts.splice(0, pendingCrowdPosts.length);
+          postCrowdRoomResults(goalSnap, batch)
+            .then(() => {
+              if (!isStale()) syncCrowdBadgesInDom(goalSnap);
+            })
+            .catch(() => {});
+        };
+
+        const missingRefs = cardRefs.filter((r) => !getCachedControlEntry(taskId, r.genome));
+        if (!missingRefs.length) {
+          sortAndFinalize();
+          flushCrowdPostsAsync();
           return;
         }
 
-        const pendingVisible = new Set();
-        const queuedDone = new Set();
-        let flushing = false;
-        let flushScheduled = false;
-
-        const scheduleFlush = () => {
-          if (flushScheduled) return;
-          flushScheduled = true;
-          setTimeout(flushVisibleCards, 16);
-        };
-
-        const flushVisibleCards = async () => {
-          flushScheduled = false;
-          if (flushing || isStale() || !pendingVisible.size) return;
-          flushing = true;
-          try {
-            while (pendingVisible.size && !isStale()) {
-              const allVisible = Array.from(pendingVisible).filter((r) => !queuedDone.has(r) && !getCachedControlEntry(taskId, r.genome));
-              pendingVisible.clear();
-              if (!allVisible.length) break;
-
-              const unverifiedFirst = allVisible.filter((r) => {
-                const ce = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
-                return !(ce && ce.trust && ce.trust.status === "verified");
-              });
-              const restVerified = allVisible.filter((r) => !unverifiedFirst.includes(r));
-              const ordered = ((crowdConfig.shardShuffle !== false) ? shuffleIntList(unverifiedFirst) : unverifiedFirst).concat(restVerified);
-
-              const CHUNK = 4;
-              for (let offset = 0; offset < ordered.length; offset += CHUNK) {
-                if (isStale()) break;
-                const chunk = ordered.slice(offset, offset + CHUNK);
-                chunk.forEach((r) => {
-                  queuedDone.add(r);
-                  if (gridCardObserver) gridCardObserver.unobserve(r.card);
-                  if (r.simBadge) {
-                    delete r.simBadge.dataset.queued;
-                    if (!getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome)) {
-                      r.simBadge.textContent = "evaluating...";
-                    }
-                  }
-                });
-                const chunkEntries = await evaluateControlGenomes(taskId, chunk.map((r) => r.genome)).catch(() => []);
-                if (isStale()) break;
-                const chunkPosts = [];
-                chunk.forEach((r, ci) => {
-                  const ent = chunkEntries[ci];
-                  const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
-                  const eff = ent || crowdEnt;
-                  if (eff) {
-                    applySummaryToCardBadge(r.simBadge, eff.summary, taskId, maxSteps, spec, crowdEnt ? crowdEnt.trust : null);
-                    renderer.renderCard(r.genome, r.canvas, eff);
-                  }
-                  if (ent && crowdConfig.enabled && !crowdContributorState.quarantined) {
-                    const sha = getKnownGenomeSha(r.genome);
-                    const subKey = `${goalSnap.name}:${goalSnap.generation}:${sha}`;
-                    const isVerified = Boolean(crowdEnt && crowdEnt.trust && crowdEnt.trust.status === "verified");
-                    const rate = Number(crowdConfig.spotCheckRate ?? 0.15);
-                    if (sha && !crowdSubmittedKeys.has(subKey) && (!isVerified || Math.random() < rate)) {
-                      crowdSubmittedKeys.add(subKey);
-                      chunkPosts.push({ hash: sha, summary: ent.summary });
-                    }
-                  }
-                });
-                refreshControlLineageNodes(goalSnap);
-                if (chunkPosts.length) {
-                  await postCrowdRoomResults(goalSnap, chunkPosts);
-                  if (!isStale()) syncCrowdBadgesInDom(goalSnap);
-                }
-              }
-            }
-            if (!isStale()) {
-              const allEvaluated = cardRefs.every((r) => Boolean(getCachedControlEntry(taskId, r.genome)));
-              if (allEvaluated && controlSortMode === "steps" && !activeHoverAnim) {
-                const summariesByIdx = {};
-                cardRefs.forEach((r) => {
-                  const ent = getCachedControlEntry(taskId, r.genome) || getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
-                  summariesByIdx[r.idx] = ent ? ent.summary : null;
-                });
-                sortControlCardRefs(cardRefs, summariesByIdx);
-                applyCardFilter(false);
-              }
-              if (fullscreenIdx !== null || fullscreenNode !== null) renderFullscreen();
-            }
-          } finally {
-            flushing = false;
-            if (pendingVisible.size && !isStale()) scheduleFlush();
+        // Prioritize cards currently in or near the viewport first, then immediately evaluate
+        // any remaining cards so Distance sorting completes promptly without requiring scroll.
+        const viewH = window.innerHeight || document.documentElement.clientHeight || 900;
+        const nearViewport = [];
+        const offViewport = [];
+        for (const r of missingRefs) {
+          const rect = r.card.getBoundingClientRect();
+          if (rect.bottom >= -180 && rect.top <= viewH + 180) nearViewport.push(r);
+          else offViewport.push(r);
+        }
+        const orderGroup = (group) => {
+          const unverified = [];
+          const verified = [];
+          for (const r of group) {
+            const ce = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
+            if (ce && ce.trust && ce.trust.status === "verified") verified.push(r);
+            else unverified.push(r);
           }
+          return ((crowdConfig.shardShuffle !== false) ? shuffleIntList(unverified) : unverified).concat(verified);
         };
+        const ordered = orderGroup(nearViewport).concat(orderGroup(offViewport));
 
-        if (typeof IntersectionObserver === "function") {
-          const refByCard = new Map(missingRefs.map((r) => [r.card, r]));
-          gridCardObserver = new IntersectionObserver((entries) => {
-            if (isStale()) return;
-            let added = false;
-            for (const entry of entries) {
-              if (!entry.isIntersecting) continue;
-              const r = refByCard.get(entry.target);
-              if (r && !queuedDone.has(r)) {
-                pendingVisible.add(r);
-                added = true;
+        const CHUNK = 6;
+        for (let offset = 0; offset < ordered.length; offset += CHUNK) {
+          if (isStale()) return;
+          const chunk = ordered.slice(offset, offset + CHUNK);
+          chunk.forEach((r) => {
+            if (r.simBadge) {
+              delete r.simBadge.dataset.queued;
+              if (!getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome)) {
+                r.simBadge.textContent = "evaluating...";
               }
             }
-            if (added) scheduleFlush();
-          }, { root: null, rootMargin: "140px" });
-          missingRefs.forEach((r) => gridCardObserver.observe(r.card));
-        } else {
-          missingRefs.forEach((r) => pendingVisible.add(r));
-          scheduleFlush();
+          });
+          const chunkEntries = await evaluateControlGenomes(taskId, chunk.map((r) => r.genome)).catch(() => []);
+          if (isStale()) return;
+          chunk.forEach((r, ci) => {
+            const ent = chunkEntries[ci];
+            const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
+            const eff = ent || crowdEnt;
+            if (eff) {
+              applySummaryToCardBadge(r.simBadge, eff.summary, taskId, maxSteps, spec, crowdEnt ? crowdEnt.trust : null);
+              renderer.renderCard(r.genome, r.canvas, eff);
+            }
+            if (ent) {
+              maybeQueueCrowdPost(r.genome, ent.summary, crowdEnt);
+            }
+          });
+          refreshControlLineageNodes(goalSnap);
+          if (offset + CHUNK < ordered.length) {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          }
+        }
+
+        if (!isStale()) {
+          sortAndFinalize();
+          flushCrowdPostsAsync();
         }
       }
 
@@ -6416,7 +6476,8 @@
         const taskId = goalTaskId(goal);
         if (taskId !== "halfcheetah" || !candidates.length) return;
         const spec = getTaskSpec(taskId);
-        const thumbSeed = (spec.evalSeeds && spec.evalSeeds.length) ? spec.evalSeeds[0] : 0;
+        const evalSeeds = spec.evalSeeds || [0, 1];
+        const thumbSeed = evalSeeds.length ? evalSeeds[0] : 0;
         const thumbSeeds = [thumbSeed];
         const goalName = goal.name;
         const gen = goal.generation;
@@ -6425,7 +6486,7 @@
           return !cur || cur.name !== goalName || cur.generation !== gen || lineageCollapsed;
         };
 
-        hydrateControlEvalsFromDb(taskId, candidates.map((c) => c.node), thumbSeeds, lineageThumbCache).then(() => {
+        hydrateControlEvalsFromDb(taskId, candidates.map((c) => c.node), evalSeeds, lineageThumbCache, thumbSeeds).then(() => {
           if (!isStale()) refreshControlLineageNodes(goal);
         });
 
@@ -6446,6 +6507,10 @@
           flushing = true;
           try {
             while (pendingEls.size && !isStale()) {
+              while (simInFlightBatches.size > 0 && !isStale()) {
+                await new Promise((r) => setTimeout(r, 60));
+              }
+              if (isStale()) break;
               const items = Array.from(pendingEls).filter((el) => !doneEls.has(el));
               pendingEls.clear();
               const byFp = new Map();
@@ -6459,6 +6524,10 @@
               }
               const uniqNodes = Array.from(byFp.values());
               for (let offset = 0; offset < uniqNodes.length; offset += 4) {
+                if (isStale()) break;
+                while (simInFlightBatches.size > 0 && !isStale()) {
+                  await new Promise((r) => setTimeout(r, 60));
+                }
                 if (isStale()) break;
                 const chunk = uniqNodes.slice(offset, offset + 4);
                 const entries = await evaluateControlGenomes(taskId, chunk, thumbSeeds).catch(() => []);
@@ -6835,33 +6904,100 @@
         reconnectOverlayEl.hidden = true;
       }
 
+      function stopClientHeartbeat() {
+        if (clientHeartbeatTimer) {
+          clearInterval(clientHeartbeatTimer);
+          clientHeartbeatTimer = null;
+        }
+      }
+
+      function startClientHeartbeat(ws) {
+        stopClientHeartbeat();
+        lastServerMsgAt = performance.now();
+        clientHeartbeatTimer = setInterval(() => {
+          if (!ws || ws !== socket || ws.readyState !== WebSocket.OPEN || isPageUnloading) {
+            stopClientHeartbeat();
+            return;
+          }
+          const idleMs = performance.now() - lastServerMsgAt;
+          if (document.visibilityState === "visible" && idleMs > 45000) {
+            try { ws.close(4000, "heartbeat_timeout"); } catch {}
+            return;
+          }
+          if (idleMs >= 20000) {
+            try { ws.send(JSON.stringify({ type: "ping" })); } catch {}
+          }
+        }, 20000);
+      }
+
+      function disconnectForPageUnload() {
+        if (isPageUnloading) return;
+        isPageUnloading = true;
+        clearReconnectTimers();
+        stopClientHeartbeat();
+        try {
+          sessionStorage.setItem(
+            RELOAD_CID_STORAGE_KEY,
+            JSON.stringify({ cid: clientCid, ts: Date.now() })
+          );
+        } catch {}
+        const ws = socket;
+        socket = null;
+        if (ws) {
+          if (ws.readyState === WebSocket.OPEN) {
+            try { ws.send(JSON.stringify({ type: "leave" })); } catch {}
+          }
+          try { ws.close(1000, "page_unload"); } catch {}
+        }
+      }
+
       function scheduleReconnect() {
+        if (isPageUnloading) return;
         clearReconnectTimers();
         reconnectAttempt += 1;
-        const delayMs = Math.min(5000, Math.round(1000 * Math.pow(1.4, reconnectAttempt - 1)));
+        const baseDelay = reconnectAttempt === 1 ? 450 : Math.round(900 * Math.pow(1.4, reconnectAttempt - 1));
+        const jitter = Math.floor(Math.random() * 180);
+        const delayMs = Math.min(5000, baseDelay + jitter);
         showReconnectOverlay(delayMs);
         reconnectTimer = setTimeout(() => {
+          if (isPageUnloading) return;
           reconnectSubEl.textContent = `Connecting (attempt ${reconnectAttempt})...`;
-          connect();
+          connect(true);
         }, delayMs);
       }
 
       reconnectNowBtn.addEventListener("click", () => {
+        isPageUnloading = false;
         clearReconnectTimers();
         reconnectSubEl.textContent = "Reconnecting now...";
-        connect();
+        connect(true);
       });
 
       window.addEventListener("online", () => {
-        if (!isConnected) {
+        if (!isConnected && !isPageUnloading) {
           clearReconnectTimers();
           reconnectSubEl.textContent = "Network back · reconnecting...";
-          connect();
+          connect(true);
         }
       });
 
       window.addEventListener("offline", () => {
         if (socket) socket.close();
+      });
+
+      window.addEventListener("pagehide", disconnectForPageUnload);
+      window.addEventListener("beforeunload", disconnectForPageUnload);
+      window.addEventListener("pageshow", (e) => {
+        if (e.persisted) {
+          isPageUnloading = false;
+          connect(false);
+        }
+      });
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible" && !isPageUnloading && !isConnected) {
+          clearReconnectTimers();
+          connect(true);
+        }
       });
 
       function mergeLiveLineage(goal) {
@@ -6919,13 +7055,21 @@
       }
 
       async function handleServerPayload(data) {
+        if (!data || data.type === "pong") return;
         if (data.type === "identity") {
           savedUsername = data.username;
           nameInput.value = data.username;
-          localStorage.setItem("det_username", data.username);
+          if (!preferredUsername || pendingExplicitRename) {
+            if (!preferredUsername || !/-\d+$/.test(data.username)) {
+              preferredUsername = data.username;
+              localStorage.setItem("det_username", data.username);
+            }
+            pendingExplicitRename = false;
+          }
           canEvolveNow = Boolean(data.canEvolveNow && evolveToken);
           syncNameDirty();
-          renderRoundStatus();
+          for (const g of goalsByName.values()) syncMyVotesFromGoal(g);
+          updateVoteCards();
         } else if (data.type === "history") {
           messagesEl.replaceChildren();
           for (const msg of data.messages || []) {
@@ -6947,6 +7091,7 @@
           goalOrder = [];
           for (const g of goals) {
             syncGoalDeadline(g);
+            syncMyVotesFromGoal(g);
             goalsByName.set(g.name, g);
             goalOrder.push(g.name);
           }
@@ -6970,6 +7115,7 @@
               await preloadGoalImages(g);
             }
             syncGoalDeadline(g);
+            syncMyVotesFromGoal(g);
             goalsByName.set(g.name, g);
             if (!goalOrder.includes(g.name)) goalOrder.push(g.name);
             renderGoalTabs();
@@ -7034,6 +7180,7 @@
               g.crossoverRate = data.crossoverRate;
             }
             syncGoalDeadline(g);
+            syncMyVotesFromGoal(g);
             if (data.goal === activeGoalName) {
               updateVoteCards();
             }
@@ -7043,7 +7190,7 @@
           if (g && typeof data.index === "number") {
             const k = voteKey(g.name, g.generation, data.index);
             const v = g.votes && g.votes[data.index];
-            const me = (nameInput.value || "").trim();
+            const me = (savedUsername || nameInput.value || "").trim();
             if (v && me && Array.isArray(v.upUsers) && v.upUsers.includes(me)) {
               myVotes.set(k, 1);
             } else if (v && me && Array.isArray(v.downUsers) && v.downUsers.includes(me)) {
@@ -7080,7 +7227,8 @@
         }
       }
 
-      function connect() {
+      function connect(isReconnect = false) {
+        if (isPageUnloading) return;
         if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
           return;
         }
@@ -7088,9 +7236,11 @@
         const configuredHost = "{{ ws_host|default:'127.0.0.1' }}";
         const wsHost = configuredHost === "0.0.0.0" ? window.location.hostname : configuredHost;
         const wsPort = "{{ ws_port|default:8001 }}";
-        const currentName = (nameInput.value || "").trim();
+        const desiredName = (preferredUsername || savedUsername || nameInput.value || "").trim();
         const params = new URLSearchParams();
-        if (currentName) params.set("username", currentName);
+        if (desiredName) params.set("username", desiredName);
+        if (clientCid) params.set("cid", clientCid);
+        if (isReconnect || reusedReloadCid) params.set("reconnect", "1");
         if (isPrivateRoom && initialGoal) params.set("goal", initialGoal);
         if (isPrivateRoom && initialTask && initialTask !== "image") params.set("task", initialTask);
         if (isPrivateRoom && initialPop) params.set("pop", String(initialPop));
@@ -7105,23 +7255,31 @@
         const wsUrl = wsViaProxy
           ? `${proto}//${window.location.host}${basePath}/ws/chat/${roomName}/${qs}`
           : `${proto}//${wsHost}:${wsPort}/ws/chat/${roomName}/${qs}`;
-        socket = new WebSocket(wsUrl);
-        socket.binaryType = "arraybuffer";
+        const ws = new WebSocket(wsUrl);
+        socket = ws;
+        ws.binaryType = "arraybuffer";
         let inboundQueue = Promise.resolve();
 
-        socket.addEventListener("open", () => {
+        ws.addEventListener("open", () => {
+          if (socket !== ws || isPageUnloading) return;
+          reusedReloadCid = false;
           hideReconnectOverlay();
           setConnected(true);
+          startClientHeartbeat(ws);
           updateVoteCards();
         });
 
-        socket.addEventListener("close", () => {
-          socket = null;
+        ws.addEventListener("close", () => {
+          if (socket === ws) {
+            socket = null;
+          }
+          stopClientHeartbeat();
+          if (isPageUnloading) return;
           setConnected(false);
-          myVotes.clear();
           for (const g of goalsByName.values()) {
             g.countdownMs = 0;
             g.countdownDeadlineMs = 0;
+            g._deadlinePerfMs = 0;
             g.evolving = false;
           }
           renderRoundStatus();
@@ -7130,10 +7288,13 @@
           scheduleReconnect();
         });
 
-        socket.addEventListener("message", (event) => {
+        ws.addEventListener("message", (event) => {
+          if (socket !== ws || isPageUnloading) return;
+          lastServerMsgAt = performance.now();
           const raw = event.data;
           inboundQueue = inboundQueue
             .then(async () => {
+              if (socket !== ws || isPageUnloading) return;
               const text = await decodeSocketPayload(raw);
               if (!text) return;
               await handleServerPayload(JSON.parse(text));
@@ -7831,7 +7992,9 @@
         e.preventDefault();
         const newName = nameInput.value.trim();
         if (!newName) return;
+        preferredUsername = newName;
         savedUsername = newName;
+        pendingExplicitRename = true;
         localStorage.setItem("det_username", newName);
         syncNameDirty();
         if (socket && socket.readyState === WebSocket.OPEN) {
@@ -8426,7 +8589,7 @@
               const ctx = fsCanvasEl.getContext("2d");
               ctx.fillStyle = "#09090b";
               ctx.fillRect(0, 0, fsCanvasEl.width, fsCanvasEl.height);
-            } else {
+            } else if (!fsSimState || fsSimState.genome !== node || fsSimState.taskId !== taskId) {
               startFullscreenSim(node, taskId);
             }
           } else {
@@ -8475,7 +8638,9 @@
           const cached = getCachedControlEntry(taskId, genome);
           const metricLabel = cached && cached.summary ? cached.summary.primaryDisplay : "evaluating...";
           fsSubEl.textContent = `gen ${goal.generation} (${fullscreenIdx + 1}/${goal.genomes.length}) \u00b7 ${metricLabel}`;
-          startFullscreenSim(genome, taskId);
+          if (!fsSimState || fsSimState.genome !== genome || fsSimState.taskId !== taskId) {
+            startFullscreenSim(genome, taskId);
+          }
         } else if (taskId === "external") {
           stopFullscreenSim();
           clearFullscreenMediaUI();
@@ -8697,18 +8862,23 @@
       }
       if (fsDlPtBtn) fsDlPtBtn.addEventListener("click", () => triggerFullscreenDownload("pt"));
       fsDlBtn.addEventListener("click", () => triggerFullscreenDownload("zip"));
-      fsPrevBtn.addEventListener("click", () => {
+      function stepFullscreen(delta) {
         const goal = goalsByName.get(activeGoalName);
         if (!goal || !goal.genomes.length || fullscreenIdx === null || fullscreenNode !== null) return;
-        fullscreenIdx = (fullscreenIdx - 1 + goal.genomes.length) % goal.genomes.length;
+        const visibleCards = Array.from(genomeGridEl.querySelectorAll(".genome-card[data-idx]")).filter((c) => !c.hidden);
+        const orderedIdxs = visibleCards.length > 0
+          ? visibleCards.map((c) => Number(c.dataset.idx)).filter((n) => !Number.isNaN(n))
+          : goal.genomes.map((_, i) => i);
+        if (!orderedIdxs.length) return;
+        const pos = orderedIdxs.indexOf(fullscreenIdx);
+        const nextPos = pos >= 0
+          ? (pos + delta + orderedIdxs.length) % orderedIdxs.length
+          : (delta > 0 ? 0 : orderedIdxs.length - 1);
+        fullscreenIdx = orderedIdxs[nextPos];
         renderFullscreen();
-      });
-      fsNextBtn.addEventListener("click", () => {
-        const goal = goalsByName.get(activeGoalName);
-        if (!goal || !goal.genomes.length || fullscreenIdx === null || fullscreenNode !== null) return;
-        fullscreenIdx = (fullscreenIdx + 1) % goal.genomes.length;
-        renderFullscreen();
-      });
+      }
+      fsPrevBtn.addEventListener("click", () => stepFullscreen(-1));
+      fsNextBtn.addEventListener("click", () => stepFullscreen(1));
       window.addEventListener("keydown", (e) => {
         if (fullscreenIdx === null && fullscreenNode === null) return;
         if (e.key === "Escape") closeFullscreen();

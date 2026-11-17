@@ -15,7 +15,7 @@ from direct_evolution_together.cppn import (
 )
 
 from .adapters import TASK_ADAPTERS, get_task_adapter
-from .halfcheetah import get_halfcheetah_model
+from .halfcheetah import HalfCheetahAdapter, get_halfcheetah_model, get_thread_halfcheetah_data
 from .registry import clamp_pop_for_task, get_task_spec, normalize_task_id
 
 
@@ -69,7 +69,10 @@ def create_task_population(
     while len(founders) < eff_pop and attempts < max_attempts:
         attempts += 1
         cand = CPPN.random().to_dict()
-        ev = adapter.evaluate(cand, seeds=spec.eval_seeds)
+        if isinstance(adapter, HalfCheetahAdapter):
+            ev = adapter.evaluate(cand, seeds=spec.eval_seeds, capture_frames=False)
+        else:
+            ev = adapter.evaluate(cand, seeds=spec.eval_seeds)
         if not adapter.is_gen0_presolved(ev):
             founders.append(cand)
     while len(founders) < eff_pop:
@@ -82,6 +85,8 @@ def is_gen0_founder_presolved(task_id: str, genome: dict) -> bool:
     if adapter is None:
         return False
     spec = get_task_spec(task_id)
+    if isinstance(adapter, HalfCheetahAdapter):
+        return adapter.is_gen0_presolved(adapter.evaluate(genome, seeds=spec.eval_seeds, capture_frames=False))
     return adapter.is_gen0_presolved(adapter.evaluate(genome, seeds=spec.eval_seeds))
 
 
@@ -118,8 +123,10 @@ def attach_halfcheetah_geoms(rollout: dict[str, object]) -> dict[str, object]:
     frames = rollout.get("frames") or []
     if not isinstance(frames, list) or not frames:
         return rollout
+    if "geomSpecs" in rollout and "geomPoses" in rollout:
+        return rollout
     model = get_halfcheetah_model()
-    data = mujoco.MjData(model)
+    data = get_thread_halfcheetah_data(model)
     geom_specs = []
     non_plane_ids = []
     for gid in range(model.ngeom):
@@ -136,14 +143,17 @@ def attach_halfcheetah_geoms(rollout: dict[str, object]) -> dict[str, object]:
 
     geom_poses: list[list[float]] = []
     nq = int(model.nq)
+    qpos = data.qpos
+    geom_xpos = data.geom_xpos
+    geom_xmat = data.geom_xmat
     for fr in frames:
         for i in range(min(nq, len(fr))):
-            data.qpos[i] = float(fr[i])
+            qpos[i] = float(fr[i])
         mujoco.mj_kinematics(model, data)
         row: list[float] = []
         for gid in non_plane_ids:
-            pos = data.geom_xpos[gid]
-            mat = data.geom_xmat[gid]
+            pos = geom_xpos[gid]
+            mat = geom_xmat[gid]
             row.extend([round(float(pos[0]), 4), round(float(pos[1]), 4), round(float(pos[2]), 4)])
             row.extend([round(float(mat[k]), 4) for k in range(9)])
         geom_poses.append(row)
@@ -167,17 +177,44 @@ def evaluate_control_batch(
     eval_seeds = tuple(spec.eval_seeds if seeds is None else seeds)
     results: list[dict[str, object]] = []
     for genome in genomes:
-        summary = adapter.evaluate(genome, seeds=eval_seeds)
+        g_hash = genome_content_hash(genome, length=20)
+        primary_ro: dict[str, object] | None = None
+        if isinstance(adapter, HalfCheetahAdapter):
+            episodes: list[dict[str, object]] = []
+            for idx, s in enumerate(eval_seeds):
+                if idx == 0 and include_primary_rollout:
+                    ep = _rollout_cached(spec.task_id, genome, seed=int(s), max_steps=spec.max_steps)
+                    primary_ro = ep
+                else:
+                    cache_key = (adapter.task_id, g_hash, int(s), int(spec.max_steps))
+                    with _ROLLOUT_CACHE_LOCK:
+                        cached_ep = _ROLLOUT_CACHE.get(cache_key)
+                    if cached_ep is not None:
+                        ep = cached_ep
+                    else:
+                        ep = adapter.rollout(
+                            genome,
+                            seed=int(s),
+                            max_steps=spec.max_steps,
+                            capture_frames=False,
+                        )
+                episodes.append(ep)
+            summary = adapter.evaluate(genome, seeds=eval_seeds, episodes=episodes)
+        else:
+            summary = adapter.evaluate(genome, seeds=eval_seeds)
+            if include_primary_rollout and eval_seeds:
+                primary_ro = _rollout_cached(
+                    spec.task_id,
+                    genome,
+                    seed=int(eval_seeds[0]),
+                    max_steps=spec.max_steps,
+                )
+
         entry: dict[str, object] = {
-            "hash": genome_content_hash(genome, length=20),
+            "hash": g_hash,
             "summary": summary,
         }
-        if include_primary_rollout and eval_seeds:
-            entry["primaryRollout"] = _rollout_cached(
-                spec.task_id,
-                genome,
-                seed=int(eval_seeds[0]),
-                max_steps=spec.max_steps,
-            )
+        if include_primary_rollout and primary_ro is not None:
+            entry["primaryRollout"] = primary_ro
         results.append(entry)
     return results

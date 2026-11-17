@@ -68,6 +68,7 @@ class DeployConfig:
     mut_sigma: str
     elite_frac: str
     crossover_rate: str
+    process_manager: str = "pm2"
 
     @classmethod
     def from_env(cls) -> "DeployConfig":
@@ -84,6 +85,9 @@ class DeployConfig:
         ws_port = int(os.getenv("DEPLOY_WS_PORT") or os.getenv("MUMMY_WS_PORT") or "8001")
         workers = max(1, int(os.getenv("DEPLOY_UVICORN_WORKERS", "2")))
         python_version = os.getenv("DEPLOY_PYTHON_VERSION", "3.11").strip() or "3.11"
+        process_manager = (os.getenv("DEPLOY_PROCESS_MANAGER", "pm2").strip().lower() or "pm2")
+        if process_manager not in ("pm2", "systemd"):
+            raise SystemExit(f"Invalid DEPLOY_PROCESS_MANAGER={process_manager!r}; expected 'pm2' or 'systemd'")
         cuda_visible_devices = os.getenv("DEPLOY_CUDA_VISIBLE_DEVICES", "").strip()
         vhost_file = os.getenv("NGINX_VHOST_FILE", "").strip()
         secret_key = (os.getenv("DEPLOY_SECRET_KEY") or os.getenv("DJANGO_SECRET_KEY") or "").strip()
@@ -119,6 +123,7 @@ class DeployConfig:
             mut_sigma=os.getenv("MUMMY_MUT_SIGMA", "0.30"),
             elite_frac=os.getenv("MUMMY_ELITE_FRAC", "0.20"),
             crossover_rate=os.getenv("MUMMY_CROSSOVER_RATE", "0.75"),
+            process_manager=process_manager,
         )
 
     @property
@@ -142,6 +147,10 @@ class DeployConfig:
         return f"{self.deploy_dir}/.env"
 
     @property
+    def ecosystem_file(self) -> str:
+        return f"{self.deploy_dir}/ecosystem.config.cjs"
+
+    @property
     def nginx_conf(self) -> str:
         return f"{self.deploy_dir}/nginx.conf"
 
@@ -161,27 +170,27 @@ def _b64(text: str) -> str:
     return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
-def _render_runtime_env(cfg: DeployConfig) -> str:
-    lines = [
-        f"DJANGO_SECRET_KEY={cfg.secret_key}",
-        "DJANGO_DEBUG=0",
-        f"DJANGO_ALLOWED_HOSTS={cfg.allowed_hosts}",
-        f"DJANGO_CSRF_TRUSTED_ORIGINS={cfg.csrf_trusted_origins}",
-        f"DET_DB_PATH={cfg.data_dir}/db.sqlite3",
-        f"DET_MEDIA_DIR={cfg.media_dir}",
-        f"DET_SUBPATH={cfg.subpath}",
-        f"DET_WS_PROXY={'1' if cfg.subpath else '0'}",
-        "MUMMY_WS_HOST=127.0.0.1",
-        f"MUMMY_WS_PORT={cfg.ws_port}",
-        f"DET_ADMIN_PASSWORD={cfg.admin_password}",
-        f"CUDA_VISIBLE_DEVICES={cfg.cuda_visible_devices}",
-        f"MUMMY_POP_SIZE={cfg.pop_size}",
-        *([f"MUMMY_MIN_VOTES={cfg.min_votes}"] if cfg.min_votes else []),
-        f"MUMMY_MAX_VOTES={cfg.max_votes}",
-        f"MUMMY_MUT_SIGMA={cfg.mut_sigma}",
-        f"MUMMY_ELITE_FRAC={cfg.elite_frac}",
-        f"MUMMY_CROSSOVER_RATE={cfg.crossover_rate}",
-    ]
+def _render_runtime_env_dict(cfg: DeployConfig) -> dict[str, str]:
+    env: dict[str, str] = {
+        "DJANGO_SECRET_KEY": cfg.secret_key,
+        "DJANGO_DEBUG": "0",
+        "DJANGO_ALLOWED_HOSTS": cfg.allowed_hosts,
+        "DJANGO_CSRF_TRUSTED_ORIGINS": cfg.csrf_trusted_origins,
+        "DET_DB_PATH": f"{cfg.data_dir}/db.sqlite3",
+        "DET_MEDIA_DIR": cfg.media_dir,
+        "DET_SUBPATH": cfg.subpath,
+        "DET_WS_PROXY": "1" if cfg.subpath else "0",
+        "MUMMY_WS_HOST": "127.0.0.1",
+        "MUMMY_WS_PORT": str(cfg.ws_port),
+        "DET_ADMIN_PASSWORD": cfg.admin_password,
+        "CUDA_VISIBLE_DEVICES": cfg.cuda_visible_devices,
+        "MUMMY_POP_SIZE": str(cfg.pop_size),
+        **({"MUMMY_MIN_VOTES": cfg.min_votes} if cfg.min_votes else {}),
+        "MUMMY_MAX_VOTES": str(cfg.max_votes),
+        "MUMMY_MUT_SIGMA": cfg.mut_sigma,
+        "MUMMY_ELITE_FRAC": cfg.elite_frac,
+        "MUMMY_CROSSOVER_RATE": cfg.crossover_rate,
+    }
     _pass_prefixes = (
         "DET_CONFIG_FILE",
         "DET_MUJOCO_WASM_URL",
@@ -196,8 +205,76 @@ def _render_runtime_env(cfg: DeployConfig) -> str:
     )
     for key, val in sorted(os.environ.items()):
         if key.startswith(_pass_prefixes) and val.strip():
-            lines.append(f"{key}={val.strip()}")
-    return "\n".join(lines) + "\n"
+            env[key] = val.strip()
+    return env
+
+
+def _render_runtime_env(cfg: DeployConfig) -> str:
+    return "\n".join(f"{k}={v}" for k, v in _render_runtime_env_dict(cfg).items()) + "\n"
+
+
+def _remote_bin_path(cfg: DeployConfig) -> str:
+    home_dir = f"/home/{cfg.user}" if cfg.user and cfg.user != "root" else "/root"
+    parts = [
+        f"{cfg.src_dir}/.venv/bin",
+        f"{home_dir}/.local/bin",
+        f"{home_dir}/.nimble/bin",
+    ]
+    if home_dir != "/root":
+        parts.extend(["/root/.local/bin", "/root/.nimble/bin"])
+    parts.extend(["/usr/local/bin", "/usr/bin", "/bin"])
+    return ":".join(parts)
+
+
+def _render_pm2_ecosystem(cfg: DeployConfig) -> str:
+    """Render remote-only PM2 ecosystem config (never checked into git)."""
+    app_env = {
+        **_render_runtime_env_dict(cfg),
+        "PATH": _remote_bin_path(cfg),
+        "PYTHONUNBUFFERED": "1",
+    }
+    apps = [
+        {
+            "name": cfg.ws_service,
+            "cwd": cfg.src_dir,
+            "script": f"{cfg.src_dir}/.venv/bin/python",
+            "args": "-m direct_evolution_together.ws_server",
+            "interpreter": "none",
+            "exec_mode": "fork",
+            "instances": 1,
+            "autorestart": True,
+            "restart_delay": 2000,
+            "kill_timeout": 5000,
+            "env": app_env,
+        },
+        {
+            "name": cfg.uvicorn_service,
+            "cwd": cfg.src_dir,
+            "script": f"{cfg.src_dir}/.venv/bin/uvicorn",
+            "args": (
+                f"direct_evolution_together.asgi:application "
+                f"--host 127.0.0.1 --port {cfg.http_port} "
+                f"--workers {cfg.uvicorn_workers} --proxy-headers --forwarded-allow-ips=127.0.0.1"
+            ),
+            "interpreter": "none",
+            "exec_mode": "fork",
+            "instances": 1,
+            "autorestart": True,
+            "restart_delay": 2000,
+            "kill_timeout": 5000,
+            "env": app_env,
+        },
+    ]
+    return f"module.exports = {json.dumps({'apps': apps}, indent=2)};\n"
+
+
+def _bash_remote_path_export() -> str:
+    return "\n".join([
+        'for _nd in "$HOME"/.nvm/versions/node/*/bin "$HOME"/.volta/bin "$HOME"/.npm-global/bin "$HOME"/.local/share/pnpm; do',
+        '  [ -d "$_nd" ] && PATH="$_nd:$PATH"',
+        "done",
+        'export PATH="$HOME/.local/bin:$HOME/.nimble/bin:/usr/local/bin:$PATH"',
+    ])
 
 
 def _render_nginx_conf(cfg: DeployConfig) -> str:
@@ -406,18 +483,79 @@ fi
 """.strip()
 
 
+def _bash_supervisor_setup_snippet(cfg: DeployConfig) -> str:
+    if cfg.process_manager == "pm2":
+        eco_b64 = _b64(_render_pm2_ecosystem(cfg))
+        return "\n".join([
+            "if ! command -v pm2 >/dev/null 2>&1; then",
+            '  echo "ERROR: pm2 not found on remote PATH (set DEPLOY_PROCESS_MANAGER=systemd or install pm2)" >&2',
+            "  exit 1",
+            "fi",
+            "if command -v systemctl >/dev/null 2>&1; then",
+            f"  systemctl disable --now {shlex.quote(cfg.ws_service)} {shlex.quote(cfg.uvicorn_service)} 2>/dev/null || true",
+            "fi",
+            f"write_if_changed {shlex.quote(cfg.ecosystem_file)} 600 {shlex.quote(eco_b64)} || true",
+        ])
+    return _bash_systemd_snippet(cfg)
+
+
+def _bash_supervisor_restart_snippet(cfg: DeployConfig, write_config: bool = True) -> str:
+    if cfg.process_manager == "pm2":
+        lines = [
+            "if ! command -v pm2 >/dev/null 2>&1; then",
+            '  echo "ERROR: pm2 not found on remote PATH (set DEPLOY_PROCESS_MANAGER=systemd or install pm2)" >&2',
+            "  exit 1",
+            "fi",
+            "if command -v systemctl >/dev/null 2>&1; then",
+            f"  systemctl disable --now {shlex.quote(cfg.ws_service)} {shlex.quote(cfg.uvicorn_service)} 2>/dev/null || true",
+            "fi",
+        ]
+        if write_config:
+            eco_b64 = _b64(_render_pm2_ecosystem(cfg))
+            lines.append(f"write_if_changed {shlex.quote(cfg.ecosystem_file)} 600 {shlex.quote(eco_b64)} || true")
+        if cfg.app_name not in (cfg.ws_service, cfg.uvicorn_service):
+            lines.append(f"pm2 delete {shlex.quote(cfg.app_name)} >/dev/null 2>&1 || true")
+        lines.extend([
+            f"if [ -f {shlex.quote(cfg.ecosystem_file)} ]; then",
+            f"  pm2 startOrRestart {shlex.quote(cfg.ecosystem_file)} --update-env",
+            "else",
+            f"  pm2 restart {shlex.quote(cfg.ws_service)} {shlex.quote(cfg.uvicorn_service)} --update-env",
+            "fi",
+            "pm2 save >/dev/null 2>&1 || true",
+        ])
+        return "\n".join(lines)
+
+    return "\n".join([
+        *(
+            [
+                "if command -v pm2 >/dev/null 2>&1; then",
+                f"  pm2 delete {shlex.quote(cfg.ws_service)} {shlex.quote(cfg.uvicorn_service)} >/dev/null 2>&1 || true",
+                "fi",
+            ]
+            if write_config
+            else []
+        ),
+        f"systemctl restart {shlex.quote(cfg.ws_service)} {shlex.quote(cfg.uvicorn_service)}",
+    ])
+
+
 def _run_remote_bash(conn: Connection, script: str) -> None:
     conn.run(f"printf '%s' {shlex.quote(_b64(script))} | base64 -d | bash -se")
 
 
 def _bash_health_check_snippet(cfg: DeployConfig) -> str:
-    url = shlex.quote(f"http://127.0.0.1:{cfg.http_port}/health/")
-    return (
+    ws_url = shlex.quote(f"http://127.0.0.1:{cfg.ws_port}/health")
+    http_url = shlex.quote(f"http://127.0.0.1:{cfg.http_port}/health/")
+    return "\n".join([
         f"for _i in $(seq 1 50); do "
-        f"if out=$(curl -fsS {url} 2>/dev/null); then echo \"$out\"; break; fi; "
-        f"[ \"$_i\" -eq 50 ] && curl -fsS {url}; sleep 0.2; "
-        f"done"
-    )
+        f"if ws_out=$(curl -fsS {ws_url} 2>/dev/null); then echo \"ws: $ws_out\"; break; fi; "
+        f"[ \"$_i\" -eq 50 ] && curl -fsS {ws_url}; sleep 0.2; "
+        f"done",
+        f"for _i in $(seq 1 50); do "
+        f"if out=$(curl -fsS {http_url} 2>/dev/null); then echo \"http: $out\"; break; fi; "
+        f"[ \"$_i\" -eq 50 ] && curl -fsS {http_url}; sleep 0.2; "
+        f"done",
+    ])
 
 
 def _sync_source(cfg: DeployConfig) -> None:
@@ -438,6 +576,9 @@ def _sync_source(cfg: DeployConfig) -> None:
         "--exclude=.venv/",
         "--exclude=.env",
         "--exclude=.env.*",
+        "--exclude=ecosystem.config.*",
+        "--exclude=pm2*.config.*",
+        "--exclude=pm2*.json",
         "--exclude=justfile",
         "--exclude=uv.lock",
         "--exclude=dist/",
@@ -465,16 +606,16 @@ def _ensure_media_dir_cmd(cfg: DeployConfig) -> str:
 
 @task
 def setup(c):
-    """Bootstrap remote OS packages (sqlite3, uv, nim deps), directories, nginx, and systemd."""
+    """Bootstrap remote OS packages (sqlite3, uv, nim deps), directories, nginx, and process supervisor."""
     cfg = DeployConfig.from_env()
     script = "\n".join([
         "set -euo pipefail",
-        'export PATH="$HOME/.local/bin:$HOME/.nimble/bin:$PATH"',
+        _bash_remote_path_export(),
         f"mkdir -p {shlex.quote(cfg.src_dir)} {shlex.quote(cfg.data_dir)} {shlex.quote(cfg.run_dir)}",
         _ensure_media_dir_cmd(cfg),
         _bash_write_if_changed_fn(),
         _bash_bootstrap_snippet(cfg),
-        _bash_systemd_snippet(cfg),
+        _bash_supervisor_setup_snippet(cfg),
         _bash_nginx_snippet(cfg),
     ]) + "\n"
     with cfg.connect() as conn:
@@ -496,7 +637,7 @@ def deploy(c, force_deps: bool = False):
 
     script = "\n".join([
         "set -euo pipefail",
-        'export PATH="$HOME/.local/bin:$HOME/.nimble/bin:$PATH"',
+        _bash_remote_path_export(),
         _ensure_media_dir_cmd(cfg),
         _bash_write_if_changed_fn(),
         _bash_bootstrap_snippet(cfg),
@@ -512,12 +653,11 @@ def deploy(c, force_deps: bool = False):
         "else",
         '  echo "deps: cached (cpu)"',
         "fi",
-        "rm -f direct_evolution_together/__pycache__/mummy_ws*.so 2>/dev/null || true",
-        "want_nim=$(sha256sum direct_evolution_together/mummy_ws.nim | awk '{print $1}')",
+        f"want_nim=$(sha256sum direct_evolution_together/mummy_ws.nim | awk '{{print $1}}')-py{py_tag}",
         f'have_nim=$(cat {shlex.quote(nim_hash_file)} 2>/dev/null || true)',
         f'built_so=$(cat {shlex.quote(nim_so_file)} 2>/dev/null || true)',
         'if [ "$want_nim" != "$have_nim" ] || [ -z "$built_so" ] || [ ! -f "$built_so" ]; then',
-        "  rm -f direct_evolution_together/__pycache__/mummy_ws*.so",
+        "  rm -f direct_evolution_together/__pycache__/mummy_ws*.so 2>/dev/null || true",
         '  built_so=$(.venv/bin/python -c "from direct_evolution_together import mummy_ws; assert hasattr(mummy_ws, \'start_server\'); print(mummy_ws.__file__)")',
         '  printf "%s" "$want_nim" > ' + shlex.quote(nim_hash_file),
         '  printf "%s" "$built_so" > ' + shlex.quote(nim_so_file),
@@ -534,9 +674,9 @@ def deploy(c, force_deps: bool = False):
         "else",
         '  echo "migrations: cached"',
         "fi",
-        _bash_systemd_snippet(cfg),
+        _bash_supervisor_setup_snippet(cfg),
         _bash_nginx_snippet(cfg),
-        f"systemctl restart {shlex.quote(cfg.ws_service)} {shlex.quote(cfg.uvicorn_service)}",
+        _bash_supervisor_restart_snippet(cfg, write_config=False),
         _bash_health_check_snippet(cfg),
     ]) + "\n"
 
@@ -551,10 +691,11 @@ def reload(c):
     env_b64 = _b64(_render_runtime_env(cfg))
     script = "\n".join([
         "set -euo pipefail",
+        _bash_remote_path_export(),
         _ensure_media_dir_cmd(cfg),
         _bash_write_if_changed_fn(),
         f"write_if_changed {shlex.quote(cfg.env_file)} 600 {shlex.quote(env_b64)} || true",
-        f"systemctl restart {shlex.quote(cfg.ws_service)} {shlex.quote(cfg.uvicorn_service)}",
+        _bash_supervisor_restart_snippet(cfg, write_config=True),
         _bash_health_check_snippet(cfg),
     ]) + "\n"
     with cfg.connect() as conn:
@@ -582,7 +723,8 @@ def restart(c):
     cfg = DeployConfig.from_env()
     script = "\n".join([
         "set -euo pipefail",
-        f"systemctl restart {shlex.quote(cfg.ws_service)} {shlex.quote(cfg.uvicorn_service)}",
+        _bash_remote_path_export(),
+        _bash_supervisor_restart_snippet(cfg, write_config=False),
         _bash_health_check_snippet(cfg),
     ]) + "\n"
     with cfg.connect() as conn:
@@ -591,23 +733,41 @@ def restart(c):
 
 @task
 def status(c):
-    """Show systemd and local health status on the production server."""
+    """Show PM2/systemd and local HTTP + WebSocket health status on the production server."""
     cfg = DeployConfig.from_env()
-    with cfg.connect() as conn:
-        conn.run(
-            f"systemctl --no-pager status {shlex.quote(cfg.ws_service)} {shlex.quote(cfg.uvicorn_service)} || true; "
-            f"curl -fsS http://127.0.0.1:{cfg.http_port}/health/"
+    if cfg.process_manager == "pm2":
+        sup_cmd = (
+            f"pm2 describe {shlex.quote(cfg.ws_service)} >/dev/null 2>&1 && pm2 status || pm2 list || true"
         )
+    else:
+        sup_cmd = f"systemctl --no-pager status {shlex.quote(cfg.ws_service)} {shlex.quote(cfg.uvicorn_service)} || true"
+    script = "\n".join([
+        "set -euo pipefail",
+        _bash_remote_path_export(),
+        sup_cmd,
+        f"curl -fsS http://127.0.0.1:{cfg.ws_port}/health && echo ''",
+        f"curl -fsS http://127.0.0.1:{cfg.http_port}/health/ && echo ''",
+    ]) + "\n"
+    with cfg.connect() as conn:
+        _run_remote_bash(conn, script)
 
 
 @task
 def logs(c, lines: int = 80):
-    """Tail recent journald logs for Uvicorn and WebSocket services."""
+    """Show recent logs for Uvicorn and WebSocket services."""
     cfg = DeployConfig.from_env()
+    n = int(lines)
+    if cfg.process_manager == "pm2":
+        log_cmd = f"pm2 logs {shlex.quote(cfg.ws_service + '|' + cfg.uvicorn_service)} --lines {n} --nostream"
+    else:
+        log_cmd = f"journalctl -u {shlex.quote(cfg.ws_service)} -u {shlex.quote(cfg.uvicorn_service)} -n {n} --no-pager"
+    script = "\n".join([
+        "set -euo pipefail",
+        _bash_remote_path_export(),
+        log_cmd,
+    ]) + "\n"
     with cfg.connect() as conn:
-        conn.run(
-            f"journalctl -u {shlex.quote(cfg.ws_service)} -u {shlex.quote(cfg.uvicorn_service)} -n {int(lines)} --no-pager"
-        )
+        _run_remote_bash(conn, script)
 
 
 @task

@@ -314,7 +314,11 @@
 
     _initGl() {
       if (!this.canvas || typeof this.canvas.getContext !== "function") return;
-      const gl = this.canvas.getContext("webgl2", { antialias: true, preserveDrawingBuffer: true });
+      const gl = this.canvas.getContext("webgl2", {
+        antialias: true,
+        preserveDrawingBuffer: false,
+        powerPreference: "high-performance",
+      });
       if (!gl) return;
       this.gl = gl;
       this.geomProg = linkProgram(gl, VERT_GEOM_SRC, FRAG_GEOM_SRC);
@@ -414,11 +418,24 @@
           this.renderFrame(this._lastRender.geomSpecs, this._lastRender.poseRow, this._lastRender.focusX);
         }
       };
+      this._onContextLost = (e) => {
+        e.preventDefault();
+        this.ready = false;
+        this.gl = null;
+      };
+      this._onContextRestored = () => {
+        this._initGl();
+        if (this.ready && this._lastRender) {
+          this.renderFrame(this._lastRender.geomSpecs, this._lastRender.poseRow, this._lastRender.focusX);
+        }
+      };
       this.canvas.addEventListener("pointerdown", this._onDown);
       window.addEventListener("pointermove", this._onMove);
       window.addEventListener("pointerup", this._onUp);
       this.canvas.addEventListener("wheel", this._onWheel, { passive: false });
       this.canvas.addEventListener("dblclick", this._onDblClick);
+      this.canvas.addEventListener("webglcontextlost", this._onContextLost);
+      this.canvas.addEventListener("webglcontextrestored", this._onContextRestored);
     }
 
     renderFrame(geomSpecs, poseRow, focusX = 0.0) {
@@ -497,6 +514,8 @@
         this.canvas.removeEventListener("pointerdown", this._onDown);
         this.canvas.removeEventListener("wheel", this._onWheel);
         this.canvas.removeEventListener("dblclick", this._onDblClick);
+        this.canvas.removeEventListener("webglcontextlost", this._onContextLost);
+        this.canvas.removeEventListener("webglcontextrestored", this._onContextRestored);
       }
       window.removeEventListener("pointermove", this._onMove);
       window.removeEventListener("pointerup", this._onUp);

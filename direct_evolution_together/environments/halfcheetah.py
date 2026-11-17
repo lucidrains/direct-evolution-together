@@ -72,41 +72,85 @@ HALFCHEETAH_TIER_DISTANCE = 2.5
 HALFCHEETAH_TIER_UPRIGHT = 0.2
 
 _CHEETAH_MODEL: mujoco.MjModel | None = None
+_CHEETAH_BFOOT_GEOM: int = -1
+_CHEETAH_FFOOT_GEOM: int = -1
 _CHEETAH_MODEL_LOCK = threading.Lock()
+_CHEETAH_TLS = threading.local()
+
+_INV_OBS_SCALE = np.asarray([1.0 / s for s in HALFCHEETAH_OBS_SCALE], dtype=np.float64)
+_INV_OBS_SCALE_0 = float(_INV_OBS_SCALE[0])
+_INV_OBS_SCALE_POS = _INV_OBS_SCALE[1:8]
+_INV_OBS_SCALE_VEL = _INV_OBS_SCALE[8:17]
+_PHASE_ANGLES = 2.0 * math.pi * HALFCHEETAH_PHASE_FREQ * (np.arange(HALFCHEETAH_MAX_STEPS, dtype=np.float64) * HALFCHEETAH_DT)
+_PHASE_TABLE = np.ascontiguousarray(
+    np.column_stack(
+        [
+            np.sin(_PHASE_ANGLES),
+            np.cos(_PHASE_ANGLES),
+            np.sin(2.0 * _PHASE_ANGLES),
+            np.cos(2.0 * _PHASE_ANGLES),
+        ]
+    ),
+    dtype=np.float64,
+)
 
 
 def get_halfcheetah_model() -> mujoco.MjModel:
-    global _CHEETAH_MODEL
+    global _CHEETAH_MODEL, _CHEETAH_BFOOT_GEOM, _CHEETAH_FFOOT_GEOM
+    model = _CHEETAH_MODEL
+    if model is not None:
+        return model
     with _CHEETAH_MODEL_LOCK:
         if _CHEETAH_MODEL is None:
-            _CHEETAH_MODEL = mujoco.MjModel.from_xml_path(str(HALFCHEETAH_XML_PATH))
+            m = mujoco.MjModel.from_xml_path(str(HALFCHEETAH_XML_PATH))
+            _CHEETAH_BFOOT_GEOM = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "bfoot")
+            _CHEETAH_FFOOT_GEOM = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "ffoot")
+            _CHEETAH_MODEL = m
         return _CHEETAH_MODEL
+
+
+def get_thread_halfcheetah_data(model: mujoco.MjModel | None = None) -> mujoco.MjData:
+    """Return a reusable per-thread `MjData` to avoid 6.3 MB arena malloc/free per rollout."""
+    eff_model = get_halfcheetah_model() if model is None else model
+    cached_model = getattr(_CHEETAH_TLS, "model", None)
+    cached_data = getattr(_CHEETAH_TLS, "data", None)
+    if cached_data is None or cached_model is not eff_model:
+        cached_data = mujoco.MjData(eff_model)
+        _CHEETAH_TLS.model = eff_model
+        _CHEETAH_TLS.data = cached_data
+    return cached_data
 
 
 def halfcheetah_reset(model: mujoco.MjModel, data: mujoco.MjData, seed: int) -> None:
     """Reset HalfCheetah with deterministic mulberry32 initial perturbations."""
     mujoco.mj_resetData(model, data)
     rng = mulberry32(seed)
+    qpos = data.qpos
+    qvel = data.qvel
     for i in range(model.nq):
-        data.qpos[i] += (rng() * 2.0 - 1.0) * 0.05
+        qpos[i] += (rng() * 2.0 - 1.0) * 0.05
     for i in range(model.nv):
-        data.qvel[i] += (rng() * 2.0 - 1.0) * 0.05
+        qvel[i] += (rng() * 2.0 - 1.0) * 0.05
     mujoco.mj_forward(model, data)
+
+
+def _fill_cheetah_obs(obs: np.ndarray, qpos: np.ndarray, qvel: np.ndarray, step_idx: int) -> None:
+    obs[0] = (float(qpos[1]) - 0.7) * _INV_OBS_SCALE_0
+    obs[1:8] = qpos[2:9] * _INV_OBS_SCALE_POS
+    obs[8:17] = qvel[:9] * _INV_OBS_SCALE_VEL
+    if step_idx < len(_PHASE_TABLE):
+        obs[17:21] = _PHASE_TABLE[step_idx]
+    else:
+        ang = 2.0 * math.pi * HALFCHEETAH_PHASE_FREQ * (step_idx * HALFCHEETAH_DT)
+        obs[17] = math.sin(ang)
+        obs[18] = math.cos(ang)
+        obs[19] = math.sin(2.0 * ang)
+        obs[20] = math.cos(2.0 * ang)
 
 
 def _cheetah_obs(data: mujoco.MjData, step_idx: int) -> np.ndarray:
     raw = np.empty(HALFCHEETAH_OBS_DIM, dtype=np.float64)
-    raw[0] = (float(data.qpos[1]) - 0.7) / HALFCHEETAH_OBS_SCALE[0]
-    for i in range(1, 8):
-        raw[i] = float(data.qpos[i + 1]) / HALFCHEETAH_OBS_SCALE[i]
-    for i in range(9):
-        raw[8 + i] = float(data.qvel[i]) / HALFCHEETAH_OBS_SCALE[8 + i]
-    t = step_idx * HALFCHEETAH_DT
-    ang = 2.0 * math.pi * HALFCHEETAH_PHASE_FREQ * t
-    raw[17] = math.sin(ang)
-    raw[18] = math.cos(ang)
-    raw[19] = math.sin(2.0 * ang)
-    raw[20] = math.cos(2.0 * ang)
+    _fill_cheetah_obs(raw, data.qpos, data.qvel, step_idx)
     return raw
 
 
@@ -116,70 +160,85 @@ def halfcheetah_rollout(
     seed: int = 0,
     max_steps: int = HALFCHEETAH_MAX_STEPS,
     nudge: str | None = None,
+    capture_frames: bool = True,
 ) -> dict[str, object]:
     """Run one deterministic HalfCheetah MuJoCo rollout and capture compact 2D pose frames."""
     substrate = get_substrate(HALFCHEETAH_SUBSTRATE_DIMS, HALFCHEETAH_LAYER_COORDS)
     weights, biases = substrate.decode(genome_or_net)
+    w0, w1 = weights[0], weights[1]
+    b0, b1 = biases[0], biases[1]
 
     model = get_halfcheetah_model()
-    data = mujoco.MjData(model)
+    data = get_thread_halfcheetah_data(model)
     halfcheetah_reset(model, data, seed)
+    qpos = data.qpos
+    qvel = data.qvel
+    ctrl = data.ctrl
     if nudge == "back":
-        data.qvel[0] -= 2.2
+        qvel[0] -= 2.2
     elif nudge == "fwd":
-        data.qvel[0] += 2.2
+        qvel[0] += 2.2
     elif nudge == "hop":
-        data.qvel[1] += 2.6
+        qvel[1] += 2.6
 
-    start_x = float(data.qpos[0])
-    bfoot_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "bfoot")
-    ffoot_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "ffoot")
+    start_x = float(qpos[0])
+    bfoot_geom = _CHEETAH_BFOOT_GEOM
+    ffoot_geom = _CHEETAH_FFOOT_GEOM
+    contact = data.contact
 
     def _capture_frame(ctrl_rms: float) -> list[float]:
-        q = data.qpos
-        g1 = data.contact.geom1
-        g2 = data.contact.geom2
-        bf_c = 1.0 if ((g1 == bfoot_geom).any() or (g2 == bfoot_geom).any()) else 0.0
-        ff_c = 1.0 if ((g1 == ffoot_geom).any() or (g2 == ffoot_geom).any()) else 0.0
+        ncon = int(data.ncon)
+        if ncon > 0:
+            g1 = contact.geom1[:ncon]
+            g2 = contact.geom2[:ncon]
+            bf_c = 1.0 if ((g1 == bfoot_geom).any() or (g2 == bfoot_geom).any()) else 0.0
+            ff_c = 1.0 if ((g1 == ffoot_geom).any() or (g2 == ffoot_geom).any()) else 0.0
+        else:
+            bf_c = 0.0
+            ff_c = 0.0
         return [
-            round(float(q[0]), 4),
-            round(float(q[1]), 4),
-            round(float(q[2]), 4),
-            round(float(q[3]), 4),
-            round(float(q[4]), 4),
-            round(float(q[5]), 4),
-            round(float(q[6]), 4),
-            round(float(q[7]), 4),
-            round(float(q[8]), 4),
+            round(float(qpos[0]), 4),
+            round(float(qpos[1]), 4),
+            round(float(qpos[2]), 4),
+            round(float(qpos[3]), 4),
+            round(float(qpos[4]), 4),
+            round(float(qpos[5]), 4),
+            round(float(qpos[6]), 4),
+            round(float(qpos[7]), 4),
+            round(float(qpos[8]), 4),
             round(ctrl_rms, 3),
             bf_c,
             ff_c,
         ]
 
-    frames: list[list[float]] = [_capture_frame(0.0)]
+    frames: list[list[float]] = [_capture_frame(0.0)] if capture_frames else []
+    vx_trace: list[float] = [float(qvel[0])] if capture_frames else []
+    obs = np.empty(HALFCHEETAH_OBS_DIM, dtype=np.float64)
     total_return = 0.0
     upright_sum = 0.0
     energy_sum = 0.0
-    vx_trace: list[float] = [float(data.qvel[0])]
+    inv_dt = 1.0 / HALFCHEETAH_DT
+    inv_act_dim = 1.0 / HALFCHEETAH_ACTION_DIM
 
     for step_idx in range(max_steps):
-        obs = _cheetah_obs(data, step_idx)
-        act = substrate.forward(weights, biases, obs)
-        x_before = float(data.qpos[0])
-        data.ctrl[:] = act
-        for _ in range(HALFCHEETAH_FRAME_SKIP):
-            mujoco.mj_step(model, data)
-        x_after = float(data.qpos[0])
-        vx = (x_after - x_before) / HALFCHEETAH_DT
-        ctrl_sq = float(np.mean(act * act))
-        total_return += vx - HALFCHEETAH_REWARD_CTRL_COST * float(np.sum(act * act))
-        upright_sum += math.cos(float(data.qpos[2]))
+        _fill_cheetah_obs(obs, qpos, qvel, step_idx)
+        act = np.tanh(np.tanh(obs @ w0 + b0) @ w1 + b1)
+        x_before = float(qpos[0])
+        ctrl[:] = act
+        mujoco.mj_step(model, data, nstep=HALFCHEETAH_FRAME_SKIP)
+        x_after = float(qpos[0])
+        vx = (x_after - x_before) * inv_dt
+        act_sq_sum = float(act @ act)
+        ctrl_sq = act_sq_sum * inv_act_dim
+        total_return += vx - HALFCHEETAH_REWARD_CTRL_COST * act_sq_sum
+        upright_sum += math.cos(float(qpos[2]))
         energy_sum += ctrl_sq
-        vx_trace.append(round(vx, 3))
-        frames.append(_capture_frame(math.sqrt(ctrl_sq)))
+        if capture_frames:
+            vx_trace.append(round(vx, 3))
+            frames.append(_capture_frame(math.sqrt(ctrl_sq)))
 
-    steps = len(frames) - 1
-    dx = float(data.qpos[0]) - start_x
+    steps = (len(frames) - 1) if capture_frames else max(0, int(max_steps))
+    dx = float(qpos[0]) - start_x
     mean_vx = dx / max(HALFCHEETAH_DT, steps * HALFCHEETAH_DT)
     mean_upright = upright_sum / max(1, steps)
     return {
@@ -357,12 +416,14 @@ class HalfCheetahAdapter:
         seed: int = 0,
         max_steps: int | None = None,
         nudge: str | None = None,
+        capture_frames: bool = True,
     ) -> dict[str, object]:
         return halfcheetah_rollout(
             genome_or_net,
             seed=seed,
             max_steps=HALFCHEETAH_MAX_STEPS if max_steps is None else int(max_steps),
             nudge=nudge,
+            capture_frames=capture_frames,
         )
 
     def evaluate(
@@ -370,9 +431,20 @@ class HalfCheetahAdapter:
         genome_or_net: dict | CPPN,
         *,
         seeds: Sequence[int] | None = None,
+        capture_frames: bool = True,
+        episodes: Sequence[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         eval_seeds = tuple(HALFCHEETAH_EVAL_SEEDS if seeds is None else seeds)
-        episodes = [self.rollout(genome_or_net, seed=s, max_steps=HALFCHEETAH_MAX_STEPS) for s in eval_seeds]
+        if episodes is None:
+            episodes = [
+                self.rollout(
+                    genome_or_net,
+                    seed=s,
+                    max_steps=HALFCHEETAH_MAX_STEPS,
+                    capture_frames=capture_frames,
+                )
+                for s in eval_seeds
+            ]
         dists = [round(float(ep["distance"]), 2) for ep in episodes]
         mean_dx = sum(dists) / max(1, len(dists))
         min_dx = min(dists) if dists else 0.0

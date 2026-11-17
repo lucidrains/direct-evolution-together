@@ -11,6 +11,7 @@ def _enable_sqlite_wal(sender, connection, **kwargs) -> None:
         db_name = str(connection.settings_dict.get("NAME") or "")
         with connection.cursor() as cursor:
             if ":memory:" in db_name or "mode=memory" in db_name:
+                connection.transaction_mode = None
                 cursor.execute("PRAGMA read_uncommitted=ON;")
             else:
                 cursor.execute("PRAGMA journal_mode=WAL;")

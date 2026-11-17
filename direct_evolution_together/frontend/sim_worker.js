@@ -253,7 +253,7 @@ function cartpoleStep(state, uRaw) {
   return { nextState: [nx, nxDot, ntheta, nthetaDot], force, terminated };
 }
 
-function cartpoleRollout(genome, seed = 0, maxSteps = 500, nudge = null, includeActs = false) {
+function cartpoleRollout(genome, seed = 0, maxSteps = 500, nudge = null, includeActs = false, captureFrames = true) {
   const spec = taskSpecs.cartpole || { obsDim: 4, hiddenDims: [8], actionDim: 1, layerCoords: null };
   const dims = [spec.obsDim || 4, ...(spec.hiddenDims || [8]), spec.actionDim || 1];
   const decoded = decodeHyperNeat(genome, dims, spec.layerCoords);
@@ -262,22 +262,25 @@ function cartpoleRollout(genome, seed = 0, maxSteps = 500, nudge = null, include
     const sign = nudge === "left" ? -1 : 1;
     state = [state[0], state[1] + sign * 0.35, state[2], state[3] + sign * 0.55];
   }
-  const states = [state];
-  const forces = [];
+  const states = captureFrames ? [state] : null;
+  const forces = captureFrames ? [] : null;
   const stepActs = includeActs ? [] : null;
   let absXSum = 0.0;
+  let steps = 0;
   for (let s = 0; s < maxSteps; s++) {
     const obs = [state[0] / CP_X_TH, state[1] / 3.0, state[2] / CP_THETA_TH, state[3] / 3.0];
     const { action, activations } = forwardPolicy(decoded, obs, includeActs);
     if (includeActs) stepActs.push(activations);
     const res = cartpoleStep(state, action[0]);
     absXSum += Math.abs(state[0]);
-    forces.push(res.force);
-    states.push(res.nextState);
+    steps++;
+    if (captureFrames) {
+      forces.push(res.force);
+      states.push(res.nextState);
+    }
     state = res.nextState;
     if (res.terminated) break;
   }
-  const steps = forces.length;
   return {
     seed,
     steps,
@@ -298,7 +301,7 @@ function evaluateCartpole(genome, seeds) {
   let primaryRollout = null;
   const perSeed = [];
   for (let i = 0; i < seeds.length; i++) {
-    const ro = cartpoleRollout(genome, seeds[i], maxSteps);
+    const ro = cartpoleRollout(genome, seeds[i], maxSteps, null, false, i === 0);
     if (i === 0) primaryRollout = ro;
     perSeed.push(ro.steps);
     sumSteps += ro.steps;
@@ -404,10 +407,8 @@ async function ensureMujocoCheetah() {
 
 const _hcObsBuf = new Float64Array(21);
 
-function cheetahObs(data, stepIdx) {
+function cheetahObs(qpos, qvel, stepIdx) {
   const obs = _hcObsBuf;
-  const qpos = data.qpos;
-  const qvel = data.qvel;
   obs[0] = (qpos[1] - 0.7) / HC_OBS_SCALE[0];
   for (let i = 1; i < 8; i++) obs[i] = qpos[i + 1] / HC_OBS_SCALE[i];
   for (let i = 0; i < 9; i++) obs[8 + i] = qvel[i] / HC_OBS_SCALE[8 + i];
@@ -419,7 +420,15 @@ function cheetahObs(data, stepIdx) {
   return obs;
 }
 
-async function halfcheetahRollout(genome, seed = 0, maxSteps = 200, nudge = null, includeActs = false, includeGeoms = false) {
+async function halfcheetahRollout(
+  genome,
+  seed = 0,
+  maxSteps = 200,
+  nudge = null,
+  includeActs = false,
+  includeGeoms = false,
+  captureFrames = true
+) {
   const { mujoco, model, data, geomSpecs, nonPlaneIds } = await ensureMujocoCheetah();
   const spec = taskSpecs.halfcheetah || {
     obsDim: 21,
@@ -431,33 +440,38 @@ async function halfcheetahRollout(genome, seed = 0, maxSteps = 200, nudge = null
   const decoded = decodeHyperNeat(genome, dims, spec.layerCoords);
 
   mujoco.mj_resetData(model, data);
+  let qpos = data.qpos;
+  let qvel = data.qvel;
+  let ctrl = data.ctrl;
   const rng = mulberry32(seed);
-  for (let i = 0; i < model.nq; i++) data.qpos[i] += (rng() * 2.0 - 1.0) * 0.05;
-  for (let i = 0; i < model.nv; i++) data.qvel[i] += (rng() * 2.0 - 1.0) * 0.05;
+  for (let i = 0; i < model.nq; i++) qpos[i] += (rng() * 2.0 - 1.0) * 0.05;
+  for (let i = 0; i < model.nv; i++) qvel[i] += (rng() * 2.0 - 1.0) * 0.05;
   mujoco.mj_forward(model, data);
+  if (qpos.byteLength === 0) {
+    qpos = data.qpos;
+    qvel = data.qvel;
+    ctrl = data.ctrl;
+  }
 
-  if (nudge === "back") data.qvel[0] -= 2.2;
-  else if (nudge === "fwd") data.qvel[0] += 2.2;
-  else if (nudge === "hop") data.qvel[1] += 2.6;
+  if (nudge === "back") qvel[0] -= 2.2;
+  else if (nudge === "fwd") qvel[0] += 2.2;
+  else if (nudge === "hop") qvel[1] += 2.6;
 
-  const startX = data.qpos[0];
-  const capFrame = (ctrlRms) => {
-    const q = data.qpos;
-    return [
-      Math.round(q[0] * 10000) / 10000,
-      Math.round(q[1] * 10000) / 10000,
-      Math.round(q[2] * 10000) / 10000,
-      Math.round(q[3] * 10000) / 10000,
-      Math.round(q[4] * 10000) / 10000,
-      Math.round(q[5] * 10000) / 10000,
-      Math.round(q[6] * 10000) / 10000,
-      Math.round(q[7] * 10000) / 10000,
-      Math.round(q[8] * 10000) / 10000,
-      Math.round(ctrlRms * 1000) / 1000,
-      0.0,
-      0.0,
-    ];
-  };
+  const startX = qpos[0];
+  const capFrame = (ctrlRms) => [
+    Math.round(qpos[0] * 10000) / 10000,
+    Math.round(qpos[1] * 10000) / 10000,
+    Math.round(qpos[2] * 10000) / 10000,
+    Math.round(qpos[3] * 10000) / 10000,
+    Math.round(qpos[4] * 10000) / 10000,
+    Math.round(qpos[5] * 10000) / 10000,
+    Math.round(qpos[6] * 10000) / 10000,
+    Math.round(qpos[7] * 10000) / 10000,
+    Math.round(qpos[8] * 10000) / 10000,
+    Math.round(ctrlRms * 1000) / 1000,
+    0.0,
+    0.0,
+  ];
 
   const capGeoms = () => {
     const row = new Array(nonPlaneIds.length * 12);
@@ -478,8 +492,8 @@ async function halfcheetahRollout(genome, seed = 0, maxSteps = 200, nudge = null
     return row;
   };
 
-  const frames = [capFrame(0.0)];
-  const vxTrace = [Math.round(data.qvel[0] * 1000) / 1000];
+  const frames = captureFrames ? [capFrame(0.0)] : null;
+  const vxTrace = captureFrames ? [Math.round(qvel[0] * 1000) / 1000] : null;
   const stepActs = includeActs ? [] : null;
   const geomPoses = includeGeoms ? [capGeoms()] : null;
   let totalReturn = 0.0;
@@ -487,27 +501,44 @@ async function halfcheetahRollout(genome, seed = 0, maxSteps = 200, nudge = null
   let energySum = 0.0;
 
   for (let s = 0; s < maxSteps; s++) {
-    const obs = cheetahObs(data, s);
+    const obs = cheetahObs(qpos, qvel, s);
     const { action, activations } = forwardPolicy(decoded, obs, includeActs);
     if (includeActs) stepActs.push(activations);
-    const xBefore = data.qpos[0];
-    for (let a = 0; a < 6; a++) data.ctrl[a] = action[a];
+    const xBefore = qpos[0];
+    ctrl[0] = action[0];
+    ctrl[1] = action[1];
+    ctrl[2] = action[2];
+    ctrl[3] = action[3];
+    ctrl[4] = action[4];
+    ctrl[5] = action[5];
     for (let sub = 0; sub < HC_FRAME_SKIP; sub++) mujoco.mj_step(model, data);
-    const xAfter = data.qpos[0];
+    if (qpos.byteLength === 0) {
+      qpos = data.qpos;
+      qvel = data.qvel;
+      ctrl = data.ctrl;
+    }
+    const xAfter = qpos[0];
     const vx = (xAfter - xBefore) / HC_DT;
-    let actSqSum = 0.0;
-    for (let a = 0; a < 6; a++) actSqSum += action[a] * action[a];
+    const actSqSum =
+      action[0] * action[0] +
+      action[1] * action[1] +
+      action[2] * action[2] +
+      action[3] * action[3] +
+      action[4] * action[4] +
+      action[5] * action[5];
     const ctrlSqMean = actSqSum / 6.0;
     totalReturn += vx - 0.1 * actSqSum;
-    uprightSum += Math.cos(data.qpos[2]);
+    uprightSum += Math.cos(qpos[2]);
     energySum += ctrlSqMean;
-    vxTrace.push(Math.round(vx * 1000) / 1000);
-    frames.push(capFrame(Math.sqrt(ctrlSqMean)));
+    if (captureFrames) {
+      vxTrace.push(Math.round(vx * 1000) / 1000);
+      frames.push(capFrame(Math.sqrt(ctrlSqMean)));
+    }
     if (includeGeoms) geomPoses.push(capGeoms());
   }
 
-  const steps = frames.length - 1;
-  const dx = data.qpos[0] - startX;
+  const steps = captureFrames ? frames.length - 1 : maxSteps;
+  const dx = qpos[0] - startX;
   const meanVx = dx / Math.max(HC_DT, steps * HC_DT);
   const meanUpright = uprightSum / Math.max(1, steps);
   const result = {
@@ -541,7 +572,7 @@ async function evaluateHalfCheetah(genome, seeds) {
   let primaryRollout = null;
 
   for (let i = 0; i < seeds.length; i++) {
-    const ro = await halfcheetahRollout(genome, seeds[i], maxSteps);
+    const ro = await halfcheetahRollout(genome, seeds[i], maxSteps, null, false, false, i === 0);
     if (i === 0) primaryRollout = ro;
     const dx = Math.round(ro.distance * 100) / 100;
     dists.push(dx);

@@ -1459,6 +1459,38 @@ def test_nginx_conf_handles_media_and_compression_for_subpath_and_root():
     assert "gzip off;" in root_conf
     assert "server {" in root_conf
 
+    # Verify remote-only PM2 ecosystem generation & dual WS + HTTP health checks (no repo PM2 file)
+    assert base_cfg.process_manager == "pm2"
+    assert base_cfg.ecosystem_file == "/srv/det/ecosystem.config.cjs"
+    eco_src = fabfile._render_pm2_ecosystem(base_cfg)
+    eco_parsed = json.loads(
+        subprocess.check_output(
+            ["node", "-e", f"const m = {{}}; (function(module){{\n{eco_src}\n}})(m); console.log(JSON.stringify(m.exports));"],
+            text=True,
+        )
+    )
+    apps_by_name = {a["name"]: a for a in eco_parsed["apps"]}
+    assert set(apps_by_name) == {"direct-evolution-together-ws", "direct-evolution-together-uvicorn"}
+    ws_app = apps_by_name["direct-evolution-together-ws"]
+    assert ws_app["script"] == "/srv/det/src/.venv/bin/python"
+    assert ws_app["args"] == "-m direct_evolution_together.ws_server"
+    assert ws_app["interpreter"] == "none"
+    assert ws_app["instances"] == 1
+    assert ws_app["env"]["MUMMY_WS_PORT"] == "8001"
+
+    pm2_restart = fabfile._bash_supervisor_restart_snippet(base_cfg, write_config=True)
+    assert "systemctl disable --now direct-evolution-together-ws direct-evolution-together-uvicorn" in pm2_restart
+    assert "pm2 startOrRestart /srv/det/ecosystem.config.cjs --update-env" in pm2_restart
+
+    systemd_cfg = fabfile.DeployConfig(**{**base_cfg.__dict__, "process_manager": "systemd"})
+    sys_restart = fabfile._bash_supervisor_restart_snippet(systemd_cfg, write_config=True)
+    assert "systemctl restart direct-evolution-together-ws direct-evolution-together-uvicorn" in sys_restart
+
+    health_snip = fabfile._bash_health_check_snippet(base_cfg)
+    assert "http://127.0.0.1:8001/health" in health_snip
+    assert "http://127.0.0.1:8000/health/" in health_snip
+    assert not list(fabfile.REPO_ROOT.glob("ecosystem.config.*"))
+
 
 @pytest.mark.django_db
 def test_halfcheetah_fk_parity_convergence_server_eval_and_video(client, settings, tmp_path):
@@ -1706,6 +1738,9 @@ def test_external_researcher_worker_api_and_ws_broadcast(client):
     compile(script_src, "worker.py", "exec")
 
     with _ws_server(seed=True, pop_size=6, max_votes=4) as port:
+        import urllib.request
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2.0) as h_resp:
+            assert json.loads(h_resp.read().decode("utf-8")) == {"status": "ok", "service": "ws"}
         seed_from_db(default_pop_size=6, default_max_votes=4)
         with connect(f"ws://127.0.0.1:{port}/ws/chat/{slug}/?username=researcher") as ws:
             evo = _recv_until(ws, "evolution_state")
@@ -1987,6 +2022,295 @@ def test_centralized_config_client_lock_and_crowd_trust(client, monkeypatch, tmp
     assert peer2_check["accepted"] == 0
     assert not ExternalEvalResult.objects.filter(room="lobby", genome_hash="dd11ee22ff33aa44bb55").exists()
     assert ContributorTrust.objects.filter(room="lobby", quarantined=True).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_ws_cid_reload_no_duplicate_leave_and_ping_reaper():
+    import base64
+    import os
+    import socket as py_socket
+    import time
+
+    with _ws_server(seed=True, pop_size=6, max_votes=4) as port:
+        import urllib.request
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2.0) as h_resp:
+            assert json.loads(h_resp.read().decode("utf-8")) == {"status": "ok", "service": "ws"}
+        seed_from_db(default_pop_size=6, default_max_votes=4)
+        mummy_ws.set_round_config(2, 120)
+
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=observer&cid=obscid000001") as obs:
+            assert _recv_until(obs, "identity")["username"] == "observer"
+            _recv_until(obs, "evolution_state")
+            assert _recv_until(obs, "presence")["users"] == ["observer"]
+
+            # 1. Tab connects with cid, casts vote, then reloads BEFORE old socket closes:
+            #    must keep exact username "alice" (never "alice-2"), no duplicate presence, and preserve vote
+            with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice&cid=alicecid0001") as ws1:
+                assert _recv_until(ws1, "identity")["username"] == "alice"
+                _recv_until(ws1, "evolution_state")
+                pres1 = _recv_until(obs, "presence")
+                assert sorted(pres1["users"]) == ["alice", "observer"]
+
+                ws1.send(json.dumps({
+                    "type": "cast_vote", "goal": "HalfCheetah", "generation": 0, "index": 0, "vote": 1,
+                }))
+                v1 = _recv_until(obs, "votes_updated")
+                assert v1["totalVotes"] == 1
+                assert v1["votes"][0]["upUsers"] == ["alice"]
+
+                # Open replacement socket with same cid while ws1 is still open (reload race)
+                with connect(
+                    f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice&cid=alicecid0001&reconnect=1"
+                ) as ws2:
+                    assert _recv_until(ws2, "identity")["username"] == "alice"
+                    evo2 = _recv_until(ws2, "evolution_state")
+                    pres2 = _recv_until(ws2, "presence")
+                    assert sorted(pres2["users"]) == ["alice", "observer"]
+                    hc_goal = {g["name"]: g for g in evo2["goals"]}["HalfCheetah"]
+                    assert hc_goal["votes"][0]["upUsers"] == ["alice"]
+
+                    # Idempotent unvote via vote=0 works on the transferred vote
+                    ws2.send(json.dumps({
+                        "type": "cast_vote", "goal": "HalfCheetah", "generation": 0, "index": 0, "vote": 0,
+                    }))
+                    v_cleared = _recv_until(ws2, "votes_updated")
+                    assert v_cleared["totalVotes"] == 0
+                    assert v_cleared["votes"][0]["upUsers"] == []
+
+                    # 2. RFC 6455 Ping -> Pong and JSON ping -> pong
+                    pong_waiter = ws2.ping(b"keepalive")
+                    assert pong_waiter.wait(timeout=2.0)
+                    ws2.send(json.dumps({"type": "ping"}))
+                    assert _recv_until(ws2, "pong")["type"] == "pong"
+
+            # 3. Explicit {"type": "leave"} disconnects user immediately before TCP close
+            with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=bob&cid=bobcid000002") as ws_bob:
+                assert _recv_until(ws_bob, "identity")["username"] == "bob"
+                _recv_until(ws_bob, "evolution_state")
+                while True:
+                    p = _recv_until(obs, "presence")
+                    if "bob" in p["users"]:
+                        break
+
+                ws_bob.send(json.dumps({"type": "leave"}))
+                while True:
+                    left_sys = _recv_until(obs, "system", timeout=2.0)
+                    if left_sys["message"] == "bob left":
+                        break
+                p_after_leave = _recv_until(obs, "presence", timeout=2.0)
+                assert "bob" not in p_after_leave["users"]
+
+            # 4. Dead-socket reaper evicts silent half-open TCP clients while keeping responsive clients live
+            mummy_ws.set_heartbeat_config(100, 350)
+            raw_sock = py_socket.create_connection(("127.0.0.1", port), timeout=2.0)
+            try:
+                sec_key = base64.b64encode(os.urandom(16)).decode("ascii")
+                handshake = (
+                    f"GET /ws/chat/lobby/?username=ghost&cid=ghostcid0003 HTTP/1.1\r\n"
+                    f"Host: 127.0.0.1:{port}\r\n"
+                    f"Upgrade: websocket\r\n"
+                    f"Connection: Upgrade\r\n"
+                    f"Sec-WebSocket-Key: {sec_key}\r\n"
+                    f"Sec-WebSocket-Version: 13\r\n\r\n"
+                ).encode("ascii")
+                raw_sock.sendall(handshake)
+                resp_bytes = raw_sock.recv(4096)
+                assert b"101 Switching Protocols" in resp_bytes
+
+                while True:
+                    p = _recv_until(obs, "presence", timeout=2.0)
+                    if "ghost" in p["users"]:
+                        break
+
+                # Do not read/reply on raw_sock; meanwhile obs answers Ping automatically via websockets
+                deadline = time.monotonic() + 2.5
+                evicted = False
+                while time.monotonic() < deadline:
+                    p = _recv_until(obs, "presence", timeout=2.0)
+                    if "ghost" not in p["users"] and "observer" in p["users"]:
+                        evicted = True
+                        break
+                assert evicted, "Unresponsive ghost socket was not reaped within timeout"
+            finally:
+                mummy_ws.set_heartbeat_config(20000, 60000)
+                try:
+                    raw_sock.close()
+                except Exception:
+                    pass
+
+
+@pytest.mark.django_db(transaction=True)
+def test_halfcheetah_fast_rollout_parity_and_fault_tolerant_evolve(monkeypatch):
+    import time
+    from pathlib import Path
+    from direct_evolution_together import ws_bridge
+    from direct_evolution_together.environments.adapters import HalfCheetahAdapter
+    from direct_evolution_together.environments.substrate import HyperNEATSubstrate
+    from direct_evolution_together.models import RoomEvolutionState
+
+    # 1. Verify HyperNEAT NumPy decode parity vs PyTorch CPPN and HalfCheetah capture_frames=False parity
+    genome = CPPN.random(777).to_dict()
+    sub = HyperNEATSubstrate((21, 12, 6))
+    sub._decode_cache.clear()
+    layers_np = sub.decode(genome)
+    layers_pt = sub.decode(CPPN.from_dict(genome))
+    for (w_np, b_np), (w_pt, b_pt) in zip(layers_np, layers_pt):
+        assert abs(float((w_np - w_pt).max())) < 1e-5
+        assert abs(float((b_np - b_pt).max())) < 1e-5
+
+    adapter = HalfCheetahAdapter()
+    ro_full = adapter.rollout(genome, seed=0, max_steps=200, capture_frames=True)
+    ro_fast = adapter.rollout(genome, seed=0, max_steps=200, capture_frames=False)
+    assert len(ro_full["frames"]) == 201
+    assert ro_fast["frames"] == []
+    assert abs(ro_full["distance"] - ro_fast["distance"]) < 1e-12
+    assert abs(ro_full["return"] - ro_fast["return"]) < 1e-12
+
+    # Verify cheetah_renderer.js FK segment output is finite and well-formed
+    renderer_js = str(
+        Path(__file__).resolve().parent.parent / "direct_evolution_together" / "frontend" / "cheetah_renderer.js"
+    )
+    fk_out = json.loads(subprocess.check_output([
+        "node", "-e",
+        f"global.window = global; require({json.dumps(renderer_js)}); "
+        f"const segs = window.DetCheetahRenderer.cheetahFkSegments({json.dumps(ro_full['frames'][-1])}); "
+        f"console.log(JSON.stringify({{count: segs.length, names: segs.map(s => s[0])}}));",
+    ], text=True))
+    assert fk_out["count"] == 8
+    assert fk_out["names"] == ["torso", "head", "bthigh", "bshin", "bfoot", "fthigh", "fshin", "ffoot"]
+
+    # 2. Verify Lobby generation > 0 control goals still sync configured minVotes & eliteFrac on boot
+    RoomEvolutionState.objects.update_or_create(
+        room="lobby",
+        defaults={
+            "state_json": json.dumps({
+                "defaultParams": {
+                    "maxVotesPerUser": 1,
+                    "minVotes": 99,
+                    "mutSigma": 0.30,
+                    "eliteFrac": 0.25,
+                    "crossoverRate": 0.75,
+                },
+                "goals": [
+                    {
+                        "name": "HalfCheetah",
+                        "task": "halfcheetah",
+                        "generation": 3,
+                        "genomes": [
+                            {**CPPN.random(100 + i).to_dict(), "id": i + 1, "gen": 3, "op": "mutation", "parents": []}
+                            for i in range(6)
+                        ],
+                        "lineage": [],
+                        "params": {
+                            "maxVotesPerUser": 1,
+                            "minVotes": 99,
+                            "mutSigma": 0.30,
+                            "eliteFrac": 0.25,
+                            "crossoverRate": 0.75,
+                        },
+                    }
+                ],
+            }),
+        },
+    )
+
+    with _ws_server(seed=False, pop_size=6, max_votes=1) as port:
+        seed_from_db(default_pop_size=6, default_max_votes=1)
+        mummy_ws.set_round_config(1, 80)
+
+        snap = json.loads(mummy_ws.get_room_snapshot_json("lobby"))
+        hc_snap = {g["name"]: g for g in snap["goals"]}["HalfCheetah"]
+        assert hc_snap["generation"] == 3
+
+        # 3. Simulate a transient error during evolve_population: room must NOT stay wedged on evolving=True
+        real_evolve = ws_bridge.evolve_population
+        fail_once = {"boom": True}
+
+        def flaky_evolve(*args, **kwargs):
+            if fail_once["boom"]:
+                fail_once["boom"] = False
+                raise RuntimeError("transient evolution error")
+            return real_evolve(*args, **kwargs)
+
+        monkeypatch.setattr(ws_bridge, "evolve_population", flaky_evolve)
+
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=tester&cid=testcid00001") as ws:
+            _recv_until(ws, "identity")
+            evo = _recv_until(ws, "evolution_state")
+            hc_evo = {g["name"]: g for g in evo["goals"]}["HalfCheetah"]
+            assert hc_evo["generation"] == 3
+            assert hc_evo["eliteFrac"] == 0.05
+
+            ws.send(json.dumps({
+                "type": "cast_vote", "goal": "HalfCheetah", "generation": 3, "index": 0, "vote": 1,
+            }))
+            # First countdown attempt triggers flaky_evolve -> cancel_goal_evolve resets evolving=False,
+            # restarts countdown on preserved votes, and second attempt advances cleanly to generation 4!
+            saw_recovery = False
+            updated = None
+            deadline = time.monotonic() + 4.0
+            while time.monotonic() < deadline:
+                msg = _decode_ws_message(ws.recv(timeout=2.0))
+                if msg.get("type") == "votes_updated" and msg.get("goal") == "HalfCheetah":
+                    if not fail_once["boom"] and msg.get("evolving") is False:
+                        saw_recovery = True
+                elif msg.get("type") == "goal_updated" and msg.get("goal", {}).get("name") == "HalfCheetah":
+                    updated = msg["goal"]
+                    break
+            assert not fail_once["boom"], "flaky_evolve was never invoked"
+            assert saw_recovery, "Failed evolve job did not reset goal.evolving to False"
+            assert updated is not None and updated["generation"] == 4
+
+
+@pytest.mark.django_db
+def test_crowd_trust_changed_items_dedup_and_ws_nginx_timeout():
+    from pathlib import Path
+    from direct_evolution_together.crowd_trust import submit_eval_attestations
+
+    r1 = submit_eval_attestations(
+        room="lobby",
+        goal="HalfCheetah",
+        generation=0,
+        contributor_id="peer_alpha_01",
+        results=[{
+            "hash": "11223344556677889900",
+            "summary": {"primaryValue": 5.2, "meanDistance": 5.2, "meanUpright": 0.8},
+        }],
+    )
+    assert len(r1["changedItems"]) == 1
+    assert r1["changedItems"][0]["trust"]["status"] == "pending"
+
+    r2 = submit_eval_attestations(
+        room="lobby",
+        goal="HalfCheetah",
+        generation=0,
+        contributor_id="peer_beta_02",
+        results=[{
+            "hash": "11223344556677889900",
+            "summary": {"primaryValue": 5.2, "meanDistance": 5.2, "meanUpright": 0.8},
+        }],
+    )
+    assert len(r2["changedItems"]) == 1
+    assert r2["changedItems"][0]["trust"]["status"] == "verified"
+
+    # Subsequent spot-check with identical consensus summary does not trigger redundant broadcast items
+    r3 = submit_eval_attestations(
+        room="lobby",
+        goal="HalfCheetah",
+        generation=0,
+        contributor_id="peer_gamma_03",
+        results=[{
+            "hash": "11223344556677889900",
+            "summary": {"primaryValue": 5.2, "meanDistance": 5.2, "meanUpright": 0.8},
+        }],
+    )
+    assert len(r3["items"]) == 1
+    assert r3["changedItems"] == []
+
+    nginx_tpl = (Path(__file__).resolve().parent.parent / "deploy" / "nginx.conf.tpl").read_text(encoding="utf-8")
+    assert "proxy_read_timeout 120;" in nginx_tpl
+    assert "proxy_send_timeout 86400;" in nginx_tpl
+
 
 
 

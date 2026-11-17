@@ -12,6 +12,7 @@ const
   max_goal_name_len = 32
   max_task_name_len = 24
   max_room_name_len = 64
+  max_cid_len = 40
 
   min_population_size = 3
   max_population_size = 64
@@ -43,6 +44,9 @@ const
   vote_burst_max_ops = 64
   max_lineage_nodes = 300
   ticker_sleep_ms = 40
+  default_ping_interval_ms = 20_000'i64
+  default_stale_timeout_ms = 60_000'i64
+  default_evolve_watchdog_ms = 30_000'i64
   # Compress JSON payloads above 512 bytes over WebSockets (history, state, lineage).
   gzip_min_bytes = 512
 
@@ -65,6 +69,9 @@ type
     min_votes_explicit: bool
     min_votes_override: bool
     countdown_ms: int64
+    ping_interval_ms: int64
+    stale_timeout_ms: int64
+    evolve_watchdog_ms: int64
     population_size: int
     params: GoalParams
 
@@ -79,6 +86,8 @@ type
   PendingClient = object
     room: string
     username: string
+    cid: string
+    is_reconnect: bool
     initial_goal: string
     initial_task: string
     initial_pop_size: int
@@ -90,6 +99,9 @@ type
     ws: WebSocket
     room: string
     username: string
+    cid: string
+    last_seen_ms: int64
+    last_ping_ms: int64
     vote_timestamps_ms: seq[int64]
     gzip: bool
     can_evolve_now: bool
@@ -105,10 +117,13 @@ type
     generation: int
     genomes_json: string
     lineage_json: string
+    lean_lineage_json: string
+    lineage_total: int
     ## Per-candidate vote map: WebSocket -> +1 (up) or -1 (down).
     votes: seq[Table[WebSocket, int]]
     countdown_ends_at_ms: int64
     evolving: bool
+    evolving_started_at_ms: int64
     params: GoalParams
 
   RoomEvolution = object
@@ -153,6 +168,9 @@ func default_runtime_config(): RuntimeConfig {.inline.} =
     min_votes_explicit: false,
     min_votes_override: false,
     countdown_ms: default_countdown_ms,
+    ping_interval_ms: default_ping_interval_ms,
+    stale_timeout_ms: default_stale_timeout_ms,
+    evolve_watchdog_ms: default_evolve_watchdog_ms,
     population_size: default_population_size,
     params: default_goal_params(),
   )
@@ -269,6 +287,17 @@ func sanitize_goal_name(raw: string): string =
   result = raw.strip()
   if result.len > max_goal_name_len:
     result = result[0 ..< max_goal_name_len]
+
+func sanitize_cid(raw: string): string =
+  let trimmed = raw.strip()
+  if trimmed.len == 0:
+    return ""
+  result = newStringOfCap(min(trimmed.len, max_cid_len))
+  for ch in trimmed:
+    if ch in {'a'..'z', 'A'..'Z', '0'..'9', '_', '-'}:
+      result.add(ch)
+      if result.len >= max_cid_len:
+        break
 
 proc sanitize_task_name_locked(raw: string): string {.gcsafe.} =
   let cleaned = raw.strip().toLowerAscii()
@@ -484,22 +513,14 @@ proc extract_lineage_nodes(genomes_json: string; gen: int): JsonNode {.gcsafe.} 
       "activations": item.getOrDefault("activations"),
     })
 
-proc lineage_payload_node(goal: GoalPopulation; full: bool): tuple[lineage: JsonNode, total: int] {.gcsafe.} =
-  ## Sends only the current generation's ancestry by default; the client asks
-  ## for the archived `all` view on demand. Live nodes resolve their weights
-  ## from `goal.genomes`, so omit that duplicate data.
-  result.lineage = newJArray()
+proc compute_lean_lineage(lineage_json, genomes_json: string; gen: int): tuple[lean_json: string, total: int] {.gcsafe.} =
+  ## Precompute active-ancestry JSON (omitting live generation weights) once per generation change.
   let parsed =
-    if goal.lineage_json.len > 0: parseJson(goal.lineage_json)
-    else: extract_lineage_nodes(goal.genomes_json, goal.generation)
+    if lineage_json.len > 0: parseJson(lineage_json)
+    else: extract_lineage_nodes(genomes_json, gen)
   if parsed.kind != JArray:
-    return
+    return ("[]", 0)
   result.total = parsed.len
-
-  if full:
-    for node in parsed:
-      result.lineage.add(node)
-    return
 
   var by_id = initTable[int, JsonNode]()
   for node in parsed:
@@ -508,7 +529,7 @@ proc lineage_payload_node(goal: GoalPopulation; full: bool): tuple[lineage: Json
   var keep = initHashSet[int]()
   var queue: seq[int] = @[]
   for node in parsed:
-    if node.getOrDefault("gen").getInt(-1) == goal.generation:
+    if node.getOrDefault("gen").getInt(-1) == gen:
       let gid = node.getOrDefault("id").getInt(0)
       if gid notin keep:
         keep.incl(gid)
@@ -525,18 +546,65 @@ proc lineage_payload_node(goal: GoalPopulation; full: bool): tuple[lineage: Json
           keep.incl(pid)
           queue.add(pid)
 
+  var arr = newJArray()
   for node in parsed:
     let gid = node.getOrDefault("id").getInt(0)
     if gid notin keep:
       continue
-    if node.getOrDefault("gen").getInt(-1) == goal.generation:
-      var lean = node
+    if node.getOrDefault("gen").getInt(-1) == gen:
+      var lean = copy(node)
       lean.delete("weights")
       lean.delete("biases")
       lean.delete("activations")
-      result.lineage.add(lean)
+      arr.add(lean)
     else:
+      arr.add(node)
+  result.lean_json = $arr
+
+proc refresh_goal_lineage_cache(goal: var GoalPopulation) {.gcsafe.} =
+  let cached = compute_lean_lineage(goal.lineage_json, goal.genomes_json, goal.generation)
+  goal.lean_lineage_json = cached.lean_json
+  goal.lineage_total = cached.total
+
+proc lineage_payload_node(goal: GoalPopulation; full: bool): tuple[lineage: JsonNode, total: int] {.gcsafe.} =
+  ## Sends only the current generation's ancestry by default; the client asks
+  ## for the archived `all` view on demand.
+  result.lineage = newJArray()
+  if not full and goal.lean_lineage_json.len > 0:
+    result.lineage = parseJson(goal.lean_lineage_json)
+    result.total = goal.lineage_total
+    return
+  let parsed =
+    if goal.lineage_json.len > 0: parseJson(goal.lineage_json)
+    else: extract_lineage_nodes(goal.genomes_json, goal.generation)
+  if parsed.kind != JArray:
+    return
+  result.total = parsed.len
+  if full:
+    for node in parsed:
       result.lineage.add(node)
+    return
+  let fallback = compute_lean_lineage(goal.lineage_json, goal.genomes_json, goal.generation)
+  result.lineage = parseJson(fallback.lean_json)
+  result.total = fallback.total
+
+proc merge_missing_lineage_json(prev_lineage_json, genomes_json: string; gen: int): string {.gcsafe.} =
+  ## Append any newly added genomes (e.g. from population resize) without duplicating existing IDs.
+  let fresh = extract_lineage_nodes(genomes_json, gen)
+  var combined =
+    if prev_lineage_json.len > 0: parseJson(prev_lineage_json)
+    else: newJArray()
+  if combined.kind != JArray:
+    combined = newJArray()
+  var existing_ids = initHashSet[int]()
+  for node in combined:
+    existing_ids.incl(node.getOrDefault("id").getInt(0))
+  for node in fresh:
+    let gid = node.getOrDefault("id").getInt(0)
+    if gid notin existing_ids:
+      existing_ids.incl(gid)
+      combined.add(node)
+  $combined
 
 proc merge_lineage_json(prev_lineage_json, genomes_json: string; gen: int): string {.gcsafe.} =
   let fresh = extract_lineage_nodes(genomes_json, gen)
@@ -640,28 +708,37 @@ proc attach_round_fields(
   obj["populationSize"] = %goal.votes.len
   obj["maxPopulationSize"] = %max_pop_for_task_locked(goal.task)
 
-proc goal_to_json(
+proc goal_to_json_str(
   goal: GoalPopulation;
   c: RuntimeConfig;
   client_map: Table[WebSocket, ClientInfo];
   now: int64;
   room_user_count: int = 1;
-  full_lineage = false;
   is_public: bool = false;
-): JsonNode {.gcsafe.} =
-  let genomes_node =
-    if goal.genomes_json.len > 0: parseJson(goal.genomes_json)
-    else: newJArray()
-  let lineage_payload = lineage_payload_node(goal, full_lineage)
-  result = %*{
-    "name": goal.name,
-    "task": (if goal.task.len > 0: goal.task else: "image"),
-    "generation": goal.generation,
-    "genomes": genomes_node,
-    "lineage": lineage_payload.lineage,
-    "lineageTotal": %lineage_payload.total,
-  }
-  result.attach_round_fields(goal, c, client_map, now, room_user_count, is_public)
+): string {.gcsafe.} =
+  ## Fast zero-reparse serializer: splices pre-serialized `genomes_json` and `lean_lineage_json` directly.
+  let round_obj = newJObject()
+  round_obj.attach_round_fields(goal, c, client_map, now, room_user_count, is_public)
+  let round_str = $round_obj
+  let genomes_str = if goal.genomes_json.len > 0: goal.genomes_json else: "[]"
+  let lineage_str = if goal.lean_lineage_json.len > 0: goal.lean_lineage_json else: "[]"
+  let task_str = if goal.task.len > 0: goal.task else: "image"
+
+  result = newStringOfCap(genomes_str.len + lineage_str.len + round_str.len + 160)
+  result.add("{\"name\":")
+  result.add(escapeJson(goal.name))
+  result.add(",\"task\":")
+  result.add(escapeJson(task_str))
+  result.add(",\"generation\":")
+  result.add($goal.generation)
+  result.add(",\"genomes\":")
+  result.add(genomes_str)
+  result.add(",\"lineage\":")
+  result.add(lineage_str)
+  result.add(",\"lineageTotal\":")
+  result.add($goal.lineage_total)
+  result.add(",")
+  result.add(round_str[1 .. ^1])
 
 proc build_votes_updated_payload(
   goal: GoalPopulation;
@@ -686,26 +763,33 @@ proc build_goal_updated_payload(
   room_user_count: int = 1;
   is_public: bool = false;
 ): string {.gcsafe.} =
-  $(%*{
-    "type": "goal_updated",
-    "goal": goal_to_json(goal, c, client_map, now, room_user_count, is_public = is_public),
-  })
+  let g_str = goal_to_json_str(goal, c, client_map, now, room_user_count, is_public = is_public)
+  result = newStringOfCap(g_str.len + 32)
+  result.add("{\"type\":\"goal_updated\",\"goal\":")
+  result.add(g_str)
+  result.add("}")
 
 proc build_evolution_state_payload(room: string): string {.gcsafe.} =
   let now = now_ms()
   let is_pub = room == "lobby"
   {.gcsafe.}:
     let r_cnt = if room in rooms: max(1, rooms[room].len) else: 1
-    var goals_arr = newJArray()
+    var parts: seq[string] = @[]
+    var total_len = 36
     if room in room_evolution:
       let evo = room_evolution[room]
       for name in evo.goal_order:
         if name in evo.goals:
-          goals_arr.add(goal_to_json(evo.goals[name], cfg, clients, now, r_cnt, is_public = is_pub))
-    $(%*{
-      "type": "evolution_state",
-      "goals": goals_arr,
-    })
+          let g_str = goal_to_json_str(evo.goals[name], cfg, clients, now, r_cnt, is_public = is_pub)
+          total_len += g_str.len + 1
+          parts.add(g_str)
+    result = newStringOfCap(total_len)
+    result.add("{\"type\":\"evolution_state\",\"goals\":[")
+    for idx, p in parts:
+      if idx > 0:
+        result.add(",")
+      result.add(p)
+    result.add("]}")
 
 proc goal_params_json(p: GoalParams): JsonNode {.gcsafe.} =
   %*{
@@ -728,29 +812,44 @@ proc parse_goal_params_json(node: JsonNode; fallback: GoalParams): GoalParams {.
   ))
 
 proc serialize_room_evolution(evo: RoomEvolution): string {.gcsafe.} =
-  var goals_arr = newJArray()
+  let dp_str = $goal_params_json(evo.default_params)
+  var parts: seq[string] = @[]
+  var total_len = dp_str.len + 36
   for name in evo.goal_order:
     if name notin evo.goals:
       continue
     let g = evo.goals[name]
-    let genomes_node =
-      if g.genomes_json.len > 0: parseJson(g.genomes_json)
-      else: newJArray()
-    let lineage_node =
-      if g.lineage_json.len > 0: parseJson(g.lineage_json)
-      else: extract_lineage_nodes(g.genomes_json, g.generation)
-    goals_arr.add(%*{
-      "name": g.name,
-      "task": (if g.task.len > 0: g.task else: "image"),
-      "generation": g.generation,
-      "genomes": genomes_node,
-      "lineage": lineage_node,
-      "params": goal_params_json(g.params),
-    })
-  $(%*{
-    "defaultParams": goal_params_json(evo.default_params),
-    "goals": goals_arr,
-  })
+    let g_genomes = if g.genomes_json.len > 0: g.genomes_json else: "[]"
+    let g_lineage =
+      if g.lineage_json.len > 0: g.lineage_json
+      else: $extract_lineage_nodes(g.genomes_json, g.generation)
+    let gp_str = $goal_params_json(g.params)
+    let task_str = if g.task.len > 0: g.task else: "image"
+    var item = newStringOfCap(g_genomes.len + g_lineage.len + gp_str.len + 128)
+    item.add("{\"name\":")
+    item.add(escapeJson(g.name))
+    item.add(",\"task\":")
+    item.add(escapeJson(task_str))
+    item.add(",\"generation\":")
+    item.add($g.generation)
+    item.add(",\"genomes\":")
+    item.add(g_genomes)
+    item.add(",\"lineage\":")
+    item.add(g_lineage)
+    item.add(",\"params\":")
+    item.add(gp_str)
+    item.add("}")
+    total_len += item.len + 1
+    parts.add(item)
+  result = newStringOfCap(total_len)
+  result.add("{\"defaultParams\":")
+  result.add(dp_str)
+  result.add(",\"goals\":[")
+  for idx, p in parts:
+    if idx > 0:
+      result.add(",")
+    result.add(p)
+  result.add("]}")
 
 proc build_presence_payload(room: string): string {.gcsafe.} =
   var users: seq[string] = @[]
@@ -845,15 +944,20 @@ proc init_goal_population_locked(
   let clean_task = sanitize_task_name_locked(task)
   var params = gp
   clamp_control_min_votes_locked(clean_task, params)
+  let l_json = merge_lineage_json("", genomes_json, 0)
+  let lean = compute_lean_lineage(l_json, genomes_json, 0)
   GoalPopulation(
     name: name,
     task: clean_task,
     generation: 0,
     genomes_json: genomes_json,
-    lineage_json: merge_lineage_json("", genomes_json, 0),
+    lineage_json: l_json,
+    lean_lineage_json: lean.lean_json,
+    lineage_total: lean.total,
     votes: empty_votes(max(1, pop_len)),
     countdown_ends_at_ms: 0,
     evolving: false,
+    evolving_started_at_ms: 0,
     params: params,
   )
 
@@ -895,6 +999,8 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
     return
 
   let username = sanitize_username(request.queryParams["username"])
+  let cid = sanitize_cid(request.queryParams["cid"])
+  let is_reconnect = request.queryParams["reconnect"] == "1"
   let initial_goal = sanitize_goal_name(request.queryParams["goal"])
   let raw_initial_task = request.queryParams["task"]
   let wants_gzip = request.queryParams["gzip"] == "1"
@@ -954,6 +1060,8 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
     pending_upgrades[ws] = PendingClient(
       room: room,
       username: username,
+      cid: cid,
+      is_reconnect: is_reconnect,
       initial_goal: initial_goal,
       initial_task: initial_task,
       initial_pop_size: req_pop,
@@ -962,14 +1070,67 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
       can_evolve_now: can_evolve,
     )
 
+proc evict_client_locked(
+  ws: WebSocket;
+  now: int64;
+  outbox: var seq[PendingBroadcast];
+  silent_leave: bool = false;
+): bool {.gcsafe.} =
+  {.gcsafe.}:
+    pending_upgrades.del(ws)
+    if ws notin clients:
+      return false
+    let info = clients[ws]
+    clients.del(ws)
+    if info.room in rooms:
+      rooms[info.room].excl(ws)
+      if rooms[info.room].len == 0:
+        rooms.del(info.room)
+    var vote_payloads: seq[string] = @[]
+    if info.room in room_evolution:
+      let r_cnt = if info.room in rooms: max(1, rooms[info.room].len) else: 1
+      for g_name in room_evolution[info.room].goal_order:
+        var goal = room_evolution[info.room].goals[g_name]
+        var changed = false
+        for i in 0 ..< goal.votes.len:
+          if ws in goal.votes[i]:
+            goal.votes[i].del(ws)
+            changed = true
+        if changed:
+          goal.sync_goal_countdown(cfg, now)
+          room_evolution[info.room].goals[g_name] = goal
+          vote_payloads.add(
+            build_votes_updated_payload(goal, cfg, clients, now, r_cnt, is_public = (info.room == "lobby"))
+          )
+    let targets = room_targets(info.room)
+    if targets.len > 0:
+      outbox.add(PendingBroadcast(
+        targets: targets,
+        payload: $(%*{"type": "cursor_leave", "username": info.username}),
+      ))
+      if not silent_leave:
+        outbox.add(PendingBroadcast(
+          targets: targets,
+          payload: system_msg_payload(info.username & " left"),
+        ))
+      outbox.add(PendingBroadcast(
+        targets: targets,
+        payload: build_presence_payload(info.room),
+      ))
+      for vp in vote_payloads:
+        outbox.add(PendingBroadcast(targets: targets, payload: vp))
+    true
+
 proc on_open(ws: WebSocket) {.gcsafe.} =
   var
     identity_payload: string
     history_payload: string
     evolution_payload = ""
     presence_payload: string
-    join_payload: string
+    join_payload = ""
     targets: seq[WebSocket]
+    stale_sockets: seq[WebSocket] = @[]
+    extra_outbox: seq[PendingBroadcast] = @[]
     found = false
     has_evolution_ready = false
 
@@ -977,17 +1138,81 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
     if ws in pending_upgrades:
       let info = pending_upgrades[ws]
       pending_upgrades.del(ws)
+      let now = now_ms()
+      var replaced_same_room = false
+      var prev_same_room_name = ""
+      var same_room_old_sockets: seq[WebSocket] = @[]
+
+      if info.cid.len >= 8:
+        var matching_old: seq[WebSocket] = @[]
+        for existing_ws, existing_info in clients:
+          if existing_ws != ws and existing_info.cid == info.cid:
+            matching_old.add(existing_ws)
+        for old_ws in matching_old:
+          let old_info = clients[old_ws]
+          stale_sockets.add(old_ws)
+          if old_info.room == info.room:
+            replaced_same_room = true
+            prev_same_room_name = old_info.username
+            same_room_old_sockets.add(old_ws)
+            clients.del(old_ws)
+            if info.room in rooms:
+              rooms[info.room].excl(old_ws)
+          else:
+            discard evict_client_locked(old_ws, now, extra_outbox)
+
       let unique_name = make_unique_username(info.room, info.username)
       clients[ws] = ClientInfo(
         ws: ws,
         room: info.room,
         username: unique_name,
+        cid: info.cid,
+        last_seen_ms: now,
+        last_ping_ms: now,
         gzip: info.gzip,
         can_evolve_now: info.can_evolve_now,
       )
       if info.room notin rooms:
         rooms[info.room] = initHashSet[WebSocket]()
       rooms[info.room].incl(ws)
+
+      if same_room_old_sockets.len > 0 and info.room in room_evolution:
+        let r_cnt = max(1, rooms[info.room].len)
+        for g_name in room_evolution[info.room].goal_order:
+          var goal = room_evolution[info.room].goals[g_name]
+          var changed = false
+          var transferred = false
+          for old_ws in same_room_old_sockets:
+            for i in 0 ..< goal.votes.len:
+              if old_ws in goal.votes[i]:
+                let old_v = goal.votes[i][old_ws]
+                goal.votes[i].del(old_ws)
+                if info.is_reconnect:
+                  goal.votes[i][ws] = old_v
+                  transferred = true
+                else:
+                  changed = true
+          if changed:
+            goal.sync_goal_countdown(cfg, now)
+            room_evolution[info.room].goals[g_name] = goal
+            extra_outbox.add(PendingBroadcast(
+              targets: room_targets(info.room, ws, has_exclude = true),
+              payload: build_votes_updated_payload(goal, cfg, clients, now, r_cnt, is_public = (info.room == "lobby")),
+            ))
+          elif transferred:
+            room_evolution[info.room].goals[g_name] = goal
+            if prev_same_room_name != unique_name:
+              extra_outbox.add(PendingBroadcast(
+                targets: room_targets(info.room, ws, has_exclude = true),
+                payload: build_votes_updated_payload(goal, cfg, clients, now, r_cnt, is_public = (info.room == "lobby")),
+              ))
+      if replaced_same_room and prev_same_room_name.len > 0 and prev_same_room_name != unique_name:
+        let others = room_targets(info.room, ws, has_exclude = true)
+        if others.len > 0:
+          extra_outbox.add(PendingBroadcast(
+            targets: others,
+            payload: $(%*{"type": "cursor_leave", "username": prev_same_room_name}),
+          ))
 
       identity_payload = $(%*{
         "type": "identity",
@@ -1027,17 +1252,23 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
         ))
 
       presence_payload = build_presence_payload(info.room)
-      join_payload = system_msg_payload(unique_name & " joined")
+      if not (replaced_same_room and prev_same_room_name == unique_name):
+        join_payload = system_msg_payload(unique_name & " joined")
       targets = room_targets(info.room)
       found = true
 
+  for sws in stale_sockets:
+    sws.close()
+  for item in extra_outbox:
+    broadcast(item.targets, item.payload)
   if found:
     send_payload(ws, identity_payload)
     send_payload(ws, history_payload)
     if has_evolution_ready:
       send_payload(ws, evolution_payload)
     broadcast(targets, presence_payload)
-    broadcast(targets, join_payload)
+    if join_payload.len > 0:
+      broadcast(targets, join_payload)
 
 proc handle_rename(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
   let desired_name = sanitize_username(payload.getOrDefault("username").getStr(""))
@@ -1272,53 +1503,22 @@ proc handle_cast_vote(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
   if updated:
     broadcast(targets, votes_payload)
 
-proc on_close(ws: WebSocket) {.gcsafe.} =
-  var
-    left_payload: string
-    presence_payload: string
-    cursor_leave_payload: string
-    vote_payloads: seq[string] = @[]
-    targets: seq[WebSocket]
-    had_client = false
-
+proc handle_leave(ws: WebSocket) {.gcsafe.} =
+  var outbox: seq[PendingBroadcast] = @[]
+  var evicted = false
   with_state_lock:
-    pending_upgrades.del(ws)
-    if ws in clients:
-      let info = clients[ws]
-      let now = now_ms()
-      clients.del(ws)
-      if info.room in rooms:
-        rooms[info.room].excl(ws)
-        if rooms[info.room].len == 0:
-          rooms.del(info.room)
-      if info.room in room_evolution:
-        let r_cnt = if info.room in rooms: max(1, rooms[info.room].len) else: 1
-        for g_name in room_evolution[info.room].goal_order:
-          var goal = room_evolution[info.room].goals[g_name]
-          var changed = false
-          for i in 0 ..< goal.votes.len:
-            if ws in goal.votes[i]:
-              goal.votes[i].del(ws)
-              changed = true
-          if changed:
-            goal.sync_goal_countdown(cfg, now)
-            room_evolution[info.room].goals[g_name] = goal
-            vote_payloads.add(
-              build_votes_updated_payload(goal, cfg, clients, now, r_cnt, is_public = (info.room == "lobby"))
-            )
+    evicted = evict_client_locked(ws, now_ms(), outbox)
+  if evicted:
+    ws.close()
+  for item in outbox:
+    broadcast(item.targets, item.payload)
 
-      left_payload = system_msg_payload(info.username & " left")
-      cursor_leave_payload = $(%*{"type": "cursor_leave", "username": info.username})
-      presence_payload = build_presence_payload(info.room)
-      targets = room_targets(info.room)
-      had_client = true
-
-  if had_client:
-    broadcast(targets, cursor_leave_payload)
-    broadcast(targets, left_payload)
-    broadcast(targets, presence_payload)
-    for vp in vote_payloads:
-      broadcast(targets, vp)
+proc on_close(ws: WebSocket) {.gcsafe.} =
+  var outbox: seq[PendingBroadcast] = @[]
+  with_state_lock:
+    discard evict_client_locked(ws, now_ms(), outbox)
+  for item in outbox:
+    broadcast(item.targets, item.payload)
 
 proc handle_lineage_all(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
   let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
@@ -1349,6 +1549,7 @@ proc build_evolve_job_and_broadcast(
   outbox: var seq[PendingBroadcast];
 ): EvoJob {.gcsafe.} =
   goal.evolving = true
+  goal.evolving_started_at_ms = now
   goal.countdown_ends_at_ms = 0
 
   let counted = count_goal_votes(goal)
@@ -1426,8 +1627,19 @@ proc websocket_handler(
   of OpenEvent:
     on_open(ws)
   of MessageEvent:
-    if message.kind != TextMessage:
+    with_state_lock:
+      if ws in clients:
+        clients[ws].last_seen_ms = now_ms()
+    case message.kind
+    of Ping:
+      ws.send(message.data, Pong)
       return
+    of Pong:
+      return
+    of BinaryMessage:
+      return
+    of TextMessage:
+      discard
     var payload: JsonNode
     try:
       payload = parseJson(message.data)
@@ -1436,6 +1648,8 @@ proc websocket_handler(
     if payload.kind != JObject:
       return
     case payload.getOrDefault("type").getStr("chat")
+    of "ping": send_payload(ws, """{"type":"pong"}""")
+    of "leave": handle_leave(ws)
     of "rename": handle_rename(ws, payload)
     of "cursor": handle_cursor(ws, payload)
     of "chat": handle_chat(ws, payload)
@@ -1457,6 +1671,8 @@ proc ticker_thread_proc(unused: int) {.thread.} =
         break
 
       var outbox: seq[PendingBroadcast] = @[]
+      var ping_ws: seq[WebSocket] = @[]
+      var stale_ws: seq[WebSocket] = @[]
       let now = now_ms()
 
       with_state_lock:
@@ -1471,7 +1687,37 @@ proc ticker_thread_proc(unused: int) {.thread.} =
                 build_evolve_job_and_broadcast(room, goal, cfg, clients, targets, now, outbox)
               )
               evo.goals[g_name] = goal
+            elif goal.evolving and cfg.evolve_watchdog_ms > 0 and goal.evolving_started_at_ms > 0 and
+              now - goal.evolving_started_at_ms >= cfg.evolve_watchdog_ms:
+              goal.evolving = false
+              goal.evolving_started_at_ms = 0
+              goal.sync_goal_countdown(cfg, now)
+              evo.goals[g_name] = goal
+              let targets = room_targets(room)
+              if targets.len > 0:
+                outbox.add(PendingBroadcast(
+                  targets: targets,
+                  payload: build_votes_updated_payload(
+                    goal, cfg, clients, now, max(1, targets.len), is_public = (room == "lobby")
+                  ),
+                ))
 
+        for ws, cinfo in clients:
+          if cfg.stale_timeout_ms > 0 and cinfo.last_seen_ms > 0 and
+            now - cinfo.last_seen_ms >= cfg.stale_timeout_ms:
+            stale_ws.add(ws)
+          elif cfg.ping_interval_ms > 0 and now - cinfo.last_ping_ms >= cfg.ping_interval_ms:
+            ping_ws.add(ws)
+        for pws in ping_ws:
+          if pws in clients:
+            clients[pws].last_ping_ms = now
+        for sws in stale_ws:
+          discard evict_client_locked(sws, now, outbox)
+
+      for pws in ping_ws:
+        pws.send("", Ping)
+      for sws in stale_ws:
+        sws.close()
       for item in outbox:
         broadcast(item.targets, item.payload)
 
@@ -1550,23 +1796,37 @@ proc internal_room_clear_handler(request: Request) {.gcsafe.} =
 
 proc get_room_snapshot_json*(room: string): string {.exportpy, gcsafe.} =
   ## Return current active goal states (name, task, generation, genomes) for `room`.
-  var goals_arr = newJArray()
+  var parts: seq[string] = @[]
+  var total_len = room.len + 36
   with_state_lock:
     if room in room_evolution and not room_evolution[room].initializing:
       let evo = room_evolution[room]
       for g_name in evo.goal_order:
         if g_name in evo.goals:
           let g = evo.goals[g_name]
-          let genomes_node =
-            if g.genomes_json.len > 0: parseJson(g.genomes_json)
-            else: newJArray()
-          goals_arr.add(%*{
-            "name": g.name,
-            "task": (if g.task.len > 0: g.task else: "image"),
-            "generation": g.generation,
-            "genomes": genomes_node,
-          })
-  $(%*{"room": room, "goals": goals_arr})
+          let g_genomes = if g.genomes_json.len > 0: g.genomes_json else: "[]"
+          let task_str = if g.task.len > 0: g.task else: "image"
+          var item = newStringOfCap(g_genomes.len + 96)
+          item.add("{\"name\":")
+          item.add(escapeJson(g.name))
+          item.add(",\"task\":")
+          item.add(escapeJson(task_str))
+          item.add(",\"generation\":")
+          item.add($g.generation)
+          item.add(",\"genomes\":")
+          item.add(g_genomes)
+          item.add("}")
+          total_len += item.len + 1
+          parts.add(item)
+  result = newStringOfCap(total_len)
+  result.add("{\"room\":")
+  result.add(escapeJson(room))
+  result.add(",\"goals\":[")
+  for idx, p in parts:
+    if idx > 0:
+      result.add(",")
+    result.add(p)
+  result.add("]}")
 
 proc broadcast_room_payload*(room, payload_json: string) {.exportpy, gcsafe.} =
   if room.len == 0 or payload_json.len == 0:
@@ -1607,11 +1867,16 @@ proc internal_room_broadcast_handler(request: Request) {.gcsafe.} =
   broadcast_room_payload(room, $payload_node)
   request.respond(200, @[("Content-Type", "application/json")], """{"ok":true}""")
 
+proc ws_health_handler(request: Request) {.gcsafe.} =
+  request.respond(200, @[("Content-Type", "application/json")], """{"status":"ok","service":"ws"}""")
+
 proc serve_thread_proc(args: tuple[host: string, port: int]) {.thread.} =
   {.gcsafe.}:
     var srv: Server = nil
     try:
       var router: Router
+      router.get("/health", ws_health_handler)
+      router.get("/health/", ws_health_handler)
       router.get("/ws/chat/@room", upgrade_handler)
       router.get("/ws/chat/@room/", upgrade_handler)
       router.get("/internal/room-goals/@room", internal_room_goals_handler)
@@ -1690,6 +1955,12 @@ proc set_round_config*(min_votes, countdown_ms: int; override_min_votes: bool = 
       cfg.min_votes_override = false
     cfg.countdown_ms = max(50'i64, int64(countdown_ms))
 
+proc set_heartbeat_config*(ping_interval_ms, stale_timeout_ms: int; evolve_watchdog_ms: int = 30_000) {.exportpy.} =
+  with_state_lock:
+    cfg.ping_interval_ms = max(0'i64, int64(ping_interval_ms))
+    cfg.stale_timeout_ms = max(0'i64, int64(stale_timeout_ms))
+    cfg.evolve_watchdog_ms = max(0'i64, int64(evolve_watchdog_ms))
+
 proc set_default_population_size*(pop_size: int) {.exportpy.} =
   with_state_lock:
     cfg.population_size = clamp(pop_size, min_population_size, max_population_size)
@@ -1748,17 +2019,18 @@ proc seed_room_goals*(room, goals_json: string) {.exportpy.} =
 proc drain_evo_jobs*(): string {.exportpy.} =
   var jobs: seq[EvoJob]
   with_state_lock:
+    if pending_evo_jobs.len == 0:
+      return "[]"
     jobs = move pending_evo_jobs
     pending_evo_jobs = @[]
-  var arr = newJArray()
+  var parts: seq[string] = @[]
   for job in jobs:
-    arr.add(%*{
+    let meta = %*{
       "kind": $job.kind,
       "room": job.room,
       "goal": job.goal,
       "task": (if job.task.len > 0: job.task else: "image"),
       "username": job.username,
-      "genomes": (if job.genomes_json.len > 0: parseJson(job.genomes_json) else: newJArray()),
       "scores": job.scores,
       "upCounts": job.up_counts,
       "mutSigma": job.params.mut_sigma,
@@ -1767,8 +2039,16 @@ proc drain_evo_jobs*(): string {.exportpy.} =
       "populationSize": job.population_size,
       "maxVotesPerUser": job.params.max_votes_per_user,
       "minVotes": job.params.min_votes,
-    })
-  $arr
+    }
+    let meta_str = $meta
+    let g_str = if job.genomes_json.len > 0: job.genomes_json else: "[]"
+    var item = newStringOfCap(meta_str.len + g_str.len + 16)
+    item.add(meta_str[0 ..< meta_str.len - 1])
+    item.add(",\"genomes\":")
+    item.add(g_str)
+    item.add("}")
+    parts.add(item)
+  "[" & parts.join(",") & "]"
 
 proc apply_room_init*(room, goals_json: string) {.exportpy.} =
   let parsed = parseJson(goals_json)
@@ -1928,6 +2208,8 @@ proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.expo
 
 proc apply_goal_reset*(room, goal_name, username, genomes_json: string) {.exportpy.} =
   let g_arr = parseJson(genomes_json)
+  let fresh_lineage = merge_lineage_json("", genomes_json, 0)
+  let fresh_lean = compute_lean_lineage(fresh_lineage, genomes_json, 0)
   var
     goal_payload: string
     sys_payload: string
@@ -1940,10 +2222,13 @@ proc apply_goal_reset*(room, goal_name, username, genomes_json: string) {.export
       var goal = room_evolution[room].goals[goal_name]
       goal.generation = 0
       goal.genomes_json = genomes_json
-      goal.lineage_json = merge_lineage_json("", genomes_json, 0)
+      goal.lineage_json = fresh_lineage
+      goal.lean_lineage_json = fresh_lean.lean_json
+      goal.lineage_total = fresh_lean.total
       goal.votes = empty_votes(max(1, g_arr.len))
       goal.countdown_ends_at_ms = 0
       goal.evolving = false
+      goal.evolving_started_at_ms = 0
       room_evolution[room].goals[goal_name] = goal
       dirty_rooms.incl(room)
       goal_payload = build_goal_updated_payload(goal, cfg, clients, now, r_cnt, is_public = (room == "lobby"))
@@ -1969,9 +2254,11 @@ proc apply_goal_evolve*(room, goal_name, genomes_json: string; top_score: int) {
       inc goal.generation
       goal.genomes_json = genomes_json
       goal.lineage_json = merge_lineage_json(goal.lineage_json, genomes_json, goal.generation)
+      goal.refresh_goal_lineage_cache()
       goal.votes = empty_votes(max(1, g_arr.len))
       goal.countdown_ends_at_ms = 0
       goal.evolving = false
+      goal.evolving_started_at_ms = 0
       room_evolution[room].goals[goal_name] = goal
       dirty_rooms.incl(room)
       goal_payload = build_goal_updated_payload(goal, cfg, clients, now, r_cnt, is_public = (room == "lobby"))
@@ -1983,6 +2270,34 @@ proc apply_goal_evolve*(room, goal_name, genomes_json: string; top_score: int) {
   if applied and targets.len > 0:
     broadcast(targets, goal_payload)
     broadcast(targets, sys_payload)
+
+proc cancel_goal_evolve*(room, goal_name: string) {.exportpy, gcsafe.} =
+  var
+    votes_payload = ""
+    targets: seq[WebSocket] = @[]
+  with_state_lock:
+    if room in room_evolution and goal_name in room_evolution[room].goals:
+      var goal = room_evolution[room].goals[goal_name]
+      if goal.evolving:
+        let now = now_ms()
+        goal.evolving = false
+        goal.evolving_started_at_ms = 0
+        goal.sync_goal_countdown(cfg, now)
+        room_evolution[room].goals[goal_name] = goal
+        targets = room_targets(room)
+        if targets.len > 0:
+          votes_payload = build_votes_updated_payload(
+            goal, cfg, clients, now, max(1, targets.len), is_public = (room == "lobby")
+          )
+  if votes_payload.len > 0 and targets.len > 0:
+    broadcast(targets, votes_payload)
+
+proc cancel_goal_create*(room, goal_name: string) {.exportpy, gcsafe.} =
+  with_state_lock:
+    if room in room_evolution:
+      room_evolution[room].pending_creates.excl(goal_name)
+      room_evolution[room].pending_create_tasks.del(goal_name)
+      room_evolution[room].pending_create_params.del(goal_name)
 
 proc apply_goal_resize*(room, goal_name, username, genomes_json: string) {.exportpy.} =
   let g_len = max(1, parseJson(genomes_json).len)
@@ -2001,8 +2316,11 @@ proc apply_goal_resize*(room, goal_name, username, genomes_json: string) {.expor
       for i in 0 ..< keep:
         next_votes[i] = goal.votes[i]
       goal.genomes_json = genomes_json
+      goal.lineage_json = merge_missing_lineage_json(goal.lineage_json, genomes_json, goal.generation)
+      goal.refresh_goal_lineage_cache()
       goal.votes = next_votes
       goal.evolving = false
+      goal.evolving_started_at_ms = 0
       goal.sync_goal_countdown(cfg, now)
       room_evolution[room].goals[goal_name] = goal
       dirty_rooms.incl(room)
@@ -2029,6 +2347,8 @@ proc seed_room_history*(room, messages_json: string) {.exportpy.} =
 proc drain_pending_messages*(): string {.exportpy.} =
   var batch: seq[PendingPersist]
   with_state_lock:
+    if pending_saves.len == 0:
+      return "[]"
     batch = move pending_saves
     pending_saves = @[]
   var arr = newJArray()
@@ -2057,6 +2377,8 @@ proc has_room_evolution*(room: string): bool {.exportpy.} =
 proc drain_dirty_room_states*(): string {.exportpy.} =
   var arr = newJArray()
   with_state_lock:
+    if dirty_rooms.len == 0:
+      return "[]"
     for room in dirty_rooms:
       if room in room_evolution and not room_evolution[room].initializing:
         arr.add(%*{
@@ -2114,6 +2436,7 @@ proc restore_room_state*(room, state_json: string) {.exportpy.} =
           $lin_node
         else:
           $extract_lineage_nodes(g_json, gen)
+      let lean = compute_lean_lineage(l_json, g_json, gen)
       evo.goal_order.add(name)
       evo.goals[name] = GoalPopulation(
         name: name,
@@ -2121,9 +2444,12 @@ proc restore_room_state*(room, state_json: string) {.exportpy.} =
         generation: gen,
         genomes_json: g_json,
         lineage_json: l_json,
+        lean_lineage_json: lean.lean_json,
+        lineage_total: lean.total,
         votes: empty_votes(max(1, genomes_arr.len)),
         countdown_ends_at_ms: 0,
         evolving: false,
+        evolving_started_at_ms: 0,
         params: gp,
       )
     if evo.goal_order.len > 0 or room != "lobby":

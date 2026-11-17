@@ -864,6 +864,7 @@ def _broadcast_room_event(room: str, payload: dict) -> None:
             "/internal/room-broadcast",
             configured,
             {"room": room, "payload": payload},
+            timeout=1.5,
         )
 
 
@@ -993,7 +994,8 @@ def api_crowd_evals(request: HttpRequest, room: str) -> JsonResponse:
         generation = int(request.GET.get("generation", "0"))
     except ValueError:
         generation = 0
-    items = fetch_room_evals(room, goal_name, generation, trusted_only=False) if goal_name else []
+    trusted_only = request.GET.get("trusted_only", "").strip().lower() in ("1", "true", "yes")
+    items = fetch_room_evals(room, goal_name, generation, trusted_only=trusted_only) if goal_name else []
     return JsonResponse({
         "ok": True,
         "room": room,
@@ -1039,14 +1041,15 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
         authority=False,
     )
     items = outcome["items"]
-    if items:
+    changed_items = outcome.get("changedItems") or []
+    if changed_items:
         _broadcast_room_event(
             room,
             {
                 "type": "worker_eval_updated",
                 "goal": goal_name,
                 "generation": generation,
-                "items": items,
+                "items": changed_items,
             },
         )
     return JsonResponse({
@@ -1180,6 +1183,8 @@ def _ws_internal_request(
     path: str,
     password: str,
     body: dict | None = None,
+    *,
+    timeout: float = 5.0,
 ) -> tuple[int, str]:
     ws_host = "127.0.0.1" if settings.WS_HOST == "0.0.0.0" else settings.WS_HOST
     url = f"http://{ws_host}:{settings.WS_PORT}{path}"
@@ -1189,7 +1194,7 @@ def _ws_internal_request(
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=5.0) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode("utf-8", errors="replace")
