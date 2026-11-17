@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import hmac
 import io
 import json
@@ -27,6 +28,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
 from direct_evolution_together import mummy_ws, ws_bridge
+from direct_evolution_together.config import get_config
+from direct_evolution_together.crowd_trust import fetch_room_evals, submit_eval_attestations
 from direct_evolution_together.cppn import (
     MAX_ARCHIVE_BYTES,
     MAX_CHECKPOINT_BYTES,
@@ -36,20 +39,25 @@ from direct_evolution_together.cppn import (
     MIN_POPULATION_SIZE,
     build_runner_script,
     create_seeded_population,
+    genome_content_hash,
     parse_uploaded_strain_bytes,
     save_cppn_bytes,
     slugify_policy_name,
     validate_genome_dict,
 )
 from direct_evolution_together.environments import (
+    TASK_ADAPTERS,
+    build_worker_script,
     create_task_population,
     default_elite_for_task,
+    evaluate_control_batch,
     get_task_spec,
     get_task_specs_payload,
     normalize_task_id,
     render_task_media,
+    rollout_control_episode,
 )
-from direct_evolution_together.models import Room, RoomEvolutionState
+from direct_evolution_together.models import ExternalEvalResult, Room, RoomEvolutionState
 
 
 _LOOPBACK_ADDRS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
@@ -104,17 +112,28 @@ def _room_slug(name: str) -> str:
     return slug
 
 
+def _get_or_create_contributor_id(request: HttpRequest) -> str:
+    """Stable per-session contributor identifier for crowd trust scoring."""
+    cid = str(request.session.get("det_contributor_id") or "").strip()
+    if len(cid) < 8:
+        cid = f"peer_{secrets.token_hex(10)}"
+        request.session["det_contributor_id"] = cid
+    return cid[:64]
+
+
 def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
     """Serve the minimal collaborative evolution and chat page."""
     if not room or len(room) > 64:
         return HttpResponseBadRequest("Invalid room name")
     room_title = "Lobby" if room == "lobby" else room
     room_description = ""
+    room_has_worker = False
     if room != "lobby":
-        meta = Room.objects.filter(slug=room).values("name", "description").first()
+        meta = Room.objects.filter(slug=room).values("name", "description", "worker_token_hash").first()
         if meta:
             room_title = meta["name"]
             room_description = meta["description"]
+            room_has_worker = bool(meta["worker_token_hash"])
     initial_goal = request.GET.get("goal", "").strip()[:32]
     initial_task = normalize_task_id(request.GET.get("task", ""))
     task_spec = get_task_spec(initial_task)
@@ -147,6 +166,15 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
     base_path = _resolve_base_path(request)
     ws_via_proxy = bool(getattr(settings, "WS_VIA_PROXY", False) or base_path)
     can_evolve_now = _resolve_evolve_now_access(request)
+    cfg = get_config()
+    mujoco_wasm_url = cfg.mujoco_wasm_url or settings.MUJOCO_WASM_URL
+    if not mujoco_wasm_url:
+        vendor_mujoco = Path(__file__).resolve().parent / "assets" / "vendor" / "mujoco" / "mujoco.js"
+        if vendor_mujoco.is_file():
+            mujoco_wasm_url = f"{base_path}/assets/vendor/mujoco/mujoco.js"
+        else:
+            mujoco_wasm_url = "https://cdn.jsdelivr.net/npm/@mujoco/mujoco@4.0.1/mujoco.js"
+    contributor_id = _get_or_create_contributor_id(request)
     return render(
         request,
         "direct_evolution_together/index.html",
@@ -158,6 +186,7 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
             "room_name": room,
             "room_title": room_title,
             "room_description": room_description,
+            "room_has_worker": room_has_worker,
             "is_private": room != "lobby",
             "can_evolve_now": can_evolve_now,
             "evolve_token": settings.EVOLVE_NOW_TOKEN if can_evolve_now else "",
@@ -171,7 +200,12 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
             "initial_mut_sigma": f"{initial_mut_sigma:.2f}",
             "initial_elite_frac": f"{initial_elite_frac:.2f}",
             "initial_crossover_rate": f"{initial_crossover_rate:.2f}",
+            "mujoco_wasm_url": mujoco_wasm_url,
             "task_specs": get_task_specs_payload(),
+            "crowd_config": {
+                **cfg.trust.to_client_dict(),
+                "contributorId": contributor_id,
+            },
         },
     )
 
@@ -179,6 +213,48 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
 def health(request: HttpRequest) -> JsonResponse:
     """Basic health check endpoint."""
     return JsonResponse({"status": "ok"})
+
+
+_ASSET_CONTENT_TYPES = {
+    ".js": "application/javascript; charset=utf-8",
+    ".mjs": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".xml": "application/xml; charset=utf-8",
+    ".wasm": "application/wasm",
+    ".json": "application/json; charset=utf-8",
+}
+_PKG_DIR = Path(__file__).resolve().parent
+
+
+@require_GET
+def serve_asset(request: HttpRequest, asset_name: str) -> HttpResponse:
+    """Serve bundled frontend scripts and simulation assets (works with DEBUG=0 under Uvicorn)."""
+    clean = PurePosixPath(asset_name)
+    if (
+        clean.is_absolute()
+        or ".." in clean.parts
+        or not clean.parts
+        or clean.suffix.lower() not in _ASSET_CONTENT_TYPES
+    ):
+        raise Http404("Asset not found")
+
+    for base_dir in (_PKG_DIR / "frontend", _PKG_DIR / "assets"):
+        root = base_dir.resolve()
+        candidate = (root / Path(*clean.parts)).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            ctype = _ASSET_CONTENT_TYPES[candidate.suffix.lower()]
+            resp = HttpResponse(candidate.read_bytes(), content_type=ctype)
+            if candidate.suffix.lower() == ".wasm":
+                resp["Cache-Control"] = "public, max-age=86400"
+            else:
+                resp["Cache-Control"] = "public, max-age=300"
+            resp["X-Content-Type-Options"] = "nosniff"
+            return resp
+    raise Http404("Asset not found")
 
 
 def _truncate_utf8(text: str, max_bytes: int = 32) -> str:
@@ -444,10 +520,15 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
             ),
         }
 
+    enable_worker = task == "external" or str(payload.get("enable_worker") or "").lower() in ("1", "true", "yes")
+    raw_worker_token = secrets.token_urlsafe(24) if enable_worker else ""
+    worker_token_hash = hashlib.sha256(raw_worker_token.encode("utf-8")).hexdigest() if raw_worker_token else ""
+
     room = Room.objects.create(
         slug=_room_slug(name),
         name=name,
         description=description,
+        worker_token_hash=worker_token_hash,
     )
     resp_data: dict[str, object] = {
         "ok": True,
@@ -457,6 +538,9 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
         "task": task,
         "url": f"{base_path}/p/{room.slug}/",
     }
+    if raw_worker_token:
+        resp_data["worker_token"] = raw_worker_token
+        resp_data["worker_script_url"] = f"{base_path}/export/worker-script/?room={urllib.parse.quote(room.slug)}"
 
     if seeded_meta is not None:
         raw_goal = str(payload.get("goal") or "").strip()
@@ -541,6 +625,11 @@ def export_bundle(request: HttpRequest) -> HttpResponse:
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         zf.writestr(f"{slug}/weights.pt", weights_bytes)
         zf.writestr(f"{slug}/run.py", script_text)
+        spec = get_task_spec(task)
+        if spec.mjcf_asset:
+            xml_path = _PKG_DIR / "assets" / spec.mjcf_asset
+            if xml_path.is_file():
+                zf.writestr(f"{slug}/{spec.mjcf_asset}", xml_path.read_bytes())
 
     resp = HttpResponse(buf.getvalue(), content_type="application/zip")
     resp["Content-Disposition"] = f'attachment; filename="{slug}.zip"'
@@ -562,8 +651,8 @@ def api_render_video(request: HttpRequest) -> JsonResponse:
 
     task = normalize_task_id(str(payload.get("task") or "cartpole"))
     spec = get_task_spec(task)
-    if not spec.supports_video:
-        return JsonResponse({"ok": False, "error": f"Task '{task}' does not support video rendering."}, status=400)
+    if not spec.supports_video or not spec.allow_server_video:
+        return JsonResponse({"ok": False, "error": f"Server video rendering is disabled for '{task}'."}, status=400)
 
     try:
         genome = validate_genome_dict(payload.get("genome"))
@@ -579,17 +668,365 @@ def api_render_video(request: HttpRequest) -> JsonResponse:
         max_cache_bytes=settings.MAX_MEDIA_CACHE_BYTES,
     )
     base_path = _resolve_base_path(request)
+    out_payload: dict[str, object] = {
+        "ok": True,
+        "videoUrl": f"{base_path}/media/{res['mp4_rel']}",
+        "posterUrl": f"{base_path}/media/{res['png_rel']}",
+        "steps": res["steps"],
+        "return": res["return"],
+        "seed": res["seed"],
+    }
+    if "meanAbsX" in res:
+        out_payload["meanAbsX"] = res["meanAbsX"]
+    if "distance" in res:
+        out_payload["distance"] = res["distance"]
+    return JsonResponse(out_payload)
+
+
+@require_POST
+def api_sim_eval_batch(request: HttpRequest) -> JsonResponse:
+    """Run (or return LRU-cached) server-side evaluations + primary pose trajectories."""
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return JsonResponse({"ok": False, "error": "Invalid JSON."}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"ok": False, "error": "Invalid simulation payload."}, status=400)
+
+    task = normalize_task_id(str(payload.get("task") or ""))
+    if task not in TASK_ADAPTERS:
+        return JsonResponse({"ok": False, "error": f"Task '{task}' does not support server simulation."}, status=400)
+    spec = get_task_spec(task)
+    if "server" not in spec.sim_modes:
+        return JsonResponse({"ok": False, "error": f"Task '{task}' is locked to client-side simulation."}, status=400)
+
+    raw_genomes = payload.get("genomes")
+    if not isinstance(raw_genomes, list) or not raw_genomes:
+        return JsonResponse({"ok": False, "error": "Non-empty genomes list is required."}, status=400)
+    if len(raw_genomes) > MAX_POPULATION_SIZE:
+        return JsonResponse({"ok": False, "error": f"Too many genomes (max {MAX_POPULATION_SIZE})."}, status=400)
+
+    try:
+        genomes = [validate_genome_dict(g) for g in raw_genomes]
+    except ValueError as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+
+    raw_seeds = payload.get("seeds")
+    seeds: tuple[int, ...] | None = None
+    if isinstance(raw_seeds, list) and raw_seeds:
+        if len(raw_seeds) > 12:
+            return JsonResponse({"ok": False, "error": "At most 12 seeds may be evaluated per request."}, status=400)
+        try:
+            seeds = tuple(max(0, min(10_000_000, int(s))) for s in raw_seeds)
+        except (TypeError, ValueError):
+            return JsonResponse({"ok": False, "error": "Invalid seed list."}, status=400)
+
+    include_rollout = bool(payload.get("includeRollout", True))
+    items = evaluate_control_batch(
+        task,
+        genomes,
+        seeds=seeds,
+        include_primary_rollout=include_rollout,
+    )
+    return JsonResponse({"ok": True, "engine": "server", "task": task, "items": items})
+
+
+@require_POST
+def api_sim_rollout(request: HttpRequest) -> JsonResponse:
+    """Run (or retrieve cached) single episode rollout for server-mode fullscreen playback."""
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return JsonResponse({"ok": False, "error": "Invalid JSON."}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"ok": False, "error": "Invalid rollout payload."}, status=400)
+
+    task = normalize_task_id(str(payload.get("task") or ""))
+    if task not in TASK_ADAPTERS:
+        return JsonResponse({"ok": False, "error": f"Task '{task}' does not support server simulation."}, status=400)
+    spec = get_task_spec(task)
+    if "server" not in spec.sim_modes:
+        return JsonResponse({"ok": False, "error": f"Task '{task}' is locked to client-side simulation."}, status=400)
+
+    try:
+        genome = validate_genome_dict(payload.get("genome"))
+        seed = max(0, min(10_000_000, int(payload.get("seed", 0))))
+    except (ValueError, TypeError) as exc:
+        return JsonResponse({"ok": False, "error": str(exc)}, status=400)
+
+    raw_nudge = str(payload.get("nudge") or "").strip().lower()
+    nudge = raw_nudge if raw_nudge in ("left", "right", "back", "fwd", "hop") else None
+    raw_steps = payload.get("maxSteps")
+    max_steps = int(raw_steps) if isinstance(raw_steps, int) else None
+    include_geoms = bool(payload.get("includeGeoms", True))
+
+    rollout = rollout_control_episode(
+        task,
+        genome,
+        seed=seed,
+        max_steps=max_steps,
+        nudge=nudge,
+        include_geoms=include_geoms,
+    )
+    return JsonResponse({"ok": True, "engine": "server", "task": task, "rollout": rollout})
+
+
+def _verify_worker_token(request: HttpRequest, room_obj: Room | None) -> bool:
+    if room_obj is None or not room_obj.worker_token_hash:
+        return False
+    supplied = request.headers.get("X-Worker-Token", "").strip()
+    if not supplied:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            supplied = auth[7:].strip()
+    if not supplied:
+        return False
+    digest = hashlib.sha256(supplied.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(digest, room_obj.worker_token_hash)
+
+
+def _fetch_room_snapshot(room: str) -> dict | None:
+    if ws_bridge.is_running():
+        raw = mummy_ws.get_room_snapshot_json(room)
+        return json.loads(raw)
+    configured = _configured_admin_password()
+    if configured:
+        status, text = _ws_internal_request(
+            "GET",
+            f"/internal/room-snapshot/{urllib.parse.quote(room, safe='')}",
+            configured,
+        )
+        if status == 200 and text:
+            return json.loads(text)
+    row = RoomEvolutionState.objects.filter(room=room).first()
+    if row is not None:
+        try:
+            parsed = json.loads(row.state_json)
+            if isinstance(parsed, dict):
+                return parsed
+        except ValueError:
+            pass
+    return None
+
+
+def _broadcast_room_event(room: str, payload: dict) -> None:
+    if ws_bridge.is_running():
+        mummy_ws.broadcast_room_payload(room, json.dumps(payload))
+        return
+    configured = _configured_admin_password()
+    if configured:
+        _ws_internal_request(
+            "POST",
+            "/internal/room-broadcast",
+            configured,
+            {"room": room, "payload": payload},
+        )
+
+
+@require_GET
+def api_worker_jobs(request: HttpRequest, room: str) -> JsonResponse:
+    """Return unevaluated CPPN genomes in `room` for an authenticated researcher worker script."""
+    room_obj = Room.objects.filter(slug=room).first()
+    if not _verify_worker_token(request, room_obj):
+        return JsonResponse({"ok": False, "error": "Invalid or missing worker token."}, status=403)
+
+    snapshot = _fetch_room_snapshot(room)
+    goals = (snapshot or {}).get("goals") or []
+    if not goals:
+        return JsonResponse({"ok": True, "room": room, "goal": None, "generation": 0, "pending": [], "totalCount": 0})
+
+    req_goal = request.GET.get("goal", "").strip()
+    target = next((g for g in goals if g.get("name") == req_goal), None) if req_goal else goals[0]
+    if target is None:
+        return JsonResponse({"ok": False, "error": f"Goal '{req_goal}' not found."}, status=404)
+
+    goal_name = str(target.get("name") or "")
+    generation = int(target.get("generation", 0))
+    genomes = target.get("genomes") or []
+    done_hashes = set(
+        ExternalEvalResult.objects.filter(room=room, goal=goal_name, generation=generation)
+        .values_list("genome_hash", flat=True)
+    )
+
+    pending = []
+    for idx, g in enumerate(genomes):
+        gh = genome_content_hash(g, length=20)
+        if gh not in done_hashes:
+            pending.append({"index": idx, "id": g.get("id", 0), "hash": gh, "genome": g})
+
     return JsonResponse(
         {
             "ok": True,
-            "videoUrl": f"{base_path}/media/{res['mp4_rel']}",
-            "posterUrl": f"{base_path}/media/{res['png_rel']}",
-            "steps": res["steps"],
-            "return": res["return"],
-            "meanAbsX": res["meanAbsX"],
-            "seed": res["seed"],
+            "room": room,
+            "goal": goal_name,
+            "task": target.get("task", "external"),
+            "generation": generation,
+            "totalCount": len(genomes),
+            "completedCount": len(genomes) - len(pending),
+            "pending": pending,
         }
     )
+
+
+_MAX_WORKER_POSTER_B64 = 128 * 1024
+
+
+@csrf_exempt
+@require_POST
+def api_worker_results(request: HttpRequest, room: str) -> JsonResponse:
+    """Ingest evaluation telemetry & optional visual frames/posters from a researcher's local script."""
+    room_obj = Room.objects.filter(slug=room).first()
+    if not _verify_worker_token(request, room_obj):
+        return JsonResponse({"ok": False, "error": "Invalid or missing worker token."}, status=403)
+    if size_err := _check_request_content_length(request):
+        return JsonResponse({"ok": False, "error": size_err}, status=413)
+
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return JsonResponse({"ok": False, "error": "Invalid JSON."}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"ok": False, "error": "Invalid worker payload."}, status=400)
+
+    goal_name = str(payload.get("goal") or "").strip()[:64]
+    try:
+        generation = int(payload.get("generation", 0))
+    except (TypeError, ValueError):
+        generation = 0
+    results = payload.get("results")
+    if not goal_name or not isinstance(results, list) or not results:
+        return JsonResponse({"ok": False, "error": "goal, generation, and non-empty results are required."}, status=400)
+
+    outcome = submit_eval_attestations(
+        room=room,
+        goal=goal_name,
+        generation=generation,
+        results=results,
+        contributor_id=f"worker:{room}",
+        authority=True,
+    )
+    stored_items = outcome["items"]
+    if stored_items:
+        _broadcast_room_event(
+            room,
+            {
+                "type": "worker_eval_updated",
+                "goal": goal_name,
+                "generation": generation,
+                "items": stored_items,
+            },
+        )
+    return JsonResponse({"ok": True, "accepted": len(stored_items)})
+
+
+@require_GET
+def api_config(request: HttpRequest) -> JsonResponse:
+    """Return active centralized environment, execution-lock, and crowd-trust config."""
+    return JsonResponse({"ok": True, **get_config().to_public_dict()})
+
+
+@require_GET
+def api_worker_evals(request: HttpRequest, room: str) -> JsonResponse:
+    """Fetch cached researcher worker evaluation badges/posters for a room goal & generation."""
+    goal_name = request.GET.get("goal", "").strip()[:64]
+    try:
+        generation = int(request.GET.get("generation", "0"))
+    except ValueError:
+        generation = 0
+    if not goal_name:
+        return JsonResponse({"ok": True, "room": room, "goal": "", "generation": generation, "items": []})
+    items = fetch_room_evals(room, goal_name, generation, trusted_only=False)
+    return JsonResponse({"ok": True, "room": room, "goal": goal_name, "generation": generation, "items": items})
+
+
+@require_GET
+def api_crowd_evals(request: HttpRequest, room: str) -> JsonResponse:
+    """Fetch crowd WASM/WebGPU consensus results and caller contributor trust status."""
+    cfg = get_config().trust
+    cid = _get_or_create_contributor_id(request)
+    goal_name = request.GET.get("goal", "").strip()[:64]
+    try:
+        generation = int(request.GET.get("generation", "0"))
+    except ValueError:
+        generation = 0
+    items = fetch_room_evals(room, goal_name, generation, trusted_only=False) if goal_name else []
+    return JsonResponse({
+        "ok": True,
+        "room": room,
+        "goal": goal_name,
+        "generation": generation,
+        "quorum": cfg.quorum,
+        "contributorId": cid,
+        "items": items,
+    })
+
+
+@require_POST
+def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
+    """Submit browser-executed WASM/WebGPU telemetry attestations toward room consensus."""
+    trust_cfg = get_config().trust
+    if not trust_cfg.enabled:
+        return JsonResponse({"ok": True, "accepted": 0, "items": [], "disabled": True})
+    if size_err := _check_request_content_length(request):
+        return JsonResponse({"ok": False, "error": size_err}, status=413)
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return JsonResponse({"ok": False, "error": "Invalid JSON."}, status=400)
+    if not isinstance(payload, dict):
+        return JsonResponse({"ok": False, "error": "Invalid crowd payload."}, status=400)
+
+    goal_name = str(payload.get("goal") or "").strip()[:64]
+    try:
+        generation = int(payload.get("generation", 0))
+    except (TypeError, ValueError):
+        generation = 0
+    results = payload.get("results")
+    if not goal_name or not isinstance(results, list) or not results:
+        return JsonResponse({"ok": False, "error": "goal, generation, and non-empty results are required."}, status=400)
+
+    cid = _get_or_create_contributor_id(request)
+    outcome = submit_eval_attestations(
+        room=room,
+        goal=goal_name,
+        generation=generation,
+        results=results,
+        contributor_id=cid,
+        authority=False,
+    )
+    items = outcome["items"]
+    if items:
+        _broadcast_room_event(
+            room,
+            {
+                "type": "worker_eval_updated",
+                "goal": goal_name,
+                "generation": generation,
+                "items": items,
+            },
+        )
+    return JsonResponse({
+        "ok": True,
+        "accepted": len(items),
+        "verifiedCount": outcome["verifiedCount"],
+        "contributorReputation": outcome["contributorReputation"],
+        "quarantined": outcome["quarantined"],
+        "items": items,
+    })
+
+
+@require_GET
+def export_worker_script(request: HttpRequest) -> HttpResponse:
+    """Download a pre-configured uv external researcher simulation worker template."""
+    room = request.GET.get("room", "my-room").strip()[:64] or "my-room"
+    base_path = _resolve_base_path(request)
+    scheme = request.scheme or "http"
+    host = request.get_host()
+    server_url = f"{scheme}://{host}{base_path}"
+    script = build_worker_script(room, server_url)
+    resp = HttpResponse(script, content_type="text/x-python; charset=utf-8")
+    resp["Content-Disposition"] = f'attachment; filename="worker_{slugify(room) or "room"}.py"'
+    return resp
 
 
 def _parse_single_byte_range(header: str, total_size: int) -> tuple[int, int] | None:

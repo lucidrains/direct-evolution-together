@@ -68,6 +68,14 @@ type
     population_size: int
     params: GoalParams
 
+  TaskConfig = object
+    is_control: bool
+    default_pop_size: int
+    max_pop_size: int
+    default_min_votes: int
+    has_elite_override: bool
+    default_elite_frac: float
+
   PendingClient = object
     room: string
     username: string
@@ -149,12 +157,48 @@ func default_runtime_config(): RuntimeConfig {.inline.} =
     params: default_goal_params(),
   )
 
+func default_task_configs(): Table[string, TaskConfig] =
+  result = initTable[string, TaskConfig]()
+  result["image"] = TaskConfig(
+    is_control: false,
+    default_pop_size: default_population_size,
+    max_pop_size: max_population_size,
+    default_min_votes: 0,
+    has_elite_override: false,
+    default_elite_frac: default_elite_frac,
+  )
+  result["cartpole"] = TaskConfig(
+    is_control: true,
+    default_pop_size: default_control_population_size,
+    max_pop_size: control_max_population_size,
+    default_min_votes: default_control_min_votes,
+    has_elite_override: true,
+    default_elite_frac: 0.0,
+  )
+  result["halfcheetah"] = TaskConfig(
+    is_control: true,
+    default_pop_size: default_control_population_size,
+    max_pop_size: control_max_population_size,
+    default_min_votes: default_control_min_votes,
+    has_elite_override: true,
+    default_elite_frac: 0.05,
+  )
+  result["external"] = TaskConfig(
+    is_control: true,
+    default_pop_size: default_control_population_size,
+    max_pop_size: max_population_size,
+    default_min_votes: default_control_min_votes,
+    has_elite_override: true,
+    default_elite_frac: 0.10,
+  )
+
 var
   state_lock: Lock
   ready_lock: Lock
   ready_cond: Cond
 
   cfg = default_runtime_config()
+  task_configs = default_task_configs()
   clients: Table[WebSocket, ClientInfo]
   pending_upgrades: Table[WebSocket, PendingClient]
   rooms: Table[string, HashSet[WebSocket]]
@@ -224,20 +268,40 @@ func sanitize_goal_name(raw: string): string =
   if result.len > max_goal_name_len:
     result = result[0 ..< max_goal_name_len]
 
-func sanitize_task_name(raw: string): string =
+proc sanitize_task_name_locked(raw: string): string {.gcsafe.} =
   let cleaned = raw.strip().toLowerAscii()
-  if cleaned == "cartpole":
-    return "cartpole"
+  {.gcsafe.}:
+    if cleaned in task_configs:
+      return cleaned
   "image"
 
-func max_pop_for_task(task: string): int {.inline.} =
-  if task != "image": control_max_population_size else: max_population_size
+proc task_cfg_locked(task: string): TaskConfig {.gcsafe.} =
+  let clean = sanitize_task_name_locked(task)
+  {.gcsafe.}:
+    if clean in task_configs:
+      return task_configs[clean]
+  TaskConfig(
+    is_control: false,
+    default_pop_size: default_population_size,
+    max_pop_size: max_population_size,
+    default_min_votes: 0,
+    has_elite_override: false,
+    default_elite_frac: default_elite_frac,
+  )
 
-func default_min_votes_for_task(task: string): int {.inline.} =
-  if task != "image": default_control_min_votes else: 0
+proc max_pop_for_task_locked(task: string): int {.gcsafe, inline.} =
+  task_cfg_locked(task).max_pop_size
 
-func default_elite_frac_for_task(task: string; fallback: float): float {.inline.} =
-  if task != "image": 0.0 else: fallback
+proc default_pop_for_task_locked(task: string; base_pop: int): int {.gcsafe, inline.} =
+  let tc = task_cfg_locked(task)
+  if tc.is_control: min(base_pop, tc.default_pop_size) else: base_pop
+
+proc default_min_votes_for_task_locked(task: string): int {.gcsafe, inline.} =
+  task_cfg_locked(task).default_min_votes
+
+proc default_elite_frac_for_task_locked(task: string; fallback: float): float {.gcsafe, inline.} =
+  let tc = task_cfg_locked(task)
+  if tc.has_elite_override: tc.default_elite_frac else: fallback
 
 func clamp_goal_params(p: GoalParams): GoalParams {.inline.} =
   GoalParams(
@@ -248,9 +312,9 @@ func clamp_goal_params(p: GoalParams): GoalParams {.inline.} =
     crossover_rate: clamp(p.crossover_rate, min_crossover_rate, max_crossover_rate),
   )
 
-func clamp_control_min_votes(task: string; p: var GoalParams) {.inline.} =
+proc clamp_control_min_votes_locked(task: string; p: var GoalParams) {.gcsafe, inline.} =
   # Control tasks should be clearable by one person's vote budget.
-  if task != "image" and p.min_votes > p.max_votes_per_user:
+  if task_cfg_locked(task).is_control and p.min_votes > p.max_votes_per_user:
     p.min_votes = max(min_votes_per_user, p.max_votes_per_user)
 
 proc parse_clamped_int(raw: string; fallback, lo, hi: int): int {.gcsafe.} =
@@ -572,7 +636,7 @@ proc attach_round_fields(
   obj["eliteFrac"] = %goal.params.elite_frac
   obj["crossoverRate"] = %goal.params.crossover_rate
   obj["populationSize"] = %goal.votes.len
-  obj["maxPopulationSize"] = %max_pop_for_task(goal.task)
+  obj["maxPopulationSize"] = %max_pop_for_task_locked(goal.task)
 
 proc goal_to_json(
   goal: GoalPopulation;
@@ -771,14 +835,14 @@ proc broadcast(targets: seq[WebSocket]; payload: string) {.gcsafe.} =
       for ws in gz_targets:
         ws.send(payload)
 
-proc init_goal_population(
+proc init_goal_population_locked(
   name, task, genomes_json: string;
   pop_len: int;
   gp: GoalParams;
 ): GoalPopulation {.gcsafe.} =
-  let clean_task = sanitize_task_name(task)
+  let clean_task = sanitize_task_name_locked(task)
   var params = gp
-  clamp_control_min_votes(clean_task, params)
+  clamp_control_min_votes_locked(clean_task, params)
   GoalPopulation(
     name: name,
     task: clean_task,
@@ -791,7 +855,7 @@ proc init_goal_population(
     params: params,
   )
 
-proc populate_room_goals(
+proc populate_room_goals_locked(
   parsed: JsonNode;
   dp: GoalParams;
 ): RoomEvolution {.gcsafe.} =
@@ -806,7 +870,7 @@ proc populate_room_goals(
   )
   for item in parsed:
     let name = item["name"].getStr()
-    let task = sanitize_task_name(item.getOrDefault("task").getStr("image"))
+    let task = sanitize_task_name_locked(item.getOrDefault("task").getStr("image"))
     let g_arr = item["genomes"]
     let g_json = $g_arr
     var gp = dp
@@ -814,13 +878,13 @@ proc populate_room_goals(
     if item_mv > 0:
       gp.min_votes = clamp(item_mv, 1, max_round_min_votes)
     elif gp.min_votes <= 0:
-      gp.min_votes = default_min_votes_for_task(task)
+      gp.min_votes = default_min_votes_for_task_locked(task)
     if item.hasKey("eliteFrac") and item["eliteFrac"].kind in {JFloat, JInt}:
       gp.elite_frac = clamp(item["eliteFrac"].getFloat(gp.elite_frac), min_elite_frac, max_elite_frac)
     elif task != "image":
-      gp.elite_frac = default_elite_frac_for_task(task, dp.elite_frac)
+      gp.elite_frac = default_elite_frac_for_task_locked(task, dp.elite_frac)
     result.goal_order.add(name)
-    result.goals[name] = init_goal_population(name, task, g_json, g_arr.len, gp)
+    result.goals[name] = init_goal_population_locked(name, task, g_json, g_arr.len, gp)
 
 proc upgrade_handler(request: Request) {.gcsafe.} =
   let room = request.pathParams["room"]
@@ -830,35 +894,39 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
 
   let username = sanitize_username(request.queryParams["username"])
   let initial_goal = sanitize_goal_name(request.queryParams["goal"])
-  let initial_task = sanitize_task_name(request.queryParams["task"])
+  let raw_initial_task = request.queryParams["task"]
   let wants_gzip = request.queryParams["gzip"] == "1"
   let raw_evolve_token = request.queryParams["evolve_token"].strip()
   var
     base_cfg: RuntimeConfig
     server_evolve_token: string
+    initial_task = "image"
+    task_max_pop = max_population_size
+    task_default_pop = default_population_size
+    task_default_min_votes = 0
+    task_default_elite = default_elite_frac
   with_state_lock:
     base_cfg = cfg
     server_evolve_token = evolve_token
+    initial_task = sanitize_task_name_locked(raw_initial_task)
+    task_max_pop = max_pop_for_task_locked(initial_task)
+    task_default_pop = default_pop_for_task_locked(initial_task, base_cfg.population_size)
+    task_default_min_votes = default_min_votes_for_task_locked(initial_task)
+    task_default_elite = default_elite_frac_for_task_locked(initial_task, base_cfg.params.elite_frac)
   let can_evolve =
     server_evolve_token.len > 0 and
     constant_time_eq(raw_evolve_token, server_evolve_token)
 
-  let task_max_pop = max_pop_for_task(initial_task)
-  let task_default_pop =
-    if initial_task != "image": min(base_cfg.population_size, default_control_population_size)
-    else: base_cfg.population_size
   let req_pop = parse_clamped_int(
     request.queryParams["pop"],
     task_default_pop, min_population_size, task_max_pop,
   )
-  let task_default_min_votes = default_min_votes_for_task(initial_task)
   let raw_min_votes = request.queryParams["min_votes"]
   let req_min_votes =
     if raw_min_votes.strip().len > 0:
       parse_clamped_int(raw_min_votes, task_default_min_votes, 1, max_round_min_votes)
     else:
       task_default_min_votes
-  let task_default_elite = default_elite_frac_for_task(initial_task, base_cfg.params.elite_frac)
   let req_params = GoalParams(
     max_votes_per_user: parse_clamped_int(
       request.queryParams["max_votes"],
@@ -1100,9 +1168,10 @@ proc handle_create_goal(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
   let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
   if goal_name.len == 0:
     return
-  let task_name = sanitize_task_name(payload.getOrDefault("task").getStr("image"))
+  let raw_task = payload.getOrDefault("task").getStr("image")
 
   with_state_lock:
+    let task_name = sanitize_task_name_locked(raw_task)
     if ws in clients:
       let info = clients[ws]
       if info.room != "lobby" and
@@ -1110,15 +1179,13 @@ proc handle_create_goal(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
         goal_name notin room_evolution[info.room].goals and
         goal_name notin room_evolution[info.room].pending_creates:
         let d = room_evolution[info.room].default_params
-        let default_pop =
-          if task_name != "image": min(cfg.population_size, default_control_population_size)
-          else: cfg.population_size
+        let default_pop = default_pop_for_task_locked(task_name, cfg.population_size)
         let req_pop = clamp(
           payload.getOrDefault("population_size").getInt(default_pop),
-          min_population_size, max_pop_for_task(task_name),
+          min_population_size, max_pop_for_task_locked(task_name),
         )
-        let req_min_votes = payload.getOrDefault("min_votes").getInt(default_min_votes_for_task(task_name))
-        let task_default_elite = default_elite_frac_for_task(task_name, d.elite_frac)
+        let req_min_votes = payload.getOrDefault("min_votes").getInt(default_min_votes_for_task_locked(task_name))
+        let task_default_elite = default_elite_frac_for_task_locked(task_name, d.elite_frac)
         let g_params = clamp_goal_params(GoalParams(
           max_votes_per_user: payload.getOrDefault("max_votes_per_user").getInt(d.max_votes_per_user),
           min_votes: req_min_votes,
@@ -1479,6 +1546,65 @@ proc internal_room_clear_handler(request: Request) {.gcsafe.} =
   clear_room_evolution(room, $goals_node, goal_name, username)
   request.respond(200, @[("Content-Type", "application/json")], """{"ok":true}""")
 
+proc get_room_snapshot_json*(room: string): string {.exportpy, gcsafe.} =
+  ## Return current active goal states (name, task, generation, genomes) for `room`.
+  var goals_arr = newJArray()
+  with_state_lock:
+    if room in room_evolution and not room_evolution[room].initializing:
+      let evo = room_evolution[room]
+      for g_name in evo.goal_order:
+        if g_name in evo.goals:
+          let g = evo.goals[g_name]
+          let genomes_node =
+            if g.genomes_json.len > 0: parseJson(g.genomes_json)
+            else: newJArray()
+          goals_arr.add(%*{
+            "name": g.name,
+            "task": (if g.task.len > 0: g.task else: "image"),
+            "generation": g.generation,
+            "genomes": genomes_node,
+          })
+  $(%*{"room": room, "goals": goals_arr})
+
+proc broadcast_room_payload*(room, payload_json: string) {.exportpy, gcsafe.} =
+  if room.len == 0 or payload_json.len == 0:
+    return
+  var targets: seq[WebSocket] = @[]
+  with_state_lock:
+    targets = room_targets(room)
+  if targets.len > 0:
+    broadcast(targets, payload_json)
+
+proc internal_room_snapshot_handler(request: Request) {.gcsafe.} =
+  let auth = verify_internal_admin(request)
+  if not auth.ok:
+    request.respond(auth.code, body = auth.msg)
+    return
+  let room = request.pathParams["room"]
+  if not is_valid_room(room):
+    request.respond(400, body = "Invalid room name")
+    return
+  request.respond(200, @[("Content-Type", "application/json")], get_room_snapshot_json(room))
+
+proc internal_room_broadcast_handler(request: Request) {.gcsafe.} =
+  let auth = verify_internal_admin(request)
+  if not auth.ok:
+    request.respond(auth.code, body = auth.msg)
+    return
+  var parsed: JsonNode
+  try:
+    parsed = parseJson(request.body)
+  except CatchableError:
+    request.respond(400, body = "Invalid JSON")
+    return
+  let room = parsed.getOrDefault("room").getStr("")
+  let payload_node = parsed.getOrDefault("payload")
+  if room.len == 0 or payload_node == nil or payload_node.kind != JObject:
+    request.respond(400, body = "Missing room or payload")
+    return
+  broadcast_room_payload(room, $payload_node)
+  request.respond(200, @[("Content-Type", "application/json")], """{"ok":true}""")
+
 proc serve_thread_proc(args: tuple[host: string, port: int]) {.thread.} =
   {.gcsafe.}:
     var srv: Server = nil
@@ -1487,6 +1613,8 @@ proc serve_thread_proc(args: tuple[host: string, port: int]) {.thread.} =
       router.get("/ws/chat/@room", upgrade_handler)
       router.get("/ws/chat/@room/", upgrade_handler)
       router.get("/internal/room-goals/@room", internal_room_goals_handler)
+      router.get("/internal/room-snapshot/@room", internal_room_snapshot_handler)
+      router.post("/internal/room-broadcast", internal_room_broadcast_handler)
       router.post("/internal/goal-reset", internal_goal_reset_handler)
       router.post("/internal/room-clear", internal_room_clear_handler)
       srv = newServer(router, websocket_handler, logHandler = quiet_logger)
@@ -1574,13 +1702,45 @@ proc set_default_ga_params*(mut_sigma, elite_frac, crossover_rate: float) {.expo
     cfg.params.elite_frac = clamp(elite_frac, min_elite_frac, max_elite_frac)
     cfg.params.crossover_rate = clamp(crossover_rate, min_crossover_rate, max_crossover_rate)
 
+proc register_task_configs*(configs_json: string) {.exportpy.} =
+  let parsed = parseJson(configs_json)
+  if parsed.kind != JArray:
+    return
+  with_state_lock:
+    for item in parsed:
+      if item.kind != JObject:
+        continue
+      let tid = item.getOrDefault("task").getStr("").strip().toLowerAscii()
+      if tid.len == 0 or tid.len > max_task_name_len:
+        continue
+      let has_elite = item.hasKey("defaultEliteFrac") and item["defaultEliteFrac"].kind in {JFloat, JInt}
+      task_configs[tid] = TaskConfig(
+        is_control: item.getOrDefault("isControl").getBool(false),
+        default_pop_size: clamp(
+          item.getOrDefault("defaultPopSize").getInt(default_control_population_size),
+          min_population_size,
+          max_population_size,
+        ),
+        max_pop_size: clamp(
+          item.getOrDefault("maxPopSize").getInt(control_max_population_size),
+          min_population_size,
+          max_population_size,
+        ),
+        default_min_votes: max(0, min(max_round_min_votes, item.getOrDefault("defaultMinVotes").getInt(0))),
+        has_elite_override: has_elite,
+        default_elite_frac: (
+          if has_elite: clamp(item["defaultEliteFrac"].getFloat(0.0), min_elite_frac, max_elite_frac)
+          else: default_elite_frac
+        ),
+      )
+
 proc seed_room_goals*(room, goals_json: string) {.exportpy.} =
   ## Seed a room with initial PyTorch-generated goals JSON: [{"name": ..., "genomes": [...]}]
   let parsed = parseJson(goals_json)
   if parsed.kind != JArray:
     return
   with_state_lock:
-    room_evolution[room] = populate_room_goals(parsed, cfg.params)
+    room_evolution[room] = populate_room_goals_locked(parsed, cfg.params)
     dirty_rooms.incl(room)
 
 proc drain_evo_jobs*(): string {.exportpy.} =
@@ -1629,7 +1789,7 @@ proc apply_room_init*(room, goals_json: string) {.exportpy.} =
       carry_creates = room_evolution[room].pending_creates
       carry_tasks = room_evolution[room].pending_create_tasks
       carry_params = room_evolution[room].pending_create_params
-    room_evolution[room] = populate_room_goals(parsed, dp)
+    room_evolution[room] = populate_room_goals_locked(parsed, dp)
     room_evolution[room].pending_creates = carry_creates
     room_evolution[room].pending_create_tasks = carry_tasks
     room_evolution[room].pending_create_params = carry_params
@@ -1649,10 +1809,10 @@ proc apply_goal_create_impl(room, goal_name, task_override, username, genomes_js
   with_state_lock:
     if room in room_evolution:
       room_evolution[room].pending_creates.excl(goal_name)
-      var task_name = if task_override.len > 0: sanitize_task_name(task_override) else: "image"
+      var task_name = if task_override.len > 0: sanitize_task_name_locked(task_override) else: "image"
       if goal_name in room_evolution[room].pending_create_tasks:
         if task_override.len == 0:
-          task_name = sanitize_task_name(room_evolution[room].pending_create_tasks[goal_name])
+          task_name = sanitize_task_name_locked(room_evolution[room].pending_create_tasks[goal_name])
         room_evolution[room].pending_create_tasks.del(goal_name)
       var gp = room_evolution[room].default_params
       if gp.max_votes_per_user <= 0:
@@ -1663,10 +1823,10 @@ proc apply_goal_create_impl(room, goal_name, task_override, username, genomes_js
       if min_votes > 0:
         gp.min_votes = clamp(min_votes, 1, max_round_min_votes)
       elif gp.min_votes <= 0:
-        gp.min_votes = default_min_votes_for_task(task_name)
+        gp.min_votes = default_min_votes_for_task_locked(task_name)
       if goal_name notin room_evolution[room].goals:
         room_evolution[room].goal_order.add(goal_name)
-        room_evolution[room].goals[goal_name] = init_goal_population(goal_name, task_name, genomes_json, g_arr.len, gp)
+        room_evolution[room].goals[goal_name] = init_goal_population_locked(goal_name, task_name, genomes_json, g_arr.len, gp)
         dirty_rooms.incl(room)
         evo_payload = build_evolution_state_payload(room)
         sys_payload = system_msg_payload(username & " created goal \"" & goal_name & "\"")
@@ -1727,7 +1887,7 @@ proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.expo
             goal_task = evo.goals[target_goal].task
           else:
             evo.goal_order.add(target_goal)
-          evo.goals[target_goal] = init_goal_population(target_goal, goal_task, $parsed, parsed.len, gp)
+          evo.goals[target_goal] = init_goal_population_locked(target_goal, goal_task, $parsed, parsed.len, gp)
           room_evolution[room] = evo
           dirty_rooms.incl(room)
           let r_cnt = if room in rooms: max(1, rooms[room].len) else: 1
@@ -1755,7 +1915,7 @@ proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.expo
           sys_payload = system_msg_payload(username & " cleared room evolution state")
           targets = room_targets(room)
       else:
-        room_evolution[room] = populate_room_goals(parsed, dp)
+        room_evolution[room] = populate_room_goals_locked(parsed, dp)
         dirty_rooms.incl(room)
         out_payload = build_evolution_state_payload(room)
         sys_payload = system_msg_payload(username & " cleared room evolution state to gen 0")
@@ -1936,15 +2096,15 @@ proc restore_room_state*(room, state_json: string) {.exportpy.} =
       if item.kind != JObject:
         continue
       let name = sanitize_goal_name(item.getOrDefault("name").getStr(""))
-      let task = sanitize_task_name(item.getOrDefault("task").getStr("image"))
+      let task = sanitize_task_name_locked(item.getOrDefault("task").getStr("image"))
       let genomes_arr = item.getOrDefault("genomes")
       if name.len == 0 or genomes_arr == nil or genomes_arr.kind != JArray or genomes_arr.len == 0:
         continue
       let gen = max(0, item.getOrDefault("generation").getInt(0))
       var gp = parse_goal_params_json(item.getOrDefault("params"), dp)
       if gp.min_votes <= 0:
-        gp.min_votes = default_min_votes_for_task(task)
-      clamp_control_min_votes(task, gp)
+        gp.min_votes = default_min_votes_for_task_locked(task)
+      clamp_control_min_votes_locked(task, gp)
       let g_json = $genomes_arr
       let lin_node = item.getOrDefault("lineage")
       let l_json =
@@ -1984,6 +2144,7 @@ proc set_evolve_token*(token: string) {.exportpy.} =
 proc clear_state*() {.exportpy.} =
   with_state_lock:
     cfg = default_runtime_config()
+    task_configs = default_task_configs()
     admin_password = ""
     evolve_token = ""
     clients.clear()

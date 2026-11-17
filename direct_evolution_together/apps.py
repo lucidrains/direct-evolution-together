@@ -11,6 +11,7 @@ def _enable_sqlite_wal(sender, connection, **kwargs) -> None:
         with connection.cursor() as cursor:
             cursor.execute("PRAGMA journal_mode=WAL;")
             cursor.execute("PRAGMA synchronous=NORMAL;")
+            cursor.execute("PRAGMA busy_timeout=15000;")
 
 
 class DirectEvolutionTogetherConfig(AppConfig):

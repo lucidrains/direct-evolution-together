@@ -182,6 +182,19 @@ def _render_runtime_env(cfg: DeployConfig) -> str:
         f"MUMMY_ELITE_FRAC={cfg.elite_frac}",
         f"MUMMY_CROSSOVER_RATE={cfg.crossover_rate}",
     ]
+    _pass_prefixes = (
+        "DET_CONFIG_FILE",
+        "DET_MUJOCO_WASM_URL",
+        "DET_CROWD_",
+        "DET_EXECUTION_POLICY_",
+        "DET_TASK_ENABLED_",
+        "DET_POP_SIZE_",
+        "DET_MAX_POP_SIZE_",
+        "DET_ALLOW_VIDEO_",
+    )
+    for key, val in sorted(os.environ.items()):
+        if key.startswith(_pass_prefixes) and val.strip():
+            lines.append(f"{key}={val.strip()}")
     return "\n".join(lines) + "\n"
 
 

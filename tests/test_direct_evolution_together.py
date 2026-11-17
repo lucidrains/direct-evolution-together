@@ -175,14 +175,24 @@ def test_e2e_chat_persistence_cursor_and_evolution():
         with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice") as a1:
             assert _recv_until(a1, "identity")["username"] == "alice"
             evo0 = _recv_until(a1, "evolution_state")
-            assert [g["name"] for g in evo0["goals"]] == ["CartPole", "Butterfly", "Galaxy", "Creature"]
-            assert evo0["goals"][0]["task"] == "cartpole"
+            assert [g["name"] for g in evo0["goals"]] == [
+                "HalfCheetah",
+                "CartPole",
+                "Butterfly",
+                "Galaxy",
+                "Creature",
+            ]
+            assert evo0["goals"][0]["task"] == "halfcheetah"
             assert evo0["goals"][0]["minVotes"] == 2
-            assert evo0["goals"][0]["eliteFrac"] == 0.0
+            assert evo0["goals"][0]["eliteFrac"] == 0.05
             assert len(evo0["goals"][0]["genomes"]) == 12
-            assert evo0["goals"][1]["task"] == "image"
+            assert evo0["goals"][1]["task"] == "cartpole"
             assert evo0["goals"][1]["minVotes"] == 2
+            assert evo0["goals"][1]["eliteFrac"] == 0.0
             assert len(evo0["goals"][1]["genomes"]) == 12
+            assert evo0["goals"][2]["task"] == "image"
+            assert evo0["goals"][2]["minVotes"] == 2
+            assert len(evo0["goals"][2]["genomes"]) == 12
 
             with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice") as a2:
                 assert _recv_until(a2, "identity")["username"] == "alice-2"
@@ -1185,13 +1195,26 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
         # Check migrated lobby has CartPole prepended with zero elitism, high quorum, and no pre-solved Gen-0 founders
         with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=mig") as ws_lob:
             lob_state = _recv_until(ws_lob, "evolution_state")
-            assert [g["name"] for g in lob_state["goals"]] == ["CartPole", "Butterfly", "Galaxy", "Creature"]
-            assert lob_state["goals"][0]["task"] == "cartpole"
-            assert lob_state["goals"][0]["eliteFrac"] == 0.0
+            assert [g["name"] for g in lob_state["goals"]] == [
+                "HalfCheetah",
+                "CartPole",
+                "Butterfly",
+                "Galaxy",
+                "Creature",
+            ]
+            assert lob_state["goals"][0]["task"] == "halfcheetah"
+            assert lob_state["goals"][0]["eliteFrac"] == 0.05
             assert lob_state["goals"][0]["minVotes"] == 6
             assert all(
-                evaluate_control_genome("cartpole", cand, seeds=(0, 1, 2))["meanSteps"] < 60.0
+                evaluate_control_genome("halfcheetah", cand, seeds=(0, 1))["meanDistance"] < 4.5
                 for cand in lob_state["goals"][0]["genomes"]
+            )
+            assert lob_state["goals"][1]["task"] == "cartpole"
+            assert lob_state["goals"][1]["eliteFrac"] == 0.0
+            assert lob_state["goals"][1]["minVotes"] == 6
+            assert all(
+                evaluate_control_genome("cartpole", cand, seeds=(0, 1, 2))["meanSteps"] < 60.0
+                for cand in lob_state["goals"][1]["genomes"]
             )
 
         # CartPole quorum is capped by the per-person vote budget; image quorum stays independent
@@ -1435,5 +1458,516 @@ def test_nginx_conf_handles_media_and_compression_for_subpath_and_root():
     assert "alias /srv/det/data/media/;" in root_conf
     assert "gzip off;" in root_conf
     assert "server {" in root_conf
+
+
+@pytest.mark.django_db
+def test_halfcheetah_fk_parity_convergence_server_eval_and_video(client, settings, tmp_path):
+    import base64
+    from pathlib import Path
+    import random
+    import re
+    import mujoco
+    from direct_evolution_together.cppn import genome_content_hash
+    from direct_evolution_together.environments import (
+        TASK_SPECS,
+        _cheetah_fk_segments,
+        attach_halfcheetah_geoms,
+        create_task_population,
+        evaluate_control_batch,
+        evaluate_control_genome,
+        get_halfcheetah_model,
+        get_substrate,
+        halfcheetah_reset,
+        render_task_media,
+    )
+
+    settings.MEDIA_ROOT = tmp_path
+
+    # 1. Verify HalfCheetah default pop cap & config
+    hc_spec = TASK_SPECS["halfcheetah"]
+    assert hc_spec.default_pop_size == 16
+    assert hc_spec.max_pop_size == 24
+    too_big = client.post(
+        "/api/rooms/",
+        data=json.dumps({"name": "Huge Cheetah", "task": "halfcheetah", "population_size": 25}),
+        content_type="application/json",
+    )
+    assert too_big.status_code == 400
+
+    # 2. Verify 2D FK matches real MuJoCo geom_xpos and cheetah_renderer.js FK matches Python to 1e-9
+    model = get_halfcheetah_model()
+    data = mujoco.MjData(model)
+    halfcheetah_reset(model, data, 7)
+    for step in range(40):
+        for a in range(6):
+            data.ctrl[a] = 0.35 * ((step % 5) - 2) * 0.4
+        mujoco.mj_step(model, data)
+    mujoco.mj_forward(model, data)
+    frame = [float(data.qpos[i]) for i in range(model.nq)] + [0.0, 0.0, 0.0]
+    py_segs = dict((name, (p0, p1)) for name, p0, p1 in _cheetah_fk_segments(frame))
+
+    def _geom_xz(gname: str):
+        gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, gname)
+        pos = data.geom_xpos[gid]
+        return float(pos[0]), float(pos[2])
+
+    for gname in ("bthigh", "bshin", "bfoot", "fthigh", "fshin", "ffoot", "torso"):
+        p0, p1 = py_segs[gname]
+        mid_x = 0.5 * (p0[0] + p1[0])
+        mid_z = 0.5 * (p0[1] + p1[1])
+        gx, gz = _geom_xz(gname)
+        assert abs(mid_x - gx) < 1e-4 and abs(mid_z - gz) < 1e-4
+
+    renderer_js = (
+        Path(__file__).resolve().parent.parent
+        / "direct_evolution_together"
+        / "frontend"
+        / "cheetah_renderer.js"
+    )
+    fk_script = f"""
+const fs = require('fs');
+global.window = {{}};
+eval(fs.readFileSync({json.dumps(str(renderer_js))}, 'utf8'));
+const segs = window.DetCheetahRenderer.cheetahFkSegments({json.dumps(frame[:9])});
+console.log(JSON.stringify(segs));
+"""
+    js_fk_out = json.loads(subprocess.check_output(["node", "-e", fk_script], text=True))
+    js_segs = {item[0]: (tuple(item[1]), tuple(item[2])) for item in js_fk_out}
+    assert set(js_segs) == set(py_segs)
+    for k in py_segs:
+        for pt_idx in range(2):
+            for coord_idx in range(2):
+                assert abs(py_segs[k][pt_idx][coord_idx] - js_segs[k][pt_idx][coord_idx]) < 1e-9
+
+    # 3. Verify Python vs JS anatomical (21, 12, 6) HyperNEAT substrate weight decoding parity
+    rng = random.Random(1234)
+    torch_free_genome = create_task_population("halfcheetah", 1)[0]
+    substrate = get_substrate(hc_spec.substrate_dims, hc_spec.layer_coords)
+    py_weights, py_biases = substrate.decode(torch_free_genome)
+    net_viz_js = (
+        Path(__file__).resolve().parent.parent
+        / "direct_evolution_together"
+        / "frontend"
+        / "network_viz.js"
+    )
+    decode_script = f"""
+const nv = require({json.dumps(str(net_viz_js))});
+const dec = nv.decodeHyperNeatWeights({json.dumps(torch_free_genome)}, {json.dumps(list(hc_spec.substrate_dims))}, {json.dumps([list(c) if c is not None else None for c in hc_spec.layer_coords])});
+console.log(JSON.stringify({{
+  w0: Array.from(dec.layers[0].w),
+  b0: Array.from(dec.layers[0].b),
+  w1: Array.from(dec.layers[1].w),
+  b1: Array.from(dec.layers[1].b),
+}}));
+"""
+    js_dec = json.loads(subprocess.check_output(["node", "-e", decode_script], text=True))
+    py_w0 = py_weights[0].reshape(-1).tolist()
+    py_b0 = py_biases[0].reshape(-1).tolist()
+    py_w1 = py_weights[1].reshape(-1).tolist()
+    py_b1 = py_biases[1].reshape(-1).tolist()
+    assert max(abs(a - b) for a, b in zip(py_w0, js_dec["w0"])) < 1e-5
+    assert max(abs(a - b) for a, b in zip(py_b0, js_dec["b0"])) < 1e-5
+    assert max(abs(a - b) for a, b in zip(py_w1, js_dec["w1"])) < 1e-5
+    assert max(abs(a - b) for a, b in zip(py_b1, js_dec["b1"])) < 1e-5
+
+    # 4. Verify pop=16 HalfCheetah converges to upright sprint >= 8.0m reliably within 20 gens
+    import numpy as np
+    random.seed(42)
+    np.random.seed(42)
+    torch.manual_seed(42)
+    pop = create_task_population("halfcheetah", 16)
+    best_summary = None
+    best_genome = pop[0]
+    for _gen in range(20):
+        evals = evaluate_control_batch("halfcheetah", pop, seeds=(0, 1), include_primary_rollout=False)
+        fits = [e["summary"]["primaryValue"] * max(0.15, e["summary"]["meanUpright"]) for e in evals]
+        top_idx = sorted(range(len(pop)), key=lambda i: fits[i], reverse=True)
+        cur_best_i = top_idx[0]
+        if best_summary is None or fits[cur_best_i] > best_summary["primaryValue"] * max(0.15, best_summary["meanUpright"]):
+            best_summary = evals[cur_best_i]["summary"]
+            best_genome = pop[cur_best_i]
+        if best_summary["meanDistance"] >= 8.0 and best_summary["meanUpright"] >= 0.40:
+            break
+        winners = set(top_idx[:4])
+        scores = [max(1, 5 - top_idx[:4].index(i)) if i in winners else 0 for i in range(len(pop))]
+        ups = [1 if i in winners else 0 for i in range(len(pop))]
+        pop, _ = evolve_population(pop, scores, ups, mut_sigma=0.35, pop_size=16, elite_frac=0.05, crossover_rate=0.75)
+    assert best_summary is not None
+    assert best_summary["meanDistance"] >= 8.0
+    assert best_summary["meanUpright"] >= 0.40
+
+    # 5. Client-locked policy enforcement for HalfCheetah + direct attach_halfcheetah_geoms + CartPole server fallback
+    from direct_evolution_together.environments import halfcheetah_rollout, attach_halfcheetah_geoms
+
+    locked_batch = client.post(
+        "/api/sim/eval-batch/",
+        data=json.dumps({"task": "halfcheetah", "genomes": [best_genome], "includeRollout": True}),
+        content_type="application/json",
+    )
+    assert locked_batch.status_code == 400
+    assert "locked" in locked_batch.json()["error"].lower()
+
+    locked_ro = client.post(
+        "/api/sim/rollout/",
+        data=json.dumps({"task": "halfcheetah", "genome": best_genome, "seed": 0}),
+        content_type="application/json",
+    )
+    assert locked_ro.status_code == 400
+    assert "locked" in locked_ro.json()["error"].lower()
+
+    direct_evals = evaluate_control_batch("halfcheetah", [best_genome], seeds=(0,), include_primary_rollout=True)
+    assert direct_evals[0]["summary"]["meanDistance"] >= 8.0
+    assert len(direct_evals[0]["primaryRollout"]["frames"]) == 201
+
+    ro_direct = attach_halfcheetah_geoms(halfcheetah_rollout(best_genome, seed=0, max_steps=200, nudge="fwd"))
+    assert len(ro_direct["geomSpecs"]) == 8  # 8 non-plane capsules of half_cheetah.xml
+    assert len(ro_direct["geomPoses"]) == 201 and len(ro_direct["geomPoses"][0]) == 8 * 12
+
+    cp_genome = create_task_population("cartpole", 1)[0]
+    cp_batch = client.post(
+        "/api/sim/eval-batch/",
+        data=json.dumps({"task": "cartpole", "genomes": [cp_genome], "includeRollout": True}),
+        content_type="application/json",
+    )
+    assert cp_batch.status_code == 200 and cp_batch.json()["engine"] == "server"
+    cp_ro = client.post(
+        "/api/sim/rollout/",
+        data=json.dumps({"task": "cartpole", "genome": cp_genome, "seed": 0, "nudge": "left"}),
+        content_type="application/json",
+    )
+    assert cp_ro.status_code == 200 and cp_ro.json()["ok"] is True
+
+    # 6. Lazy MP4 render + zip bundle export
+    vid_resp = client.post(
+        "/api/render/video/",
+        data=json.dumps({"task": "halfcheetah", "genome": best_genome, "seed": 0}),
+        content_type="application/json",
+    )
+    assert vid_resp.status_code == 200
+    v_data = vid_resp.json()
+    assert v_data["ok"] is True and v_data["videoUrl"].endswith(".mp4")
+    assert v_data["posterUrl"].endswith(".png")
+    media_mp4 = client.get(v_data["videoUrl"])
+    assert media_mp4.status_code == 200
+    mp4_bytes = b"".join(media_mp4.streaming_content)
+    assert b"ftyp" in mp4_bytes[:64]
+
+    bun_resp = client.post(
+        "/export/bundle/",
+        data=json.dumps({
+            "genome": best_genome,
+            "goal": "HalfCheetah",
+            "generation": 15,
+            "index": 0,
+            "task": "halfcheetah",
+        }),
+        content_type="application/json",
+    )
+    assert bun_resp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(bun_resp.content)) as zf:
+        names = set(zf.namelist())
+        run_names = [n for n in names if n.endswith("/run.py")]
+        assert len(run_names) == 1
+        assert any(n.endswith("/weights.pt") for n in names)
+        assert any(n.endswith("/half_cheetah.xml") for n in names)
+        compile(zf.read(run_names[0]).decode("utf-8"), "run.py", "exec")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_external_researcher_worker_api_and_ws_broadcast(client):
+    import base64
+    # Minimal valid 1x1 PNG bytes
+    tiny_png = (
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc`\x00\x00"
+        b"\x00\x02\x00\x01H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    room_resp = client.post(
+        "/api/rooms/",
+        data=json.dumps({"name": "Duck Gait Lab", "task": "external", "population_size": 6}),
+        content_type="application/json",
+    )
+    assert room_resp.status_code == 200
+    rdata = room_resp.json()
+    slug = rdata["slug"]
+    token = rdata.get("worker_token") or ""
+    assert len(token) >= 16
+
+    # Reject missing or invalid worker token
+    assert client.get(f"/api/rooms/{slug}/worker/jobs/").status_code == 403
+    assert client.get(f"/api/rooms/{slug}/worker/jobs/", HTTP_AUTHORIZATION="Bearer wrong").status_code == 403
+
+    # Downloadable worker script compiles cleanly
+    ws_script_resp = client.get(f"/export/worker-script/?room={slug}")
+    assert ws_script_resp.status_code == 200
+    script_src = ws_script_resp.content.decode("utf-8")
+    assert slug in script_src and "/worker/results/" in script_src
+    compile(script_src, "worker.py", "exec")
+
+    with _ws_server(seed=True, pop_size=6, max_votes=4) as port:
+        seed_from_db(default_pop_size=6, default_max_votes=4)
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/{slug}/?username=researcher") as ws:
+            evo = _recv_until(ws, "evolution_state")
+            assert evo["goals"][0]["task"] == "external"
+
+            jobs_resp = client.get(
+                f"/api/rooms/{slug}/worker/jobs/",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+            assert jobs_resp.status_code == 200
+            jdata = jobs_resp.json()
+            assert jdata["goal"] == evo["goals"][0]["name"]
+            first_item = jdata["pending"][0]
+
+            post_resp = client.post(
+                f"/api/rooms/{slug}/worker/results/",
+                data=json.dumps({
+                    "goal": jdata["goal"],
+                    "generation": 0,
+                    "results": [{
+                        "hash": first_item["hash"],
+                        "summary": {
+                            "primaryValue": 12.34,
+                            "primaryDisplay": "12.3m",
+                            "badgeText": "12.3m",
+                            "tier": "solved",
+                            "secondaryText": "custom microduck",
+                        },
+                        "posterPngB64": base64.b64encode(tiny_png).decode("ascii"),
+                        "topology": {
+                            "nodes": [
+                                {"id": "s0", "kind": "sensor", "label": "imu_pitch"},
+                                {"id": "h0", "kind": "hidden", "activation": "sin"},
+                                {"id": "o0", "kind": "output", "activation": "tanh"},
+                            ],
+                            "edges": [
+                                {"from": "s0", "to": "h0", "weight": 1.25},
+                                {"from": "h0", "to": "o0", "weight": -0.8},
+                            ],
+                        },
+                    }],
+                }),
+                content_type="application/json",
+                HTTP_AUTHORIZATION=f"Bearer {token}",
+            )
+            assert post_resp.status_code == 200
+
+            ws_msg = _recv_until(ws, "worker_eval_updated")
+            assert ws_msg["items"][0]["hash"] == first_item["hash"]
+            assert ws_msg["items"][0]["summary"]["badgeText"] == "12.3m"
+            assert ws_msg["items"][0]["topology"]["nodes"][0]["label"] == "imu_pitch"
+
+    evals_resp = client.get(f"/api/rooms/{slug}/worker/evals/?goal={jdata['goal']}&generation=0")
+    assert evals_resp.status_code == 200
+    edata = evals_resp.json()
+    assert len(edata["items"]) == 1
+    assert edata["items"][0]["posterDataUrl"].startswith("data:image/png;base64,")
+    assert len(edata["items"][0]["topology"]["edges"]) == 2
+
+
+@pytest.mark.django_db
+def test_vendored_mujoco_assets_and_network_viz_dag(client):
+    from pathlib import Path
+    import re
+    import tempfile
+
+    # 1. Bundled frontend & vendored MuJoCo WASM assets serve cleanly with proper MIME types
+    asset_checks = [
+        ("/assets/cppn_core.js", "javascript"),
+        ("/assets/sim_worker.js", "javascript"),
+        ("/assets/cheetah_renderer.js", "javascript"),
+        ("/assets/mujoco_gl.js", "javascript"),
+        ("/assets/network_viz.js", "javascript"),
+        ("/assets/half_cheetah.xml", "xml"),
+        ("/assets/vendor/mujoco/mujoco.js", "javascript"),
+        ("/assets/vendor/mujoco/mujoco.wasm", "wasm"),
+    ]
+    for url, kind in asset_checks:
+        resp = client.get(url)
+        assert resp.status_code == 200, f"{url} returned {resp.status_code}"
+        ctype = resp["Content-Type"].lower()
+        assert kind in ctype, f"{url} unexpected Content-Type {ctype}"
+    assert client.get("/assets/../settings.py").status_code == 404
+
+    # 2. Index template exposes local MuJoCo WASM URL, 3D GL canvas, Execution toggle, & Network Inspector
+    page_html = client.get("/").content.decode("utf-8")
+    assert "/assets/vendor/mujoco/mujoco.js" in page_html
+    assert "/assets/cppn_core.js" in page_html
+    assert "/assets/mujoco_gl.js" in page_html
+    assert "/assets/network_viz.js" in page_html
+    assert 'id="sim-mode-bar"' in page_html
+    assert 'id="crowd-trust-pill"' in page_html
+    assert 'id="det-crowd-config"' in page_html
+    assert 'bottom: 0;' in page_html and 'position: fixed;' in page_html
+    assert 'id="fs-view-tabs"' in page_html
+    assert 'id="fs-network-panel"' in page_html
+    assert 'id="fs-gl-canvas"' in page_html
+    assert 'value="halfcheetah"' in page_html and 'value="external"' in page_html
+
+    # 3. Verify all JS assets + inline <script> syntax cleanly under Node
+    pkg_dir = Path(__file__).resolve().parent.parent / "direct_evolution_together"
+    for fname in ("cppn_core.js", "sim_worker.js", "cheetah_renderer.js", "mujoco_gl.js", "network_viz.js"):
+        subprocess.run(["node", "--check", str(pkg_dir / "frontend" / fname)], check=True)
+
+    html_raw = (pkg_dir / "templates" / "direct_evolution_together" / "index.html").read_text()
+    inline_js = html_raw.split("<script>\n", 1)[1].rsplit("</script>", 1)[0]
+    inline_js = re.sub(r"\{\{[^}]+\}\}", "template_val", inline_js)
+    with tempfile.NamedTemporaryFile(suffix=".js", delete=False, mode="w") as tf:
+        tf.write(inline_js)
+        tmp_js = tf.name
+    try:
+        subprocess.run(["node", "--check", tmp_js], check=True)
+    finally:
+        Path(tmp_js).unlink(missing_ok=True)
+
+    # 4. Verify DetNetworkViz handles HyperNEAT substrates, CPPN graphs, and arbitrary NEAT DAGs + cycles
+    nv_path = str(pkg_dir / "frontend" / "network_viz.js")
+    dag_check = f"""
+const nv = require({json.dumps(nv_path)});
+const neat = {{
+  nodes: [
+    {{ id: "in0", kind: "sensor", label: "z" }},
+    {{ id: "in1", kind: "bias", label: "1" }},
+    {{ id: "h1", kind: "hidden", activation: "sin", bias: 0.2 }},
+    {{ id: "h2", kind: "hidden", activation: "gauss", bias: -0.1 }},
+    {{ id: "out0", kind: "output", activation: "tanh", bias: 0.0 }}
+  ],
+  edges: [
+    {{ from: "in0", to: "h1", weight: 1.5, enabled: true }},
+    {{ from: "h1", to: "h2", weight: -0.7, enabled: true }},
+    {{ from: "in0", to: "out0", weight: 0.4, enabled: true }},
+    {{ from: "h2", to: "out0", weight: 1.2, enabled: true }},
+    {{ from: "h2", to: "h1", weight: -0.5, enabled: true }}
+  ]
+}};
+const g = nv.buildNeatDagGraph(neat, {{ obsLabels: ["z", "1"], actionLabels: ["act"] }});
+const byId = Object.fromEntries(g.nodes.map(n => [n.id, n]));
+const rec = g.edges.filter(e => e.recurrent);
+console.log(JSON.stringify({{
+  dims: g.dims,
+  layers: {{ in0: byId.in0.layer, h1: byId.h1.layer, h2: byId.h2.layer, out0: byId.out0.layer }},
+  recurrentCount: rec.length,
+  matrixShape: [g.matrices[0].dIn, g.matrices[0].dOut],
+}}));
+"""
+    dag_res = json.loads(subprocess.check_output(["node", "-e", dag_check], text=True))
+    assert dag_res["layers"]["in0"] == 0
+    assert dag_res["layers"]["h1"] < dag_res["layers"]["h2"] < dag_res["layers"]["out0"]
+    assert dag_res["recurrentCount"] == 1
+    assert dag_res["matrixShape"] == [5, 5]
+
+
+@pytest.mark.django_db
+def test_centralized_config_client_lock_and_crowd_trust(client, monkeypatch, tmp_path):
+    from django.test import Client
+    from direct_evolution_together.config import reload_config
+    from direct_evolution_together.environments import get_task_spec
+    from direct_evolution_together.models import ContributorTrust, ExternalEvalResult
+
+    # 1. Inspect default /api/config/ payload
+    cfg_resp = client.get("/api/config/")
+    assert cfg_resp.status_code == 200
+    cdata = cfg_resp.json()
+    assert cdata["ok"] is True
+    assert cdata["trust"]["quorum"] == 2
+    assert cdata["environments"]["halfcheetah"]["execution_policy"] == "client_locked"
+    assert cdata["environments"]["halfcheetah"]["simModes"] == ["client"]
+    assert cdata["environments"]["halfcheetah"]["crowd_contribute"] is True
+    assert cdata["environments"]["external"]["enabled"] is True
+
+    # 2. Centralized JSON file + env overrides via reload_config()
+    cfg_file = tmp_path / "det_config.json"
+    cfg_file.write_text(
+        json.dumps({
+            "trust": {"quorum": 3, "min_trusted_reputation": 0.4},
+            "environments": {
+                "halfcheetah": {"default_pop_size": 12},
+                "external": {"enabled": False},
+            },
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DET_CONFIG_FILE", str(cfg_file))
+    monkeypatch.setenv("DET_CROWD_QUORUM", "2")
+    monkeypatch.setenv("DET_EXECUTION_POLICY_HALFCHEETAH", "client_preferred")
+    try:
+        reload_config()
+        hc = get_task_spec("halfcheetah")
+        ext = get_task_spec("external")
+        assert hc.default_pop_size == 12
+        assert hc.execution_policy == "client_preferred"
+        assert hc.sim_modes == ("client", "server")
+        assert ext.enabled is False
+
+        cfg_override = client.get("/api/config/").json()
+        assert cfg_override["trust"]["quorum"] == 2
+        assert cfg_override["environments"]["external"]["enabled"] is False
+    finally:
+        monkeypatch.delenv("DET_CONFIG_FILE", raising=False)
+        monkeypatch.delenv("DET_CROWD_QUORUM", raising=False)
+        monkeypatch.delenv("DET_EXECUTION_POLICY_HALFCHEETAH", raising=False)
+        reload_config()
+
+    # 3. Crowd consensus + reputation reward/penalty + Byzantine quarantine across 3 sessions
+    peer1, peer2, peer3 = Client(), Client(), Client()
+    for p in (peer1, peer2, peer3):
+        init = p.get("/api/rooms/lobby/crowd/evals/?goal=HalfCheetah&generation=0")
+        assert init.status_code == 200 and len(init.json()["contributorId"]) >= 8
+
+    def _submit(peer, gh, val):
+        return peer.post(
+            "/api/rooms/lobby/crowd/results/",
+            data=json.dumps({
+                "goal": "HalfCheetah",
+                "generation": 0,
+                "results": [{
+                    "hash": gh,
+                    "summary": {
+                        "primaryValue": val,
+                        "meanDistance": val,
+                        "meanUpright": 0.72,
+                        "primaryDisplay": f"+{val:.1f}m",
+                        "badgeText": f"+{val:.1f}m",
+                        "tier": "mid",
+                    },
+                }],
+            }),
+            content_type="application/json",
+        )
+
+    gh1 = "aa11bb22cc33dd44ee55"
+    r1 = _submit(peer1, gh1, 4.50).json()
+    assert r1["verifiedCount"] == 0
+    assert r1["items"][0]["trust"]["status"] == "pending"
+
+    # Peer 2 submits Byzantine outlier (+99.9m) -> disputed
+    r2 = _submit(peer2, gh1, 99.90).json()
+    assert r2["verifiedCount"] == 0
+    assert r2["items"][0]["trust"]["status"] == "disputed"
+
+    # Peer 3 agrees with Peer 1 (+4.54m) -> quorum reached (median = 4.52), rewards Peer1/Peer3, penalizes Peer2
+    r3 = _submit(peer3, gh1, 4.54).json()
+    assert r3["verifiedCount"] == 1
+    assert r3["items"][0]["trust"]["status"] == "verified"
+    assert abs(r3["items"][0]["summary"]["primaryValue"] - 4.52) < 1e-3
+    assert r3["contributorReputation"] > 0.80
+
+    # Check trusted_only=1 returns only verified consensus
+    trusted = peer1.get("/api/rooms/lobby/crowd/evals/?goal=HalfCheetah&generation=0&trusted_only=1").json()
+    assert len(trusted["items"]) == 1 and trusted["items"][0]["hash"] == gh1
+
+    # Two more outlier submissions quarantine Peer2 (0.80 - 0.18*3 = 0.26 < 0.35)
+    for gh_k in ("bb11cc22dd33ee44ff55", "cc11dd22ee33ff44aa55"):
+        _submit(peer1, gh_k, 3.0)
+        _submit(peer2, gh_k, 88.0)
+        _submit(peer3, gh_k, 3.04)
+
+    peer2_check = _submit(peer2, "dd11ee22ff33aa44bb55", 55.0).json()
+    assert peer2_check["quarantined"] is True
+    assert peer2_check["accepted"] == 0
+    assert not ExternalEvalResult.objects.filter(room="lobby", genome_hash="dd11ee22ff33aa44bb55").exists()
+    assert ContributorTrust.objects.filter(room="lobby", quarantined=True).count() == 1
+
+
 
 

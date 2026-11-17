@@ -41,7 +41,8 @@
         flex-direction: column;
       }
       header {
-        position: relative;
+        position: sticky;
+        top: 0;
         z-index: 85;
         min-height: 48px;
         display: flex;
@@ -172,14 +173,20 @@
         border-color: var(--border-strong);
       }
       .site-footer {
-        max-width: 1400px;
-        margin: 0.2rem auto 0.9rem;
-        padding: 0.3rem 1.25rem;
+        margin: 0.2rem 330px 0.9rem 0;
+        padding: 0.3rem max(1rem, calc((100vw - 330px - 1160px) / 2));
         display: flex;
         align-items: center;
         justify-content: flex-end;
         opacity: 0.14;
         transition: opacity 0.2s ease;
+      }
+      @media (max-width: 860px) {
+        .site-footer {
+          max-width: 1400px;
+          margin: 0.2rem auto 0.9rem;
+          padding: 0.3rem 1.25rem;
+        }
       }
       .site-footer:hover,
       .site-footer:focus-within {
@@ -239,19 +246,23 @@
       main {
         flex: 1;
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 330px;
+        grid-template-columns: minmax(0, 1fr);
         align-items: start;
         gap: 1rem;
-        max-width: 1400px;
-        width: 100%;
-        margin: 1rem auto;
-        padding: 0 1rem;
+        width: auto;
+        margin: 1rem 330px 1rem 0;
+        padding-left: max(1rem, calc((100% - 1160px) / 2));
+        padding-right: max(1rem, calc((100% - 1160px) / 2));
       }
       main > * { min-width: 0; }
       @media (max-width: 860px) {
+        header { position: relative; }
         main {
           grid-template-columns: minmax(0, 1fr);
+          width: 100%;
+          max-width: 1400px;
           margin: 1rem auto;
+          padding: 0 1rem;
         }
       }
       .card {
@@ -774,6 +785,13 @@
         color: var(--gold);
         border-color: rgba(245, 196, 81, 0.45);
       }
+      .sim-badge.is-crowd-verified {
+        box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.25);
+      }
+      .sim-badge.is-crowd-disputed {
+        color: var(--gold);
+        border-color: rgba(245, 196, 81, 0.55);
+      }
       .sim-slot-badge {
         position: absolute;
         top: 8px;
@@ -1114,11 +1132,31 @@
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
       }
       .rail {
-        height: 552px;
+        position: fixed;
+        top: var(--header-h, 49px);
+        right: 0;
+        bottom: 0;
+        width: 330px;
+        height: auto;
+        z-index: 55;
         overflow: hidden;
+        border-radius: 0;
+        border-top: none;
+        border-right: none;
+        border-bottom: none;
       }
       @media (max-width: 860px) {
-        .rail { height: 420px; }
+        .rail {
+          position: static;
+          top: auto;
+          right: auto;
+          bottom: auto;
+          width: auto;
+          height: 420px;
+          z-index: auto;
+          border-radius: 12px;
+          border: 1px solid var(--border);
+        }
       }
       .rail-section {
         padding: 0.7rem 0.9rem;
@@ -2100,6 +2138,436 @@
         .room-field input,
         .room-field textarea { font-size: 16px; }
       }
+      /* Execution mode & External Worker banner */
+      .sim-mode-bar {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.16rem 0.25rem;
+        border-radius: 999px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        font-family: var(--mono);
+        font-size: 0.68rem;
+      }
+      .sim-mode-bar[hidden] { display: none; }
+      .sim-mode-label {
+        color: var(--dim);
+        padding-left: 0.35rem;
+        font-size: 0.65rem;
+      }
+      .sim-mode-btn {
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.67rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: background 0.14s ease, color 0.14s ease;
+      }
+      .sim-mode-btn:hover { color: var(--text); }
+      .sim-mode-btn.active {
+        background: rgba(52, 211, 153, 0.16);
+        color: #6ee7b7;
+      }
+      .sim-mode-btn.active[data-mode="server"] {
+        background: rgba(56, 189, 248, 0.16);
+        color: #7dd3fc;
+      }
+      .sim-engine-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #34d399;
+        margin-right: 0.25rem;
+        flex-shrink: 0;
+      }
+      .sim-engine-dot.is-fallback { background: #f5c451; }
+      .sim-engine-dot.is-server { background: #38bdf8; }
+      .sim-mode-bar.is-locked {
+        border-color: rgba(52, 211, 153, 0.3);
+      }
+      .crowd-trust-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        font-family: var(--mono);
+        font-size: 0.63rem;
+        padding: 0.14rem 0.45rem;
+        border-radius: 999px;
+        border: 1px solid rgba(52, 211, 153, 0.28);
+        background: rgba(52, 211, 153, 0.08);
+        color: #a7f3d0;
+        white-space: nowrap;
+      }
+      .crowd-trust-pill[hidden] { display: none; }
+      .crowd-trust-pill.is-pending {
+        border-color: var(--border);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--muted);
+      }
+      .crowd-trust-pill.is-quarantined {
+        border-color: rgba(251, 113, 133, 0.45);
+        background: rgba(251, 113, 133, 0.12);
+        color: #fda4af;
+      }
+
+      .worker-banner {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.65rem;
+        padding: 0.65rem 0.85rem;
+        border-radius: 10px;
+        background: rgba(56, 189, 248, 0.06);
+        border: 1px solid rgba(56, 189, 248, 0.24);
+        font-size: 0.78rem;
+      }
+      .worker-banner[hidden] { display: none; }
+      .worker-banner-info {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        min-width: 0;
+      }
+      .worker-banner-title {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        font-weight: 600;
+        color: #e0f2fe;
+      }
+      .worker-banner-code {
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        color: var(--muted);
+        word-break: break-all;
+      }
+      .worker-banner-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.45rem;
+      }
+      .worker-token-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        padding: 0.28rem 0.55rem;
+        border-radius: 7px;
+        background: #09090b;
+        border: 1px solid var(--border);
+        color: #fde68a;
+      }
+
+      /* Fullscreen Network Visualizer & Split Live Layout */
+      .fs-dialog.is-wide {
+        width: min(1180px, calc(100vw - 1.5rem));
+        max-width: 1180px;
+      }
+      .fs-view-tabs {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.2rem;
+        padding: 0.16rem;
+        border-radius: 8px;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+      }
+      .fs-view-tabs[hidden] { display: none; }
+      .fs-view-tab {
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        padding: 0.26rem 0.6rem;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.14s ease, color 0.14s ease;
+      }
+      .fs-view-tab:hover { color: var(--text); }
+      .fs-view-tab.active {
+        background: rgba(255, 255, 255, 0.09);
+        color: var(--text);
+      }
+      .fs-stage.has-split {
+        display: flex;
+        align-items: stretch;
+        justify-content: center;
+        gap: 0.75rem;
+      }
+      .fs-canvas-pane {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 0;
+        position: relative;
+      }
+      .fs-canvas-pane[hidden] { display: none; }
+      .fs-stage.has-split .fs-canvas-pane {
+        flex: 0 0 min(420px, 40%);
+        align-self: center;
+      }
+      .fs-stage.has-split #fs-canvas,
+      .fs-stage.has-split #fs-gl-canvas {
+        width: 100%;
+        height: auto;
+        max-height: 440px;
+      }
+      #fs-gl-canvas {
+        max-width: 100%;
+        border-radius: 10px;
+        background: #09090b;
+        border: 1px solid var(--border);
+        cursor: grab;
+        display: block;
+      }
+      #fs-gl-canvas:active { cursor: grabbing; }
+      #fs-canvas[hidden],
+      #fs-gl-canvas[hidden] { display: none; }
+      .fs-gl-hint {
+        position: absolute;
+        top: 8px;
+        left: 10px;
+        padding: 0.14rem 0.45rem;
+        border-radius: 999px;
+        background: rgba(9, 9, 11, 0.78);
+        border: 1px solid rgba(52, 211, 153, 0.35);
+        font-family: var(--mono);
+        font-size: 0.62rem;
+        color: #6ee7b7;
+        pointer-events: none;
+      }
+      .fs-gl-hint[hidden] { display: none; }
+      .fs-network-panel {
+        flex: 1 1 540px;
+        min-width: 0;
+        min-height: 360px;
+        display: flex;
+        flex-direction: column;
+      }
+      .fs-network-panel[hidden] { display: none; }
+
+      .det-nv-root {
+        display: flex;
+        flex-direction: column;
+        gap: 0.45rem;
+        width: 100%;
+        height: 100%;
+        min-height: 350px;
+        background: #0b0b0f;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 0.55rem 0.65rem;
+      }
+      .det-nv-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.45rem;
+      }
+      .det-nv-tabs {
+        display: inline-flex;
+        gap: 0.2rem;
+        padding: 0.15rem;
+        border-radius: 7px;
+        background: #141418;
+        border: 1px solid var(--border);
+      }
+      .det-nv-tab {
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        padding: 0.24rem 0.55rem;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+      .det-nv-tab:hover { color: var(--text); }
+      .det-nv-tab.active {
+        background: rgba(56, 189, 248, 0.16);
+        color: #bae6fd;
+      }
+      .det-nv-controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.45rem;
+      }
+      .det-nv-slider-wrap {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--muted);
+      }
+      .det-nv-slider-wrap[hidden] { display: none; }
+      .det-nv-slider {
+        width: 82px;
+        accent-color: #34d399;
+        cursor: pointer;
+      }
+      .det-nv-ctrl-val {
+        min-width: 2.3rem;
+        color: #e4e4e7;
+      }
+      .det-nv-chip-btn {
+        border: 1px solid var(--border);
+        background: #141418;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        padding: 0.22rem 0.5rem;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      .det-nv-chip-btn:hover { color: var(--text); border-color: var(--border-strong); }
+      .det-nv-chip-btn.active {
+        color: #fde68a;
+        border-color: rgba(245, 196, 81, 0.45);
+        background: rgba(245, 196, 81, 0.1);
+      }
+      .det-nv-meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.32rem;
+        font-family: var(--mono);
+        font-size: 0.66rem;
+      }
+      .det-nv-pill {
+        padding: 0.12rem 0.44rem;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border);
+        color: var(--muted);
+      }
+      .det-nv-act-chip {
+        padding: 0.1rem 0.4rem;
+        border-radius: 999px;
+        border: 1px solid;
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .det-nv-stage {
+        position: relative;
+        flex: 1 1 auto;
+        min-height: 250px;
+        max-height: 440px;
+        overflow: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .det-nv-svg-wrap {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .det-nv-svg {
+        width: 100%;
+        height: auto;
+        max-height: 430px;
+        display: block;
+      }
+      .det-nv-cppn-preview {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+        padding: 4px;
+        border-radius: 6px;
+        background: rgba(15, 15, 18, 0.88);
+        border: 1px solid var(--border);
+        pointer-events: none;
+      }
+      .det-nv-cppn-preview canvas {
+        width: 58px;
+        height: 58px;
+        border-radius: 3px;
+        image-rendering: pixelated;
+        display: block;
+      }
+      .det-nv-cppn-cap {
+        font-family: var(--mono);
+        font-size: 0.56rem;
+        color: var(--dim);
+      }
+      .det-nv-matrices {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: center;
+        gap: 0.75rem;
+        width: 100%;
+        padding: 0.35rem;
+      }
+      .det-nv-matrix-card {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+        padding: 0.45rem;
+        border-radius: 8px;
+        background: #111116;
+        border: 1px solid var(--border);
+      }
+      .det-nv-matrix-title {
+        font-family: var(--mono);
+        font-size: 0.68rem;
+        color: var(--muted);
+      }
+      .det-nv-matrix-canvas {
+        max-width: 100%;
+        height: auto;
+        border-radius: 4px;
+        cursor: crosshair;
+      }
+      .det-nv-detail {
+        min-height: 1.45rem;
+        padding: 0.25rem 0.5rem;
+        border-radius: 6px;
+        background: #141418;
+        border: 1px solid var(--border);
+        font-family: var(--mono);
+        font-size: 0.69rem;
+        color: #d4d4d8;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .det-nv-empty {
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        color: var(--dim);
+        padding: 2rem;
+      }
+      .vote-btn.net-btn,
+      .vote-btn.fs-btn,
+      .vote-btn.dl-btn {
+        padding: 2px 3.5px;
+      }
+      @media (max-width: 820px) {
+        .fs-stage.has-split {
+          flex-direction: column;
+        }
+        .fs-stage.has-split .fs-canvas-pane {
+          flex: 0 0 auto;
+        }
+      }
     </style>
   </head>
   <body class="is-population-loading">
@@ -2187,11 +2655,13 @@
             </ol>
             <form id="empty-goal-form" class="private-empty-form">
               <div class="private-goal-row">
-                <select id="empty-task-select" class="task-select" style="flex:0 0 185px;" aria-label="Environment">
+                <select id="empty-task-select" class="task-select" style="flex:0 0 215px;" aria-label="Environment">
                   <option value="image" {% if initial_task == "image" %}selected{% endif %}>Image (Picbreeder)</option>
+                  <option value="halfcheetah" {% if initial_task == "halfcheetah" %}selected{% endif %}>HalfCheetah (MuJoCo Gait)</option>
                   <option value="cartpole" {% if initial_task == "cartpole" %}selected{% endif %}>CartPole (Control)</option>
+                  <option value="external" {% if initial_task == "external" %}selected{% endif %}>Custom Worker Script</option>
                 </select>
-                <input id="empty-goal-input" type="text" placeholder="Goal e.g. Neon Orchid, CartPole..." maxlength="32" />
+                <input id="empty-goal-input" type="text" placeholder="Goal e.g. Neon Orchid, HalfCheetah..." maxlength="32" />
                 <button type="submit">Start Goal</button>
               </div>
               <div class="ga-params-panel">
@@ -2276,6 +2746,13 @@
                 <button id="tab-unvoted" type="button" class="filter-tab" data-filter="unvoted">Needs vote <span id="tab-unvoted-count" class="tab-cnt"><span class="skel-bar" style="--skel-w: 13px; --skel-h: 8px;" aria-hidden="true"></span></span></button>
               </div>
               <div class="grid-toolbar-right">
+                <div id="sim-mode-bar" class="sim-mode-bar" hidden title="Execution runtime and crowd consensus status">
+                  <span id="sim-engine-dot" class="sim-engine-dot"></span>
+                  <span id="sim-engine-label" class="sim-mode-label">Sim</span>
+                  <button id="sim-mode-client-btn" type="button" class="sim-mode-btn active" data-mode="client">Client</button>
+                  <button id="sim-mode-server-btn" type="button" class="sim-mode-btn" data-mode="server">Server</button>
+                  <span id="crowd-trust-pill" class="crowd-trust-pill is-pending" hidden></span>
+                </div>
                 <div id="sort-tabs" class="filter-tabs" role="tablist" aria-label="Sort candidates" hidden>
                   <button id="sort-steps-btn" type="button" class="filter-tab active" data-sort="steps">Steps &darr;</button>
                   <button id="sort-slot-btn" type="button" class="filter-tab" data-sort="slot">Slot #</button>
@@ -2284,6 +2761,20 @@
               </div>
             </div>
 
+            <div id="worker-banner" class="worker-banner" hidden>
+              <div class="worker-banner-info">
+                <div class="worker-banner-title">
+                  <span>External Simulation Worker</span>
+                  <span id="worker-status-pill" class="det-nv-pill">0 evaluated</span>
+                </div>
+                <div id="worker-cmd-text" class="worker-banner-code"></div>
+              </div>
+              <div class="worker-banner-actions">
+                <span id="worker-token-pill" class="worker-token-row" hidden>token: <code id="worker-token-val"></code></span>
+                <button id="worker-dl-script-btn" type="button" class="ghost">Download worker.py</button>
+                <button id="worker-copy-cmd-btn" type="button" class="ghost">Copy Command</button>
+              </div>
+            </div>
             <div id="genome-grid" class="grid"></div>
 
             {% if is_private %}
@@ -2396,12 +2887,17 @@
     </div>
 
     <div id="fullscreen-modal" class="fs-overlay" hidden>
-      <div class="fs-dialog" role="dialog" aria-modal="true" aria-label="Full screen individual view">
+      <div id="fs-dialog" class="fs-dialog" role="dialog" aria-modal="true" aria-label="Full screen individual view">
         <div class="fs-head">
           <div class="fs-title-wrap">
             <span id="fs-title">Individual</span>
             <span id="fs-sub" class="fs-sub">gen 0</span>
             <span id="fs-score" class="score-badge">0</span>
+            <div id="fs-view-tabs" class="fs-view-tabs" role="tablist" aria-label="Inspector view">
+              <button id="fs-view-sim-btn" type="button" class="fs-view-tab active" data-fs-view="sim">Simulation</button>
+              <button id="fs-view-net-btn" type="button" class="fs-view-tab" data-fs-view="net">Network</button>
+              <button id="fs-view-split-btn" type="button" class="fs-view-tab" data-fs-view="split">Split Live</button>
+            </div>
           </div>
           <div class="fs-actions">
             <button id="fs-up-btn" type="button" class="vote-btn up-btn" aria-label="Like">
@@ -2415,9 +2911,14 @@
             <button id="fs-close-btn" type="button" class="ghost" aria-label="Close full screen">Close</button>
           </div>
         </div>
-        <div class="fs-stage">
+        <div id="fs-stage" class="fs-stage">
           <button id="fs-prev-btn" type="button" class="fs-nav-btn" aria-label="Previous individual">&lsaquo;</button>
-          <canvas id="fs-canvas" width="512" height="512"></canvas>
+          <div id="fs-canvas-pane" class="fs-canvas-pane">
+            <canvas id="fs-canvas" width="512" height="512"></canvas>
+            <canvas id="fs-gl-canvas" width="512" height="340" hidden></canvas>
+            <span id="fs-gl-hint" class="fs-gl-hint" hidden>3D MuJoCo · drag to orbit · scroll to zoom</span>
+          </div>
+          <div id="fs-network-panel" class="fs-network-panel" hidden></div>
           <button id="fs-next-btn" type="button" class="fs-nav-btn" aria-label="Next individual">&rsaquo;</button>
         </div>
         <div id="fs-sim-bar" class="fs-sim-bar" hidden>
@@ -2430,8 +2931,10 @@
               <option value="2">Ep 3 (s=2)</option>
               <option value="random">Random seed</option>
             </select>
-            <button id="fs-sim-nudge-l" type="button" class="ghost" title="Apply leftward perturbation">&larr; Nudge</button>
-            <button id="fs-sim-nudge-r" type="button" class="ghost" title="Apply rightward perturbation">Nudge &rarr;</button>
+            <span id="fs-sim-nudges" class="fs-sim-controls" style="gap:0.35rem;">
+              <button id="fs-sim-nudge-l" type="button" class="ghost" title="Apply leftward perturbation">&larr; Nudge</button>
+              <button id="fs-sim-nudge-r" type="button" class="ghost" title="Apply rightward perturbation">Nudge &rarr;</button>
+            </span>
             <button id="fs-sim-heldout-btn" type="button" class="ghost" title="Test 10 unseen initial conditions">Test 10 Held-Out</button>
             <button id="fs-sim-video-btn" type="button" class="ghost" title="Render &amp; fetch MP4 on demand from server">Render .mp4</button>
           </div>
@@ -2462,12 +2965,18 @@
           <span>Environment</span>
           <select id="new-room-task" class="task-select">
             <option value="image">Image (Picbreeder CPPN)</option>
+            <option value="halfcheetah">HalfCheetah (MuJoCo Gait · HyperNEAT)</option>
             <option value="cartpole">CartPole (Continuous Control · HyperNEAT)</option>
+            <option value="external">Custom Researcher Script (External Worker)</option>
           </select>
         </label>
         <label class="room-field">
           <span>Description <span class="room-field-hint">optional</span></span>
           <textarea id="new-room-description" maxlength="280" rows="2" placeholder="What is this room exploring?"></textarea>
+        </label>
+        <label class="room-field" style="flex-direction:row;align-items:center;gap:0.5rem;cursor:pointer;">
+          <input id="new-room-enable-worker" type="checkbox" style="width:auto;accent-color:#38bdf8;" />
+          <span>Enable external simulation worker API token <span class="room-field-hint">for custom local Python/MuJoCo evaluators</span></span>
         </label>
 
         <div class="seed-dish-panel">
@@ -2537,6 +3046,14 @@
           </div>
         </details>
 
+        <div id="worker-created-panel" class="worker-banner" hidden style="flex-direction:column;align-items:stretch;">
+          <div class="worker-banner-title">Room Ready · Save Your Worker Token (shown once)</div>
+          <div class="worker-banner-code" id="worker-created-cmd"></div>
+          <div class="worker-banner-actions">
+            <button id="worker-created-dl-btn" type="button" class="ghost">Download worker.py</button>
+            <button id="worker-created-enter-btn" type="button">Enter Room &rarr;</button>
+          </div>
+        </div>
         <div id="new-room-error" class="room-modal-error" hidden></div>
         <div class="room-modal-actions">
           <button id="new-room-cancel" type="button" class="ghost">Cancel</button>
@@ -2561,6 +3078,13 @@
     {{ initial_elite_frac|default:"0.20"|json_script:"det-initial-elite" }}
     {{ initial_crossover_rate|default:"0.75"|json_script:"det-initial-crossover" }}
     {{ task_specs|json_script:"det-task-specs" }}
+    {{ crowd_config|json_script:"det-crowd-config" }}
+    {{ mujoco_wasm_url|default:""|json_script:"det-mujoco-wasm-url" }}
+    {{ room_has_worker|default:False|json_script:"det-room-has-worker" }}
+    <script src="{{ base_path }}/assets/cppn_core.js"></script>
+    <script src="{{ base_path }}/assets/cheetah_renderer.js"></script>
+    <script src="{{ base_path }}/assets/mujoco_gl.js"></script>
+    <script src="{{ base_path }}/assets/network_viz.js"></script>
     <script>
       const basePath = JSON.parse(document.getElementById("det-base-path").textContent) || "";
       const wsViaProxy = Boolean(JSON.parse(document.getElementById("det-ws-via-proxy").textContent));
@@ -2571,6 +3095,11 @@
       const initialGoal = JSON.parse(document.getElementById("det-initial-goal").textContent);
       const initialTask = JSON.parse(document.getElementById("det-initial-task").textContent) || "image";
       const taskSpecs = JSON.parse(document.getElementById("det-task-specs").textContent) || {};
+      const crowdConfig = JSON.parse(document.getElementById("det-crowd-config")?.textContent || "{}") || {};
+      const mujocoWasmUrl = JSON.parse(document.getElementById("det-mujoco-wasm-url").textContent) || "";
+      const roomHasWorker = Boolean(JSON.parse(document.getElementById("det-room-has-worker").textContent));
+      let simExecutionMode = localStorage.getItem("det_sim_mode") === "server" ? "server" : "client";
+      let simEngineStatus = simExecutionMode === "server" ? "server" : "client-ready";
       const initialPop = Math.max(3, Math.min(64, Number(JSON.parse(document.getElementById("det-initial-pop").textContent)) || 30));
       const initialMinVotes = Math.max(1, Math.min(256, Number(JSON.parse(document.getElementById("det-initial-min-votes").textContent)) || 20));
       const initialMinVotesExplicit = Boolean(JSON.parse(document.getElementById("det-initial-min-votes-explicit").textContent));
@@ -2589,6 +3118,19 @@
       const supportsGzip = typeof DecompressionStream === "function";
       const coordCache = new Map();
 
+      function syncHeaderHeightVar() {
+        const hdr = document.querySelector("header");
+        if (!hdr) return;
+        const h = Math.max(48, Math.round(hdr.getBoundingClientRect().height));
+        document.documentElement.style.setProperty("--header-h", `${h}px`);
+      }
+      syncHeaderHeightVar();
+      if (typeof ResizeObserver === "function") {
+        const hdrEl = document.querySelector("header");
+        if (hdrEl) new ResizeObserver(syncHeaderHeightVar).observe(hdrEl);
+      }
+      window.addEventListener("resize", syncHeaderHeightVar);
+
       function getTaskSpec(taskId) {
         return taskSpecs[taskId] || taskSpecs.image || {
           task: "image",
@@ -2599,6 +3141,28 @@
           defaultMinVotes: 0,
         };
       }
+
+      function populateTaskSelects() {
+        const order = ["image", "halfcheetah", "cartpole", "external"];
+        const isTaskEnabled = (k) => taskSpecs[k] && taskSpecs[k].enabled !== false;
+        let keys = order.filter(isTaskEnabled).concat(Object.keys(taskSpecs).filter((k) => !order.includes(k) && isTaskEnabled(k)));
+        if (!keys.length && taskSpecs.image) keys = ["image"];
+        if (!keys.length) return;
+        ["empty-task-select", "new-room-task"].forEach((id) => {
+          const sel = document.getElementById(id);
+          if (!sel) return;
+          const cur = sel.value;
+          sel.replaceChildren();
+          for (const k of keys) {
+            const opt = document.createElement("option");
+            opt.value = k;
+            opt.textContent = taskSpecs[k].label || k;
+            sel.appendChild(opt);
+          }
+          if (cur && keys.includes(cur)) sel.value = cur;
+        });
+      }
+      populateTaskSelects();
 
       function goalTaskId(goal) {
         return (goal && goal.task && taskSpecs[goal.task]) ? goal.task : "image";
@@ -3182,6 +3746,668 @@
         return summary;
       }
 
+      const simModeBarEl = document.getElementById("sim-mode-bar");
+      const simEngineDotEl = document.getElementById("sim-engine-dot");
+      const simEngineLabelEl = document.getElementById("sim-engine-label");
+      const simModeClientBtn = document.getElementById("sim-mode-client-btn");
+      const simModeServerBtn = document.getElementById("sim-mode-server-btn");
+      const crowdTrustPillEl = document.getElementById("crowd-trust-pill");
+      const workerBannerEl = document.getElementById("worker-banner");
+      const workerStatusPillEl = document.getElementById("worker-status-pill");
+      const workerCmdTextEl = document.getElementById("worker-cmd-text");
+      const workerTokenPillEl = document.getElementById("worker-token-pill");
+      const workerTokenValEl = document.getElementById("worker-token-val");
+      const workerDlScriptBtn = document.getElementById("worker-dl-script-btn");
+      const workerCopyCmdBtn = document.getElementById("worker-copy-cmd-btn");
+
+      const simResultCache = new Map(); // `${taskId}:${fp}` -> { fp, summary, primaryRollout, engine }
+      const externalEvalCache = new Map(); // `${goal}:${gen}:${shaOrFp}` -> { hash, summary, posterDataUrl, topology }
+      const crowdEvalCache = new Map(); // `${goal}:${gen}:${sha}` -> { hash, summary, trust }
+      const crowdSubmittedKeys = new Set();
+      let crowdContributorState = {
+        reputation: typeof crowdConfig.initialReputation === "number" ? crowdConfig.initialReputation : 0.8,
+        quarantined: false,
+      };
+      const genomeShaCache = new WeakMap();
+
+      function getKnownGenomeSha(genome) {
+        if (!genome) return "";
+        if (genome.hash) return String(genome.hash);
+        return genomeShaCache.get(genome) || "";
+      }
+
+      async function ensureGenomeSha256(genome) {
+        if (!genome) return "";
+        const cached = getKnownGenomeSha(genome);
+        if (cached) return cached;
+        if (window.DetCppnCore && typeof window.DetCppnCore.genomeSha256Hex === "function") {
+          const hex = await window.DetCppnCore.genomeSha256Hex(genome);
+          if (hex) genomeShaCache.set(genome, hex);
+          return hex;
+        }
+        return genomeFingerprint(genome);
+      }
+
+      function getExternalEvalEntry(goalName, generation, genome) {
+        if (!genome) return null;
+        const sha = getKnownGenomeSha(genome);
+        if (sha) {
+          const hit = externalEvalCache.get(`${goalName}:${generation}:${sha}`);
+          if (hit) return hit;
+        }
+        return externalEvalCache.get(`${goalName}:${generation}:${genomeFingerprint(genome)}`) || null;
+      }
+
+      function decodePolicyForTask(genome, taskId) {
+        const spec = getTaskSpec(taskId);
+        const dims = [spec.obsDim || 4, ...(spec.hiddenDims || [8]), spec.actionDim || 1];
+        if (window.DetCppnCore && typeof window.DetCppnCore.decodeHyperNeatWeights === "function") {
+          return window.DetCppnCore.decodeHyperNeatWeights(genome, dims, spec.layerCoords || null).layers;
+        }
+        if (window.DetNetworkViz && typeof window.DetNetworkViz.decodeHyperNeatWeights === "function") {
+          return window.DetNetworkViz.decodeHyperNeatWeights(genome, dims, spec.layerCoords || null).layers;
+        }
+        return decodeHyperNeatWeights(genome, dims);
+      }
+
+      function forwardPolicyWithTrace(decoded, obs) {
+        if (window.DetCppnCore && typeof window.DetCppnCore.forwardPolicyWithTrace === "function") {
+          return window.DetCppnCore.forwardPolicyWithTrace(decoded, obs);
+        }
+        let h = obs;
+        const activations = [Array.from(obs)];
+        for (let l = 0; l < decoded.length; l++) {
+          const layer = decoded[l];
+          const next = new Float64Array(layer.dOut);
+          for (let j = 0; j < layer.dOut; j++) {
+            let z = layer.b[j];
+            for (let i = 0; i < layer.dIn; i++) {
+              z += h[i] * layer.w[i * layer.dOut + j];
+            }
+            next[j] = Math.tanh(z);
+          }
+          h = next;
+          activations.push(Array.from(next));
+        }
+        return { action: h, activations };
+      }
+
+      function getEffectiveSimMode(taskId) {
+        const spec = getTaskSpec(taskId);
+        const modes = Array.isArray(spec.simModes) && spec.simModes.length ? spec.simModes : ["client"];
+        if (modes.includes(simExecutionMode)) return simExecutionMode;
+        return spec.defaultSimMode || modes[0] || "client";
+      }
+
+      const HC_FRAME_OBS_SCALE = [0.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 5.0, 2.0, 5.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0];
+      function cheetahObsFromFrames(frames, stepIdx, dt = 0.05, freq = 2.0) {
+        const cur = frames[stepIdx] || frames[0] || [];
+        const prev = stepIdx > 0 ? (frames[stepIdx - 1] || cur) : cur;
+        const obs = new Array(21).fill(0);
+        // [rootz-0.7, pitch, 6 joints] normalized by HC_OBS_SCALE
+        obs[0] = (Number(cur[1] || 0) - 0.7) / HC_FRAME_OBS_SCALE[0];
+        for (let k = 1; k < 8; k++) obs[k] = Number(cur[k + 1] || 0) / HC_FRAME_OBS_SCALE[k];
+        // [vx, vz, omega_y, 6 joint vels] finite difference scaled identically to environments.py
+        const invDt = stepIdx > 0 ? 1.0 / Math.max(1e-4, dt) : 0.0;
+        for (let k = 0; k < 9; k++) obs[8 + k] = ((Number(cur[k] || 0) - Number(prev[k] || 0)) * invDt) / HC_FRAME_OBS_SCALE[8 + k];
+        const phase = 2.0 * Math.PI * freq * stepIdx * dt;
+        obs[17] = Math.sin(phase);
+        obs[18] = Math.cos(phase);
+        obs[19] = Math.sin(2.0 * phase);
+        obs[20] = Math.cos(2.0 * phase);
+        return obs;
+      }
+
+      function normalizeControlSummary(raw, taskId, seedCountHint = 2) {
+        if (!raw) return null;
+        const spec = getTaskSpec(taskId);
+        if (taskId === "cartpole") {
+          const maxSteps = spec.maxSteps || 500;
+          const perSeed = raw.stepsPerSeed || raw.perSeed || [];
+          const meanSteps = typeof raw.meanSteps === "number" ? raw.meanSteps : Number(raw.primaryValue || 0);
+          const minSteps = typeof raw.minSteps === "number" ? raw.minSteps : (perSeed.length ? Math.min(...perSeed) : meanSteps);
+          const solved = Boolean(raw.solved || minSteps >= 490);
+          return {
+            ...raw,
+            task: "cartpole",
+            perSeed,
+            stepsPerSeed: perSeed,
+            meanSteps,
+            minSteps,
+            meanAbsX: typeof raw.meanAbsX === "number" ? raw.meanAbsX : 0,
+            solved,
+            primaryValue: meanSteps,
+            primaryDisplay: raw.primaryDisplay || `${meanSteps}/${maxSteps}`,
+            badgeText: raw.badgeText || formatStepBadge(meanSteps, maxSteps),
+            tier: raw.tier !== undefined ? raw.tier : (solved ? "solved" : (meanSteps >= 150 ? "mid" : "")),
+          };
+        }
+        const meanDist = typeof raw.meanDistance === "number" ? raw.meanDistance : Number(raw.primaryValue || 0);
+        const solved = Boolean(raw.solved);
+        return {
+          ...raw,
+          task: taskId,
+          primaryValue: typeof raw.primaryValue === "number" ? raw.primaryValue : meanDist,
+          primaryDisplay: raw.primaryDisplay || `${meanDist >= 0 ? "+" : ""}${meanDist.toFixed(1)}m`,
+          badgeText: raw.badgeText || (taskId === "halfcheetah" ? `${meanDist >= 0 ? "+" : ""}${meanDist.toFixed(1)}m` : String(raw.primaryValue ?? "ready")),
+          tier: raw.tier !== undefined ? raw.tier : (solved ? "solved" : (taskId === "halfcheetah" && meanDist >= 2.5 && (raw.meanUpright ?? 1) >= 0.2 ? "mid" : "")),
+        };
+      }
+
+      function getStoredRoomWorkerToken() {
+        try {
+          const raw = sessionStorage.getItem(`det_worker_token_${roomName}`);
+          return raw || "";
+        } catch {
+          return "";
+        }
+      }
+
+      function updateWorkerBanner(goal) {
+        if (!workerBannerEl) return;
+        const taskId = goal ? goalTaskId(goal) : initialTask;
+        const tok = getStoredRoomWorkerToken();
+        const show = taskId === "external" || roomHasWorker || Boolean(tok);
+        workerBannerEl.hidden = !show;
+        if (!show) return;
+
+        const originUrl = window.location.origin + (basePath || "");
+        const tokenArg = tok || "<YOUR_WORKER_TOKEN>";
+        if (workerCmdTextEl) {
+          workerCmdTextEl.textContent = `uv run --with httpx python worker_${roomName}.py --url ${originUrl} --token ${tokenArg}`;
+        }
+        if (workerTokenPillEl && workerTokenValEl) {
+          workerTokenPillEl.hidden = !tok;
+          if (tok) workerTokenValEl.textContent = tok;
+        }
+        if (workerStatusPillEl && goal) {
+          const pop = (goal.genomes || []).length;
+          let done = 0;
+          for (const g of goal.genomes || []) {
+            if (getExternalEvalEntry(goal.name, goal.generation, g)) done += 1;
+          }
+          workerStatusPillEl.textContent = `${done}/${pop} evaluated`;
+        }
+      }
+
+      if (workerDlScriptBtn) {
+        workerDlScriptBtn.addEventListener("click", () => {
+          window.location.assign(`${basePath}/export/worker-script/?room=${encodeURIComponent(roomName)}`);
+        });
+      }
+      if (workerCopyCmdBtn) {
+        workerCopyCmdBtn.addEventListener("click", async () => {
+          const text = workerCmdTextEl ? workerCmdTextEl.textContent : "";
+          if (!text) return;
+          try {
+            await navigator.clipboard.writeText(text);
+            workerCopyCmdBtn.textContent = "Copied!";
+            setTimeout(() => { workerCopyCmdBtn.textContent = "Copy Command"; }, 1400);
+          } catch {}
+        });
+      }
+
+      function getCrowdTrustEntry(goalName, generation, genome) {
+        if (!genome) return null;
+        const sha = getKnownGenomeSha(genome);
+        if (!sha) return null;
+        return crowdEvalCache.get(`${goalName}:${generation}:${sha}`) || null;
+      }
+
+      function updateCrowdTrustPill(goal, specOverride = null) {
+        if (!crowdTrustPillEl) return;
+        const spec = specOverride || (goal ? getTaskSpec(goalTaskId(goal)) : null);
+        if (!spec || !spec.crowdContribute || !crowdConfig.enabled) {
+          crowdTrustPillEl.hidden = true;
+          return;
+        }
+        crowdTrustPillEl.hidden = false;
+        const quorum = Number(crowdConfig.quorum || 2);
+        const repPct = Math.round(Number(crowdContributorState.reputation ?? 0.8) * 100);
+        if (crowdContributorState.quarantined) {
+          crowdTrustPillEl.className = "crowd-trust-pill is-quarantined";
+          crowdTrustPillEl.textContent = "Quarantined";
+          crowdTrustPillEl.title = `Your contributor trust (${repPct}%) fell below quorum threshold; local evaluations remain isolated.`;
+          return;
+        }
+        let verified = 0;
+        const total = goal && Array.isArray(goal.genomes) ? goal.genomes.length : 0;
+        if (goal && total > 0) {
+          for (const g of goal.genomes) {
+            const ent = getCrowdTrustEntry(goal.name, goal.generation, g);
+            if (ent && ent.trust && ent.trust.status === "verified") verified += 1;
+          }
+        }
+        const allVerified = total > 0 && verified === total;
+        crowdTrustPillEl.className = "crowd-trust-pill" + (allVerified ? "" : " is-pending");
+        crowdTrustPillEl.textContent = total > 0
+          ? (allVerified ? `Crowd ${verified}/${total} \u2713` : `Crowd ${verified}/${total} \u00b7 q${quorum}`)
+          : `Crowd q${quorum}`;
+        crowdTrustPillEl.title = `Crowd WASM/WebGPU consensus: ${verified}/${total} verified (quorum ${quorum}, peer trust ${repPct}%)`;
+      }
+
+      function syncSimModeUI(taskId) {
+        const spec = getTaskSpec(taskId);
+        if (!simModeBarEl) return;
+        const modes = Array.isArray(spec.simModes) && spec.simModes.length ? spec.simModes : ["client"];
+        const showBar = spec.kind === "control" && taskId !== "external";
+        simModeBarEl.hidden = !showBar;
+        if (!showBar) return;
+        const isClientLocked = modes.length === 1 && modes[0] === "client";
+        const effMode = getEffectiveSimMode(taskId);
+        simModeBarEl.classList.toggle("is-locked", isClientLocked);
+        if (simModeClientBtn) {
+          simModeClientBtn.hidden = false;
+          simModeClientBtn.classList.toggle("active", effMode === "client");
+          simModeClientBtn.disabled = isClientLocked;
+          simModeClientBtn.textContent = isClientLocked
+            ? (taskId === "halfcheetah" ? "Client \u00b7 WASM" : "Client")
+            : "Client";
+        }
+        if (simModeServerBtn) {
+          simModeServerBtn.hidden = !modes.includes("server");
+          simModeServerBtn.classList.toggle("active", effMode === "server");
+        }
+        if (simEngineDotEl) {
+          simEngineDotEl.className = "sim-engine-dot" + (
+            effMode === "server"
+              ? " is-server"
+              : (simEngineStatus === "fallback" ? " is-fallback" : "")
+          );
+        }
+        if (simEngineLabelEl) {
+          if (effMode === "server") simEngineLabelEl.textContent = "Server";
+          else if (simEngineStatus === "fallback") simEngineLabelEl.textContent = "Server (fallback)";
+          else if (isClientLocked) simEngineLabelEl.textContent = "Locked";
+          else simEngineLabelEl.textContent = taskId === "halfcheetah" ? "Client \u00b7 WASM" : "Client \u00b7 JS";
+        }
+        const g = goalsByName.get(activeGoalName);
+        updateCrowdTrustPill(g && goalTaskId(g) === taskId ? g : null, spec);
+      }
+
+      let simWorker = null;
+      let simWorkerInitPromise = null;
+      let simWorkerNextId = 1;
+      const simWorkerPending = new Map();
+
+      function resetSimWorker(reason) {
+        if (simWorker) {
+          try { simWorker.terminate(); } catch {}
+          simWorker = null;
+        }
+        simWorkerInitPromise = null;
+        for (const { reject, timer } of simWorkerPending.values()) {
+          clearTimeout(timer);
+          reject(new Error(reason || "Simulation worker reset"));
+        }
+        simWorkerPending.clear();
+      }
+
+      function ensureSimWorker() {
+        if (typeof Worker !== "function") {
+          return Promise.reject(new Error("Web Workers unsupported in this browser."));
+        }
+        if (simWorkerInitPromise) return simWorkerInitPromise;
+        simWorker = new Worker(`${basePath}/assets/sim_worker.js`, { type: "module" });
+        simWorker.addEventListener("message", (ev) => {
+          const msg = ev.data || {};
+          const entry = simWorkerPending.get(msg.reqId);
+          if (!entry) return;
+          clearTimeout(entry.timer);
+          simWorkerPending.delete(msg.reqId);
+          if (msg.ok) entry.resolve(msg);
+          else entry.reject(new Error(msg.error || "Worker simulation failed"));
+        });
+        simWorker.addEventListener("error", (ev) => {
+          resetSimWorker(ev.message || "Worker runtime error");
+        });
+        simWorkerInitPromise = callSimWorkerRaw("init", {
+          taskSpecs,
+          mujocoWasmUrl,
+          cheetahXmlUrl: `${basePath}/assets/half_cheetah.xml`,
+        });
+        return simWorkerInitPromise;
+      }
+
+      function callSimWorkerRaw(type, payload, timeoutMs = 25000) {
+        return new Promise((resolve, reject) => {
+          if (!simWorker) {
+            reject(new Error("Sim worker unavailable"));
+            return;
+          }
+          const reqId = simWorkerNextId++;
+          const timer = setTimeout(() => {
+            simWorkerPending.delete(reqId);
+            reject(new Error(`Sim worker timeout (${type})`));
+          }, timeoutMs);
+          simWorkerPending.set(reqId, { resolve, reject, timer });
+          simWorker.postMessage({ reqId, type, ...(payload || {}) });
+        });
+      }
+
+      async function callSimWorker(type, payload, timeoutMs = 25000) {
+        await ensureSimWorker();
+        return callSimWorkerRaw(type, payload, timeoutMs);
+      }
+
+      async function fetchServerEvalBatch(taskId, genomes, seeds = null, includeRollout = true) {
+        const res = await fetch(`${basePath}/api/sim/eval-batch/`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrfToken,
+          },
+          body: JSON.stringify({
+            task: taskId,
+            genomes,
+            seeds,
+            includeRollout,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok || !Array.isArray(data.items)) {
+          throw new Error(data.error || "Server evaluation failed.");
+        }
+        return data.items;
+      }
+
+      async function fetchServerRollout(taskId, genome, seed, maxSteps, nudge, includeGeoms = true) {
+        const res = await fetch(`${basePath}/api/sim/rollout/`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrfToken,
+          },
+          body: JSON.stringify({
+            task: taskId,
+            genome,
+            seed,
+            maxSteps,
+            nudge,
+            includeGeoms,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok || !data.rollout) {
+          throw new Error(data.error || "Server rollout failed.");
+        }
+        return data.rollout;
+      }
+
+      const simInFlightBatches = new Map();
+
+      function getCachedControlEntry(taskId, genome) {
+        const fp = genomeFingerprint(genome);
+        const key = `${taskId}:${fp}`;
+        if (simResultCache.has(key)) return simResultCache.get(key);
+        if (taskId === "cartpole" && getEffectiveSimMode("cartpole") === "client") {
+          const s = evaluateCartpoleSummary(genome);
+          const norm = normalizeControlSummary(s, "cartpole");
+          const entry = { fp, summary: norm, primaryRollout: s.primaryRollout, engine: "client-js" };
+          simResultCache.set(key, entry);
+          return entry;
+        }
+        return null;
+      }
+
+      async function evaluateControlGenomes(taskId, genomes, seeds = null) {
+        const spec = getTaskSpec(taskId);
+        const effMode = getEffectiveSimMode(taskId);
+        const allowServer = Array.isArray(spec.simModes) && spec.simModes.includes("server");
+        const evalSeeds = Array.isArray(seeds) && seeds.length ? seeds : (spec.evalSeeds || [0, 1]);
+        const isDefault = !seeds;
+        const missing = [];
+        const missingIdx = [];
+        const results = new Array(genomes.length).fill(null);
+
+        genomes.forEach((g, idx) => {
+          const fp = genomeFingerprint(g);
+          const key = `${taskId}:${fp}`;
+          if (isDefault && simResultCache.has(key)) {
+            results[idx] = simResultCache.get(key);
+          } else {
+            missing.push(g);
+            missingIdx.push({ idx, fp });
+          }
+        });
+
+        if (missing.length === 0) return results;
+
+        if (taskId === "cartpole" && effMode === "client") {
+          missing.forEach((g, mIdx) => {
+            const raw = evaluateCartpoleSummary(g, evalSeeds);
+            const norm = normalizeControlSummary(raw, "cartpole");
+            const entry = { fp: missingIdx[mIdx].fp, summary: norm, primaryRollout: raw.primaryRollout, engine: "client-js" };
+            if (isDefault) simResultCache.set(`${taskId}:${entry.fp}`, entry);
+            results[missingIdx[mIdx].idx] = entry;
+          });
+          simEngineStatus = "client-ready";
+          syncSimModeUI(taskId);
+          return results;
+        }
+
+        const batchKey = isDefault ? `${effMode}:${taskId}:${missingIdx.map((m) => m.fp).join(",")}` : null;
+        if (batchKey && simInFlightBatches.has(batchKey)) {
+          await simInFlightBatches.get(batchKey);
+          missingIdx.forEach(({ idx, fp }) => {
+            results[idx] = simResultCache.get(`${taskId}:${fp}`) || null;
+          });
+          return results;
+        }
+
+        const runPromise = (async () => {
+          let items = null;
+          let engineUsed = effMode === "server" ? "server" : (taskId === "halfcheetah" ? "client-wasm" : "client-js");
+          if (effMode === "client") {
+            try {
+              const resp = await callSimWorker("evalBatch", { taskId, genomes: missing, seeds: evalSeeds }, 45000);
+              items = resp.items;
+              engineUsed = resp.engine || engineUsed;
+              simEngineStatus = engineUsed;
+            } catch (err) {
+              if (!allowServer) {
+                simEngineStatus = "error";
+                syncSimModeUI(taskId);
+                throw err;
+              }
+              console.warn("Client simulation worker failed; falling back to server:", err);
+              simEngineStatus = "fallback";
+              engineUsed = "server";
+              items = await fetchServerEvalBatch(taskId, missing, evalSeeds, isDefault);
+            }
+          } else {
+            simEngineStatus = "server";
+            items = await fetchServerEvalBatch(taskId, missing, evalSeeds, isDefault);
+          }
+
+          items.forEach((it, mIdx) => {
+            const norm = normalizeControlSummary(it.summary, taskId);
+            const entry = {
+              fp: missingIdx[mIdx].fp,
+              summary: norm,
+              primaryRollout: it.primaryRollout || null,
+              engine: engineUsed,
+            };
+            if (isDefault) {
+              if (simResultCache.size > 2000) simResultCache.clear();
+              simResultCache.set(`${taskId}:${entry.fp}`, entry);
+            }
+            results[missingIdx[mIdx].idx] = entry;
+          });
+          syncSimModeUI(taskId);
+        })();
+
+        if (batchKey) {
+          simInFlightBatches.set(batchKey, runPromise);
+          try {
+            await runPromise;
+          } finally {
+            simInFlightBatches.delete(batchKey);
+          }
+        } else {
+          await runPromise;
+        }
+        return results;
+      }
+
+      async function fetchTaskRollout(taskId, genome, seed, maxSteps, nudge = null, includeActivations = true, includeGeoms = false) {
+        const spec = getTaskSpec(taskId);
+        const effMode = getEffectiveSimMode(taskId);
+        const allowServer = Array.isArray(spec.simModes) && spec.simModes.includes("server");
+        if (taskId === "cartpole" && effMode === "client") {
+          const decoded = decodePolicyForTask(genome, "cartpole");
+          const ro = cartpoleRollout(genome, seed, maxSteps);
+          if (nudge === "left" || nudge === "right") {
+            // Re-run with initial nudge matching server/worker semantics
+            const sgn = nudge === "left" ? -1 : 1;
+            let state = cartpoleReset(seed);
+            state = [state[0], state[1] + sgn * 0.35, state[2], state[3] + sgn * 0.55];
+            const states = [state];
+            const forces = [];
+            for (let t = 0; t < maxSteps; t++) {
+              const u = cartpolePolicyAction(decoded, state);
+              const res = cartpoleStep(state, u);
+              forces.push(res.force);
+              state = res.nextState;
+              states.push(state);
+              if (res.terminated) break;
+            }
+            ro.states = states;
+            ro.forces = forces;
+            ro.steps = forces.length;
+          }
+          if (includeActivations) {
+            ro.stepActivations = ro.states.slice(0, -1).map((st) => {
+              const obs = [
+                st[0] / CARTPOLE_X_THRESHOLD,
+                st[1] / 3.0,
+                st[2] / CARTPOLE_THETA_THRESHOLD,
+                st[3] / 3.0,
+              ];
+              return forwardPolicyWithTrace(decoded, obs).activations;
+            });
+          }
+          return ro;
+        }
+        if (effMode === "client" && taskId !== "external") {
+          try {
+            const resp = await callSimWorker("rollout", {
+              taskId,
+              genome,
+              seed,
+              maxSteps,
+              nudge,
+              includeActivations,
+              includeGeoms,
+            });
+            simEngineStatus = resp.engine || "client-wasm";
+            syncSimModeUI(taskId);
+            return resp.rollout;
+          } catch (err) {
+            if (!allowServer) throw err;
+            console.warn("Client rollout failed; falling back to server:", err);
+            simEngineStatus = "fallback";
+            syncSimModeUI(taskId);
+          }
+        }
+        return fetchServerRollout(taskId, genome, seed, maxSteps, nudge, includeGeoms);
+      }
+
+      function ingestCrowdEvalItems(goalName, generation, items, quorumHint = null) {
+        if (!Array.isArray(items)) return;
+        if (typeof quorumHint === "number" && quorumHint > 0) crowdConfig.quorum = quorumHint;
+        for (const it of items) {
+          if (!it || !it.hash) continue;
+          crowdEvalCache.set(`${goalName}:${generation}:${it.hash}`, it);
+        }
+      }
+
+      async function fetchCrowdRoomEvals(goal) {
+        if (!goal) return [];
+        const url = `${basePath}/api/rooms/${encodeURIComponent(roomName)}/crowd/evals/?goal=${encodeURIComponent(goal.name)}&generation=${encodeURIComponent(goal.generation)}`;
+        try {
+          const res = await fetch(url);
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok && Array.isArray(data.items)) {
+            ingestCrowdEvalItems(goal.name, goal.generation, data.items, data.quorum);
+            return data.items;
+          }
+        } catch {}
+        return [];
+      }
+
+      async function postCrowdRoomResults(goal, results) {
+        if (!goal || !Array.isArray(results) || !results.length || crowdContributorState.quarantined) return null;
+        try {
+          const res = await fetch(`${basePath}/api/rooms/${encodeURIComponent(roomName)}/crowd/results/`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRFToken": csrfToken,
+            },
+            body: JSON.stringify({
+              goal: goal.name,
+              generation: goal.generation,
+              results,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok) {
+            if (typeof data.contributorReputation === "number") {
+              crowdContributorState.reputation = data.contributorReputation;
+            }
+            crowdContributorState.quarantined = Boolean(data.quarantined);
+            if (Array.isArray(data.items)) {
+              ingestCrowdEvalItems(goal.name, goal.generation, data.items);
+            }
+            if (goal.name === activeGoalName) {
+              updateCrowdTrustPill(goal);
+            }
+            return data;
+          }
+        } catch {}
+        return null;
+      }
+
+      function ingestExternalEvalItems(goalName, generation, items) {
+        if (!Array.isArray(items)) return;
+        for (const it of items) {
+          if (!it || !it.hash) continue;
+          const key = `${goalName}:${generation}:${it.hash}`;
+          externalEvalCache.set(key, it);
+        }
+      }
+
+      async function fetchExternalRoomEvals(goal) {
+        if (!goal) return [];
+        const url = `${basePath}/api/rooms/${encodeURIComponent(roomName)}/worker/evals/?goal=${encodeURIComponent(goal.name)}&generation=${encodeURIComponent(goal.generation)}`;
+        try {
+          const res = await fetch(url);
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.ok && Array.isArray(data.items)) {
+            ingestExternalEvalItems(goal.name, goal.generation, data.items);
+            return data.items;
+          }
+        } catch {}
+        return [];
+      }
+
+      function setSimExecutionMode(nextMode) {
+        const mode = nextMode === "server" ? "server" : "client";
+        if (simExecutionMode === mode) return;
+        simExecutionMode = mode;
+        localStorage.setItem("det_sim_mode", mode);
+        simEngineStatus = mode === "server" ? "server" : "client-ready";
+        simResultCache.clear();
+        const goal = goalsByName.get(activeGoalName);
+        if (goal) {
+          syncSimModeUI(goalTaskId(goal));
+          renderActiveGoal(true);
+        }
+      }
+      if (simModeClientBtn) simModeClientBtn.addEventListener("click", () => setSimExecutionMode("client"));
+      if (simModeServerBtn) simModeServerBtn.addEventListener("click", () => setSimExecutionMode("server"));
+
       function drawCartpolePose(ctx, state, force, width, height, trackY, scale, alpha, colorOverride) {
         if (!state) return;
         const x = state[0];
@@ -3441,6 +4667,73 @@
             canvas.width = LINEAGE_CANVAS_SIZE;
             canvas.height = LINEAGE_CANVAS_SIZE;
             return renderCartpoleStaticCanvas(node, canvas, LINEAGE_CANVAS_SIZE);
+          },
+        },
+        halfcheetah: {
+          preload(genomes) {
+            return evaluateControlGenomes("halfcheetah", genomes || []).catch(() => []);
+          },
+          renderCard(genome, canvas, evalEntry) {
+            canvas.width = CONTROL_CARD_SIZE;
+            canvas.height = CONTROL_CARD_SIZE;
+            if (window.DetCheetahRenderer) {
+              return window.DetCheetahRenderer.renderCheetahStaticCanvas(
+                evalEntry ? evalEntry.summary : null,
+                evalEntry ? evalEntry.primaryRollout : null,
+                canvas
+              );
+            }
+          },
+          renderLineageNode(node, canvas) {
+            canvas.width = LINEAGE_CANVAS_SIZE;
+            canvas.height = LINEAGE_CANVAS_SIZE;
+            const cached = getCachedControlEntry("halfcheetah", node);
+            if (window.DetCheetahRenderer) {
+              return window.DetCheetahRenderer.renderCheetahStaticCanvas(
+                cached ? cached.summary : null,
+                cached ? cached.primaryRollout : null,
+                canvas
+              );
+            }
+          },
+        },
+        external: {
+          preload() {
+            return Promise.resolve();
+          },
+          renderCard(genome, canvas, extEntry) {
+            canvas.width = CONTROL_CARD_SIZE;
+            canvas.height = CONTROL_CARD_SIZE;
+            const ctx = canvas.getContext("2d");
+            if (extEntry && extEntry.posterDataUrl) {
+              const img = new Image();
+              img.onload = () => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              };
+              img.src = extEntry.posterDataUrl;
+              return;
+            }
+            ctx.fillStyle = "#09090b";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = "#18181f";
+            ctx.lineWidth = 1;
+            for (let g = 24; g < canvas.width; g += 24) {
+              ctx.beginPath(); ctx.moveTo(g, 0); ctx.lineTo(g, canvas.height); ctx.stroke();
+              ctx.beginPath(); ctx.moveTo(0, g); ctx.lineTo(canvas.width, g); ctx.stroke();
+            }
+            ctx.fillStyle = extEntry ? "#7dd3fc" : "#71717a";
+            ctx.font = "600 11px ui-monospace, SFMono-Regular, Menlo, monospace";
+            ctx.textAlign = "center";
+            const label = extEntry && extEntry.summary && extEntry.summary.primaryDisplay
+              ? extEntry.summary.primaryDisplay
+              : "Awaiting worker";
+            ctx.fillText(label, canvas.width * 0.5, canvas.height * 0.5);
+          },
+          renderLineageNode(node, canvas) {
+            canvas.width = LINEAGE_CANVAS_SIZE;
+            canvas.height = LINEAGE_CANVAS_SIZE;
+            renderCppnToCanvas(node, canvas, LINEAGE_CANVAS_SIZE);
           },
         },
       };
@@ -4203,38 +5496,60 @@
       function stopCardHoverAnim() {
         if (!activeHoverAnim) return;
         cancelAnimationFrame(activeHoverAnim.raf);
-        const { genome, canvas } = activeHoverAnim;
+        const { genome, canvas, taskId } = activeHoverAnim;
         activeHoverAnim = null;
         if (canvas && canvas.isConnected && genome) {
           canvas.width = CONTROL_CARD_SIZE;
           canvas.height = CONTROL_CARD_SIZE;
-          renderCartpoleStaticCanvas(genome, canvas, CONTROL_CARD_SIZE);
+          const entry = getCachedControlEntry(taskId || "cartpole", genome);
+          getTaskRenderer(taskId || "cartpole").renderCard(genome, canvas, entry);
         }
       }
 
-      function startCardHoverAnim(genome, canvas, maxSteps = CARTPOLE_MAX_STEPS) {
+      function startCardHoverAnim(genome, canvas, maxSteps = 500, taskId = "cartpole") {
         stopCardHoverAnim();
-        const summary = evaluateCartpoleSummary(genome);
-        const ro = summary.primaryRollout;
-        if (!ro || !ro.states || ro.states.length === 0) return;
+        const spec = getTaskSpec(taskId);
+        const dt = spec.dt || 0.02;
         const startPerf = performance.now();
-        const stateObj = { raf: 0, genome, canvas };
+        const stateObj = { raf: 0, genome, canvas, taskId, rollout: null };
         activeHoverAnim = stateObj;
+
+        const cached = getCachedControlEntry(taskId, genome);
+        if (cached && cached.primaryRollout) {
+          stateObj.rollout = cached.primaryRollout;
+        } else {
+          const seed = Array.isArray(spec.evalSeeds) && spec.evalSeeds.length ? spec.evalSeeds[0] : 0;
+          fetchTaskRollout(taskId, genome, seed, maxSteps, null, false)
+            .then((ro) => {
+              if (activeHoverAnim === stateObj && canvas.isConnected && ro) {
+                stateObj.rollout = ro;
+              }
+            })
+            .catch(() => {});
+        }
 
         function tick(now) {
           if (activeHoverAnim !== stateObj || !canvas.isConnected) return;
-          const elapsedSteps = Math.max(0, Math.floor(((now - startPerf) / 1000) / CARTPOLE_TAU));
-          const totalFrames = ro.states.length;
-          const frameIdx = totalFrames > 0 ? elapsedSteps % totalFrames : 0;
-          const frame = ro.states[frameIdx];
-          if (!frame) {
+          const ro = stateObj.rollout;
+          if (!ro) {
             stateObj.raf = requestAnimationFrame(tick);
             return;
           }
-          const force = ro.forces && ro.forces.length > 0
-            ? ro.forces[Math.min(frameIdx, ro.forces.length - 1)]
-            : 0;
-          renderCartpoleLiveFrame(canvas, frame, force, frameIdx, maxSteps);
+          if (taskId === "halfcheetah" && ro.frames && ro.frames.length > 0 && window.DetCheetahRenderer) {
+            const elapsedSteps = Math.max(0, Math.floor(((now - startPerf) / 1000) / dt));
+            const frameIdx = elapsedSteps % ro.frames.length;
+            window.DetCheetahRenderer.renderCheetahLiveFrame(canvas, ro.frames, frameIdx, maxSteps);
+          } else if (ro.states && ro.states.length > 0) {
+            const elapsedSteps = Math.max(0, Math.floor(((now - startPerf) / 1000) / dt));
+            const frameIdx = elapsedSteps % ro.states.length;
+            const frame = ro.states[frameIdx];
+            if (frame) {
+              const force = ro.forces && ro.forces.length > 0
+                ? ro.forces[Math.min(frameIdx, ro.forces.length - 1)]
+                : 0;
+              renderCartpoleLiveFrame(canvas, frame, force, frameIdx, maxSteps);
+            }
+          }
           stateObj.raf = requestAnimationFrame(tick);
         }
         stateObj.raf = requestAnimationFrame(tick);
@@ -4245,10 +5560,191 @@
         return `${val}/${maxSteps}`;
       }
 
+      function applySummaryToCardBadge(simBadge, summary, taskId, maxSteps, spec, trust = null) {
+        if (!simBadge) return;
+        if (!summary) {
+          simBadge.className = "sim-badge";
+          simBadge.textContent = taskId === "external" ? "pending" : "evaluating...";
+          simBadge.title = taskId === "external" ? "Awaiting external worker evaluation" : "Evaluating policy...";
+          return;
+        }
+        const trustStatus = trust && trust.status ? trust.status : "";
+        const trustCls = trustStatus === "verified"
+          ? " is-crowd-verified"
+          : (trustStatus === "disputed" ? " is-crowd-disputed" : "");
+        simBadge.className = "sim-badge" + (summary.tier ? ` ${summary.tier}` : "") + trustCls;
+        const baseText = summary.badgeText || (taskId === "cartpole" ? formatStepBadge(summary.meanSteps || 0, maxSteps) : String(summary.primaryDisplay || "ready"));
+        const trustMark = trustStatus === "verified" ? " \u2713" : (trustStatus === "disputed" ? " ?" : "");
+        simBadge.textContent = `${baseText}${trustMark}`;
+        const baseTitle = summary.secondaryText ? `${spec.label}: ${summary.primaryDisplay || baseText} (${summary.secondaryText})` : (summary.primaryDisplay || baseText);
+        if (trustStatus === "verified") {
+          const attCount = trust.attestations || 1;
+          const q = trust.quorum || crowdConfig.quorum || 2;
+          simBadge.title = `${baseTitle} \u00b7 Verified by crowd (${attCount}/${q})`;
+        } else if (trustStatus === "disputed") {
+          simBadge.title = `${baseTitle} \u00b7 Crowd disagreement — awaiting tie-break quorum`;
+        } else {
+          simBadge.title = baseTitle;
+        }
+      }
+
+      function shuffleIntList(arr) {
+        const out = arr.slice();
+        for (let i = out.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          const tmp = out[i];
+          out[i] = out[j];
+          out[j] = tmp;
+        }
+        return out;
+      }
+
+      function syncCrowdBadgesInDom(goal) {
+        if (!goal || goal.name !== activeGoalName) return;
+        const taskId = goalTaskId(goal);
+        const spec = getTaskSpec(taskId);
+        const maxSteps = spec.maxSteps || CARTPOLE_MAX_STEPS;
+        if (!spec.crowdContribute) return;
+        updateCrowdTrustPill(goal, spec);
+        const cards = genomeGridEl.querySelectorAll(".genome-card[data-idx]");
+        cards.forEach((card) => {
+          const idx = Number(card.dataset.idx);
+          const g = goal.genomes[idx];
+          if (!g) return;
+          const badge = card.querySelector(".sim-badge");
+          if (!badge) return;
+          const localEnt = getCachedControlEntry(taskId, g);
+          const crowdEnt = getCrowdTrustEntry(goal.name, goal.generation, g);
+          const eff = localEnt || crowdEnt;
+          applySummaryToCardBadge(badge, eff ? eff.summary : null, taskId, maxSteps, spec, crowdEnt ? crowdEnt.trust : null);
+        });
+      }
+
+      async function hydrateCrowdControlGoal(goalSnap, cardRefs, renderer, maxSteps, spec, renderTokenSnap) {
+        const taskId = goalTaskId(goalSnap);
+        const isStale = () => renderTokenSnap !== activeGoalRenderToken || goalsByName.get(activeGoalName) !== goalSnap;
+        await Promise.all(goalSnap.genomes.map(ensureGenomeSha256));
+        if (isStale()) return;
+
+        if (crowdConfig.enabled) {
+          await fetchCrowdRoomEvals(goalSnap);
+          if (isStale()) return;
+          cardRefs.forEach((r) => {
+            const localEnt = getCachedControlEntry(taskId, r.genome);
+            const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
+            const eff = localEnt || crowdEnt;
+            if (eff) {
+              applySummaryToCardBadge(r.simBadge, eff.summary, taskId, maxSteps, spec, crowdEnt ? crowdEnt.trust : null);
+              if (!localEnt && crowdEnt) renderer.renderCard(r.genome, r.canvas, crowdEnt);
+            }
+          });
+          updateCrowdTrustPill(goalSnap, spec);
+        }
+
+        const unverifiedRefs = [];
+        const verifiedRefs = [];
+        const toPostExisting = [];
+        cardRefs.forEach((r) => {
+          const localEnt = getCachedControlEntry(taskId, r.genome);
+          const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
+          const isVerified = Boolean(crowdEnt && crowdEnt.trust && crowdEnt.trust.status === "verified");
+          if (!localEnt) {
+            if (isVerified) verifiedRefs.push(r);
+            else unverifiedRefs.push(r);
+          } else if (crowdConfig.enabled && !crowdContributorState.quarantined) {
+            const sha = getKnownGenomeSha(r.genome);
+            const subKey = `${goalSnap.name}:${goalSnap.generation}:${sha}`;
+            if (sha && !crowdSubmittedKeys.has(subKey)) {
+              const rate = Number(crowdConfig.spotCheckRate ?? 0.15);
+              if (!isVerified || Math.random() < rate) {
+                crowdSubmittedKeys.add(subKey);
+                toPostExisting.push({ hash: sha, summary: localEnt.summary });
+              }
+            }
+          }
+        });
+
+        if (toPostExisting.length) {
+          await postCrowdRoomResults(goalSnap, toPostExisting);
+          if (isStale()) return;
+          syncCrowdBadgesInDom(goalSnap);
+        }
+
+        const orderedUnverified = (crowdConfig.shardShuffle !== false)
+          ? shuffleIntList(unverifiedRefs)
+          : unverifiedRefs;
+        const workRefs = orderedUnverified.concat(verifiedRefs);
+        const CHUNK = 4;
+        for (let offset = 0; offset < workRefs.length; offset += CHUNK) {
+          if (isStale()) return;
+          const chunk = workRefs.slice(offset, offset + CHUNK);
+          const chunkEntries = await evaluateControlGenomes(taskId, chunk.map((r) => r.genome)).catch(() => []);
+          if (isStale()) return;
+          const chunkPosts = [];
+          chunk.forEach((r, ci) => {
+            const ent = chunkEntries[ci];
+            const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
+            const eff = ent || crowdEnt;
+            if (eff) {
+              applySummaryToCardBadge(r.simBadge, eff.summary, taskId, maxSteps, spec, crowdEnt ? crowdEnt.trust : null);
+              renderer.renderCard(r.genome, r.canvas, eff);
+            }
+            if (ent && crowdConfig.enabled && !crowdContributorState.quarantined) {
+              const sha = getKnownGenomeSha(r.genome);
+              const subKey = `${goalSnap.name}:${goalSnap.generation}:${sha}`;
+              const isVerified = Boolean(crowdEnt && crowdEnt.trust && crowdEnt.trust.status === "verified");
+              const rate = Number(crowdConfig.spotCheckRate ?? 0.15);
+              if (sha && !crowdSubmittedKeys.has(subKey) && (!isVerified || Math.random() < rate)) {
+                crowdSubmittedKeys.add(subKey);
+                chunkPosts.push({ hash: sha, summary: ent.summary });
+              }
+            }
+          });
+          if (chunkPosts.length) {
+            await postCrowdRoomResults(goalSnap, chunkPosts);
+            if (isStale()) return;
+            syncCrowdBadgesInDom(goalSnap);
+          }
+        }
+
+        if (isStale()) return;
+        const summariesByIdx = {};
+        cardRefs.forEach((r) => {
+          const localEnt = getCachedControlEntry(taskId, r.genome);
+          const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
+          const eff = localEnt || crowdEnt;
+          summariesByIdx[r.idx] = eff ? eff.summary : null;
+        });
+        if (controlSortMode === "steps") {
+          sortControlCardRefs(cardRefs, summariesByIdx);
+          applyCardFilter(false);
+        }
+        if (fullscreenIdx !== null || fullscreenNode !== null) renderFullscreen();
+      }
+
+      function sortControlCardRefs(cardRefs, summariesByIdx) {
+        const ordered = cardRefs.slice().sort((a, b) => {
+          const sa = summariesByIdx[a.idx];
+          const sb = summariesByIdx[b.idx];
+          const va = sa ? Number(sa.primaryValue ?? -1e9) : -1e9;
+          const vb = sb ? Number(sb.primaryValue ?? -1e9) : -1e9;
+          if (vb !== va) return vb - va;
+          if (sa && sb && typeof sa.meanAbsX === "number" && typeof sb.meanAbsX === "number" && sa.meanAbsX !== sb.meanAbsX) {
+            return sa.meanAbsX - sb.meanAbsX;
+          }
+          return a.idx - b.idx;
+        });
+        const frag = document.createDocumentFragment();
+        ordered.forEach((r) => frag.appendChild(r.card));
+        genomeGridEl.replaceChildren(frag);
+      }
+
       function renderActiveGoal(rerenderCanvases) {
         const goal = goalsByName.get(activeGoalName);
         if (!goal || addingExtraGoal) {
           stopCardHoverAnim();
+          syncSimModeUI("image");
+          updateWorkerBanner(null);
           if (!goal && lineagePanelEl) lineagePanelEl.hidden = true;
           if (isPrivateRoom) {
             evoWorkspaceEl.hidden = true;
@@ -4289,30 +5785,54 @@
         const taskPrefix = isCtrl ? `${spec.label.split(" ")[0]} \u00b7 ` : "";
         activeGoalGen.textContent = `${taskPrefix}gen ${goal.generation} \u00b7 pop ${popSize} \u00b7 cap ${mvLimit}v \u00b7 \u03c3 ${sigma} \u00b7 elite ${elitePct}% \u00b7 cross ${crossPct}%`;
 
+        syncSimModeUI(taskId);
+        updateWorkerBanner(goal);
+
         if (sortTabsEl) {
           sortTabsEl.hidden = !isCtrl;
-          if (sortStepsBtn) sortStepsBtn.classList.toggle("active", controlSortMode === "steps");
+          if (sortStepsBtn) {
+            sortStepsBtn.textContent = `${spec.sortLabel || "Steps"} \u2193`;
+            sortStepsBtn.classList.toggle("active", controlSortMode === "steps");
+          }
           if (sortSlotBtn) sortSlotBtn.classList.toggle("active", controlSortMode === "slot");
         }
 
         if (rerenderCanvases) {
           stopCardHoverAnim();
           const cardFrag = document.createDocumentFragment();
-          const summaries = isCtrl ? goal.genomes.map((g) => evaluateCartpoleSummary(g)) : null;
+          const evalEntries = isCtrl
+            ? goal.genomes.map((g) => {
+                if (taskId === "external") {
+                  return getExternalEvalEntry(goal.name, goal.generation, g);
+                }
+                const localEnt = getCachedControlEntry(taskId, g);
+                if (localEnt) return localEnt;
+                return spec.crowdContribute ? getCrowdTrustEntry(goal.name, goal.generation, g) : null;
+              })
+            : null;
           const orderedIndices = goal.genomes.map((_, i) => i);
-          if (isCtrl && controlSortMode === "steps" && summaries) {
+          if (isCtrl && controlSortMode === "steps" && evalEntries) {
             orderedIndices.sort((a, b) => {
-              const sa = summaries[a];
-              const sb = summaries[b];
-              if (sb.meanSteps !== sa.meanSteps) return sb.meanSteps - sa.meanSteps;
-              if (sa.meanAbsX !== sb.meanAbsX) return sa.meanAbsX - sb.meanAbsX;
+              const sa = evalEntries[a] && evalEntries[a].summary;
+              const sb = evalEntries[b] && evalEntries[b].summary;
+              const va = sa ? Number(sa.primaryValue ?? -1e9) : -1e9;
+              const vb = sb ? Number(sb.primaryValue ?? -1e9) : -1e9;
+              if (vb !== va) return vb - va;
+              if (sa && sb && typeof sa.meanAbsX === "number" && typeof sb.meanAbsX === "number" && sa.meanAbsX !== sb.meanAbsX) {
+                return sa.meanAbsX - sb.meanAbsX;
+              }
               return a - b;
             });
           }
 
           const renderer = getTaskRenderer(goal);
+          const cardRefs = [];
+          const hasAllEval = isCtrl && evalEntries && evalEntries.every((e) => Boolean(e));
+
           orderedIndices.forEach((idx) => {
             const genome = goal.genomes[idx];
+            const entry = evalEntries ? evalEntries[idx] : null;
+            const summary = entry ? entry.summary : null;
             const card = document.createElement("div");
             card.className = "genome-card" + (genome.op === "seed" ? " is-seed" : "");
             card.dataset.idx = String(idx);
@@ -4325,23 +5845,26 @@
               card.appendChild(seedBadge);
             }
 
-            if (isCtrl && summaries) {
-              const summary = summaries[idx];
+            let simBadge = null;
+            if (isCtrl) {
               const slotBadge = document.createElement("span");
               slotBadge.className = "sim-slot-badge";
               slotBadge.textContent = `#${idx + 1}`;
               card.appendChild(slotBadge);
 
-              const simBadge = document.createElement("span");
-              simBadge.className = "sim-badge" + (summary.solved ? " solved" : (summary.meanSteps >= 150 ? " mid" : ""));
-              simBadge.textContent = formatStepBadge(summary.meanSteps, maxSteps);
-              simBadge.title = `Mean ${summary.meanSteps}/${maxSteps} steps across seeds ${CARTPOLE_EVAL_SEEDS.join(", ")} ([${summary.perSeed.join(", ")}])`;
+              simBadge = document.createElement("span");
+              const crowdTrust = (taskId !== "external" && spec.crowdContribute)
+                ? getCrowdTrustEntry(goal.name, goal.generation, genome)
+                : null;
+              applySummaryToCardBadge(simBadge, summary, taskId, maxSteps, spec, crowdTrust ? crowdTrust.trust : null);
               card.appendChild(simBadge);
 
-              const playPill = document.createElement("span");
-              playPill.className = "sim-play-pill";
-              playPill.textContent = "\u25b6 live";
-              card.appendChild(playPill);
+              if (taskId !== "external") {
+                const playPill = document.createElement("span");
+                playPill.className = "sim-play-pill";
+                playPill.textContent = "\u25b6 live";
+                card.appendChild(playPill);
+              }
             }
 
             const canvas = document.createElement("canvas");
@@ -4349,12 +5872,12 @@
             canvas.height = isCtrl ? CONTROL_CARD_SIZE : CANVAS_SIZE;
             canvas.style.cursor = "zoom-in";
             canvas.title = isCtrl
-              ? "Hover for live rollout · click for interactive player + MP4"
-              : "Click to open full screen";
-            renderer.renderCard(genome, canvas);
+              ? (taskId === "external" ? "Click for network structure & telemetry" : "Hover for live rollout \u00b7 click for interactive player + network")
+              : "Click to open full screen & CPPN network";
+            renderer.renderCard(genome, canvas, entry);
             canvas.addEventListener("click", () => openFullscreen(idx));
-            if (isCtrl) {
-              card.addEventListener("mouseenter", () => startCardHoverAnim(genome, canvas, maxSteps));
+            if (isCtrl && taskId !== "external") {
+              card.addEventListener("mouseenter", () => startCardHoverAnim(genome, canvas, maxSteps, taskId));
               card.addEventListener("mouseleave", () => stopCardHoverAnim());
             }
             card.appendChild(canvas);
@@ -4384,6 +5907,15 @@
               '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 9V3H2.5a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1H5Zm0 0 2.6 4.4a1.3 1.3 0 0 0 2.3-.8V10h3.1a1.2 1.2 0 0 0 1.2-1.4l-.8-4.4A1.3 1.3 0 0 0 12.1 3H5"/></svg><span class="cnt">0</span>';
             downBtn.addEventListener("click", () => sendVote(goal, idx, -1));
 
+            const netBtn = document.createElement("button");
+            netBtn.type = "button";
+            netBtn.className = "vote-btn net-btn";
+            netBtn.setAttribute("title", "Inspect network structure");
+            netBtn.setAttribute("data-tooltip", "Inspect network");
+            netBtn.innerHTML =
+              '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="3" cy="4" r="1.5"/><circle cx="3" cy="12" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="13" cy="4" r="1.5"/><circle cx="13" cy="12" r="1.5"/><path d="M4.4 4.7 6.7 7.1M4.4 11.3 6.7 8.9M9.3 7.1 11.6 4.7M9.3 8.9 11.6 11.3"/></svg>';
+            netBtn.addEventListener("click", () => openFullscreen(idx, "net"));
+
             const dlBtn = document.createElement("button");
             dlBtn.type = "button";
             dlBtn.className = "vote-btn dl-btn";
@@ -4404,17 +5936,64 @@
 
             btns.appendChild(upBtn);
             btns.appendChild(downBtn);
+            btns.appendChild(netBtn);
             btns.appendChild(fsBtn);
             btns.appendChild(dlBtn);
             footer.appendChild(btns);
             card.appendChild(footer);
 
+            cardRefs.push({ idx, card, canvas, simBadge, genome });
             cardFrag.appendChild(card);
           });
           genomeGridEl.replaceChildren(cardFrag);
           lastJumpIdx = -1;
           applyCardFilter(true);
           renderLineageTree(goal);
+
+          // Hydrate async evaluations (HalfCheetah Crowd WASM, Server mode, or External Worker) without blocking render
+          if (isCtrl && (!hasAllEval || (spec.crowdContribute && crowdConfig.enabled))) {
+            const renderTokenSnap = activeGoalRenderToken;
+            const goalSnap = goal;
+            if (taskId === "external") {
+              Promise.all([
+                fetchExternalRoomEvals(goalSnap),
+                Promise.all(goalSnap.genomes.map(ensureGenomeSha256)),
+              ]).then(() => {
+                if (renderTokenSnap !== activeGoalRenderToken || goalsByName.get(activeGoalName) !== goalSnap) return;
+                const summariesByIdx = {};
+                cardRefs.forEach((r) => {
+                  const ext = getExternalEvalEntry(goalSnap.name, goalSnap.generation, r.genome);
+                  summariesByIdx[r.idx] = ext ? normalizeControlSummary(ext.summary, "external") : null;
+                  applySummaryToCardBadge(r.simBadge, summariesByIdx[r.idx], "external", maxSteps, spec);
+                  renderer.renderCard(r.genome, r.canvas, ext);
+                });
+                updateWorkerBanner(goalSnap);
+                if (controlSortMode === "steps") {
+                  sortControlCardRefs(cardRefs, summariesByIdx);
+                  applyCardFilter(false);
+                }
+                if (fullscreenIdx !== null || fullscreenNode !== null) renderFullscreen();
+              });
+            } else if (spec.crowdContribute) {
+              hydrateCrowdControlGoal(goalSnap, cardRefs, renderer, maxSteps, spec, renderTokenSnap).catch(() => {});
+            } else {
+              evaluateControlGenomes(taskId, goalSnap.genomes).then((entries) => {
+                if (renderTokenSnap !== activeGoalRenderToken || goalsByName.get(activeGoalName) !== goalSnap) return;
+                const summariesByIdx = {};
+                cardRefs.forEach((r) => {
+                  const ent = entries[r.idx];
+                  summariesByIdx[r.idx] = ent ? ent.summary : null;
+                  applySummaryToCardBadge(r.simBadge, summariesByIdx[r.idx], taskId, maxSteps, spec);
+                  renderer.renderCard(r.genome, r.canvas, ent);
+                });
+                if (controlSortMode === "steps") {
+                  sortControlCardRefs(cardRefs, summariesByIdx);
+                  applyCardFilter(false);
+                }
+                if (fullscreenIdx !== null || fullscreenNode !== null) renderFullscreen();
+              }).catch(() => {});
+            }
+          }
         }
         updateVoteCards();
         if (fullscreenIdx !== null || fullscreenNode !== null) {
@@ -5049,6 +6628,22 @@
               renderLineageTree(g);
             }
           }
+        } else if (data.type === "worker_eval_updated") {
+          if (data.goal && Array.isArray(data.items)) {
+            const g = goalsByName.get(data.goal);
+            const gSpec = g ? getTaskSpec(goalTaskId(g)) : null;
+            if (gSpec && gSpec.crowdContribute) {
+              ingestCrowdEvalItems(data.goal, data.generation, data.items);
+              if (g.generation === data.generation && data.goal === activeGoalName) {
+                syncCrowdBadgesInDom(g);
+              }
+            } else {
+              ingestExternalEvalItems(data.goal, data.generation, data.items);
+              if (g && g.generation === data.generation && data.goal === activeGoalName) {
+                renderActiveGoal(true);
+              }
+            }
+          }
         } else if (data.type === "votes_updated") {
           const g = goalsByName.get(data.goal);
           if (g) {
@@ -5302,7 +6897,15 @@
           btn.type = "button";
           btn.className = "seed-recent-pill";
           const alreadyAdded = stagedFps.has(item.fp);
-          const itemTask = item.task || (/^cartpole_/i.test(item.label) ? "cartpole" : "image");
+          const itemTask = item.task || (
+            /^halfcheetah_/i.test(item.label)
+              ? "halfcheetah"
+              : /^external_/i.test(item.label)
+                ? "external"
+                : /^cartpole_/i.test(item.label)
+                  ? "cartpole"
+                  : "image"
+          );
           btn.disabled = alreadyAdded || isValidatingStrains || isSubmittingRoom;
           btn.title = alreadyAdded ? `${item.label} already staged` : `Stage ${item.label}.pt (${itemTask})`;
 
@@ -5537,6 +7140,10 @@
       if (newRoomTaskSelect) {
         newRoomTaskSelect.addEventListener("change", () => {
           applyTaskDefaults(newRoomTaskSelect.value, newRoomFormCtrls);
+          const enableWorkerEl = document.getElementById("new-room-enable-worker");
+          if (enableWorkerEl && newRoomTaskSelect.value === "external") {
+            enableWorkerEl.checked = true;
+          }
           syncSeedCapacityState();
         });
       }
@@ -5599,6 +7206,10 @@
         const eliteFrac = parseEliteValue(newRoomEliteInput);
         const crossoverRate = parseCrossoverValue(newRoomCrossoverInput);
         const description = newRoomDescriptionInput.value.trim();
+        const enableWorkerInput = document.getElementById("new-room-enable-worker");
+        const enableWorker = Boolean((enableWorkerInput && enableWorkerInput.checked) || taskId === "external");
+        const createdPanel = document.getElementById("worker-created-panel");
+        if (createdPanel) createdPanel.hidden = true;
 
         newRoomErrorEl.hidden = true;
         isSubmittingRoom = true;
@@ -5617,6 +7228,7 @@
             formData.append("mutation_sigma", sigma.toFixed(2));
             formData.append("elite_frac", eliteFrac.toFixed(2));
             formData.append("crossover_rate", crossoverRate.toFixed(2));
+            if (enableWorker) formData.append("enable_worker", "true");
             for (const item of stagedStrains) {
               formData.append("weights", item.file, item.file.name);
             }
@@ -5642,6 +7254,7 @@
                 mutation_sigma: sigma,
                 elite_frac: eliteFrac,
                 crossover_rate: crossoverRate,
+                enable_worker: enableWorker,
               }),
             });
           }
@@ -5663,6 +7276,33 @@
             if (Math.abs(crossoverRate - initialCrossoverRate) > 1e-6) qp.set("crossover", crossoverRate.toFixed(2));
             const qs = qp.toString();
             if (qs) targetUrl += `?${qs}`;
+          }
+          if (data.worker_token && data.slug) {
+            try {
+              sessionStorage.setItem(`det_worker_token_${data.slug}`, data.worker_token);
+            } catch {}
+            if (createdPanel) {
+              const cmdEl = document.getElementById("worker-created-cmd");
+              const dlBtn = document.getElementById("worker-created-dl-btn");
+              const enterBtn = document.getElementById("worker-created-enter-btn");
+              const originUrl = window.location.origin + (basePath || "");
+              if (cmdEl) {
+                cmdEl.textContent = `Token: ${data.worker_token}  ·  uv run --with httpx python worker_${data.slug}.py --url ${originUrl} --token ${data.worker_token}`;
+              }
+              if (dlBtn) {
+                dlBtn.onclick = () => {
+                  window.open(`${basePath}/export/worker-script/?room=${encodeURIComponent(data.slug)}`, "_blank");
+                };
+              }
+              if (enterBtn) {
+                enterBtn.onclick = () => window.location.assign(targetUrl);
+              }
+              createdPanel.hidden = false;
+              newRoomSubmitBtn.disabled = false;
+              newRoomSubmitBtn.textContent = "Created";
+              isSubmittingRoom = false;
+              return;
+            }
           }
           window.location.assign(targetUrl);
         } catch (err) {
@@ -5841,17 +7481,53 @@
       const fsUpBtn = document.getElementById("fs-up-btn");
       const fsDownBtn = document.getElementById("fs-down-btn");
       const fsDlPtBtn = document.getElementById("fs-dl-pt-btn");
+      const fsDialogEl = document.getElementById("fs-dialog");
+      const fsStageEl = document.getElementById("fs-stage");
+      const fsCanvasPaneEl = document.getElementById("fs-canvas-pane");
+      const fsNetworkPanelEl = document.getElementById("fs-network-panel");
+      const fsViewTabsEl = document.getElementById("fs-view-tabs");
+      const fsViewSimBtn = document.getElementById("fs-view-sim-btn");
+      const fsViewNetBtn = document.getElementById("fs-view-net-btn");
+      const fsViewSplitBtn = document.getElementById("fs-view-split-btn");
       const fsDlBtn = document.getElementById("fs-dl-btn");
       const fsCloseBtn = document.getElementById("fs-close-btn");
       const fsPrevBtn = document.getElementById("fs-prev-btn");
       const fsNextBtn = document.getElementById("fs-next-btn");
       const fsCanvasEl = document.getElementById("fs-canvas");
+      const fsGlCanvasEl = document.getElementById("fs-gl-canvas");
+      const fsGlHintEl = document.getElementById("fs-gl-hint");
+      let fsMujocoViewer = null;
+      const fsGlSupported = Boolean(
+        fsGlCanvasEl &&
+        window.DetMujocoGL &&
+        window.DetMujocoGL.DetMujocoViewer.isSupported()
+      );
+      function setFsCanvasMode(use3d) {
+        const active3d = Boolean(use3d && fsGlSupported && fsGlCanvasEl);
+        if (fsCanvasEl) fsCanvasEl.hidden = active3d;
+        if (fsGlCanvasEl) {
+          fsGlCanvasEl.hidden = !active3d;
+          if (active3d) {
+            fsGlCanvasEl.width = FULLSCREEN_SIM_WIDTH;
+            fsGlCanvasEl.height = FULLSCREEN_SIM_HEIGHT;
+            fsGlCanvasEl.style.aspectRatio = `${FULLSCREEN_SIM_WIDTH} / ${FULLSCREEN_SIM_HEIGHT}`;
+          }
+        }
+        if (fsGlHintEl) fsGlHintEl.hidden = !active3d;
+        return active3d;
+      }
+      function ensureFsMujocoViewer() {
+        if (!fsGlSupported || !fsGlCanvasEl) return null;
+        if (!fsMujocoViewer) {
+          fsMujocoViewer = new window.DetMujocoGL.DetMujocoViewer(fsGlCanvasEl);
+        }
+        return fsMujocoViewer.ready ? fsMujocoViewer : null;
+      }
       const fsSimBarEl = document.getElementById("fs-sim-bar");
       const fsSimPlayBtn = document.getElementById("fs-sim-play-btn");
       const fsSimRestartBtn = document.getElementById("fs-sim-restart-btn");
       const fsSimSeedSelect = document.getElementById("fs-sim-seed-select");
-      const fsSimNudgeLBtn = document.getElementById("fs-sim-nudge-l");
-      const fsSimNudgeRBtn = document.getElementById("fs-sim-nudge-r");
+      const fsSimNudgesEl = document.getElementById("fs-sim-nudges");
       const fsSimHeldoutBtn = document.getElementById("fs-sim-heldout-btn");
       const fsSimVideoBtn = document.getElementById("fs-sim-video-btn");
       const fsSimTelemetryEl = document.getElementById("fs-sim-telemetry");
@@ -5864,6 +7540,55 @@
       let fullscreenIdx = null;
       let fullscreenNode = null;
       let fsSimState = null;
+      let fsViewMode = "sim"; // "sim" | "net" | "split"
+      let fsNetInspector = null;
+      let fsCurrentTarget = null; // { genome, taskId, topology }
+
+      function ensureFsNetworkInspector() {
+        if (!fsNetworkPanelEl || !window.DetNetworkViz) return null;
+        if (!fsNetInspector) {
+          fsNetInspector = new window.DetNetworkViz.NetworkInspector(fsNetworkPanelEl);
+        }
+        return fsNetInspector;
+      }
+
+      function syncFsViewLayout() {
+        if (!fsCurrentTarget) return;
+        const { genome, taskId, topology } = fsCurrentTarget;
+        const spec = getTaskSpec(taskId);
+        const canSplit = spec.kind === "control" && taskId !== "external";
+        if (!canSplit && fsViewMode === "split") fsViewMode = "sim";
+
+        if (fsViewSimBtn) {
+          fsViewSimBtn.textContent = canSplit ? "Simulation" : (taskId === "external" ? "Preview" : "Image");
+          fsViewSimBtn.classList.toggle("active", fsViewMode === "sim");
+        }
+        if (fsViewNetBtn) fsViewNetBtn.classList.toggle("active", fsViewMode === "net");
+        if (fsViewSplitBtn) {
+          fsViewSplitBtn.hidden = !canSplit;
+          fsViewSplitBtn.classList.toggle("active", fsViewMode === "split");
+        }
+        if (fsDialogEl) fsDialogEl.classList.toggle("is-wide", fsViewMode !== "sim");
+        if (fsStageEl) fsStageEl.classList.toggle("has-split", fsViewMode === "split");
+        if (fsCanvasPaneEl) fsCanvasPaneEl.hidden = fsViewMode === "net";
+        if (fsNetworkPanelEl) fsNetworkPanelEl.hidden = fsViewMode === "sim";
+
+        if (fsViewMode !== "sim") {
+          const insp = ensureFsNetworkInspector();
+          if (insp) {
+            insp.setData(topology || genome, spec);
+          }
+        }
+      }
+
+      function setFsViewMode(mode) {
+        fsViewMode = mode === "net" || mode === "split" ? mode : "sim";
+        syncFsViewLayout();
+      }
+
+      if (fsViewSimBtn) fsViewSimBtn.addEventListener("click", () => setFsViewMode("sim"));
+      if (fsViewNetBtn) fsViewNetBtn.addEventListener("click", () => setFsViewMode("net"));
+      if (fsViewSplitBtn) fsViewSplitBtn.addEventListener("click", () => setFsViewMode("split"));
 
       function stopFullscreenSim() {
         if (fsSimState && fsSimState.raf) {
@@ -5899,53 +7624,201 @@
       }
 
       let fsTelemetryParts = null;
+      let fsTelemetryTaskId = null;
       let fsTelemetryLastPaint = 0;
 
-      function ensureFullscreenTelemetryParts() {
-        if (fsTelemetryParts || !fsSimTelemetryEl) return fsTelemetryParts;
+      function ensureFullscreenTelemetryParts(taskId) {
+        if (!fsSimTelemetryEl) return null;
+        if (fsTelemetryParts && fsTelemetryTaskId === taskId) return fsTelemetryParts;
+        fsTelemetryTaskId = taskId;
         fsSimTelemetryEl.replaceChildren();
-        const make = (label) => {
+        const spec = getTaskSpec(taskId);
+        const fields = Array.isArray(spec.telemetryFields) && spec.telemetryFields.length
+          ? spec.telemetryFields
+          : [
+              { key: "step", label: "step" },
+              { key: "x", label: "x" },
+              { key: "theta", label: "\u03b8" },
+              { key: "force", label: "F" },
+              { key: "status", label: "" },
+            ];
+        const parts = {};
+        for (const f of fields) {
           const span = document.createElement("span");
-          if (label) span.appendChild(document.createTextNode(`${label} `));
+          if (f.label) span.appendChild(document.createTextNode(`${f.label} `));
           const strong = document.createElement("strong");
           span.appendChild(strong);
           fsSimTelemetryEl.appendChild(span);
-          return strong;
-        };
-        fsTelemetryParts = {
-          step: make("step"),
-          x: make("x"),
-          theta: make("\u03b8"),
-          force: make("F"),
-          status: make(""),
-        };
-        return fsTelemetryParts;
+          parts[f.key] = strong;
+        }
+        fsTelemetryParts = parts;
+        return parts;
+      }
+
+      function renderFullscreenNudgeButtons(taskId) {
+        if (!fsSimNudgesEl) return;
+        const spec = getTaskSpec(taskId);
+        const nudges = Array.isArray(spec.nudges) ? spec.nudges : [];
+        fsSimNudgesEl.replaceChildren();
+        nudges.forEach((n) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "ghost";
+          if (n.id === "left") btn.id = "fs-sim-nudge-l";
+          else if (n.id === "right") btn.id = "fs-sim-nudge-r";
+          else btn.id = `fs-sim-nudge-${n.id}`;
+          btn.title = n.title || n.label;
+          btn.textContent = n.label;
+          btn.addEventListener("click", () => applyFullscreenNudge(n.id));
+          fsSimNudgesEl.appendChild(btn);
+        });
       }
 
       function renderFullscreenTelemetry(force = false) {
         if (!fsSimTelemetryEl || !fsSimState) return;
-        // Telemetry only needs a few updates per second; the canvas carries the motion.
         const now = performance.now();
-        if (!force && now - fsTelemetryLastPaint < 100) return;
+        if (!force && now - fsTelemetryLastPaint < 90) return;
         fsTelemetryLastPaint = now;
-        const parts = ensureFullscreenTelemetryParts();
+        const parts = ensureFullscreenTelemetryParts(fsSimState.taskId);
         if (!parts) return;
-        const [x, , theta] = fsSimState.state;
+
+        if (fsSimState.taskId === "halfcheetah") {
+          const idx = fsSimState.step || 0;
+          const frames = fsSimState.frames || [];
+          const f = frames[idx] || frames[0] || [];
+          const dx = frames.length ? Number(f[0] || 0) - Number(frames[0][0] || 0) : 0;
+          const vx = fsSimState.vxTrace && idx > 0
+            ? Number(fsSimState.vxTrace[Math.min(idx - 1, fsSimState.vxTrace.length - 1)] || 0)
+            : 0;
+          const up = Math.cos(Number(f[2] || 0));
+          const status = fsSimState.loading
+            ? "simulating..."
+            : fsSimState.nudgeTag
+              ? `nudge: ${fsSimState.nudgeTag}`
+              : idx >= fsSimState.maxSteps
+                ? "done"
+                : fsSimState.playing
+                  ? "live"
+                  : "paused";
+          if (parts.step) parts.step.textContent = `${idx}/${fsSimState.maxSteps}`;
+          if (parts.dx) parts.dx.textContent = `${dx >= 0 ? "+" : ""}${dx.toFixed(2)}m`;
+          if (parts.vx) parts.vx.textContent = `${vx >= 0 ? "+" : ""}${vx.toFixed(2)}m/s`;
+          if (parts.upright) parts.upright.textContent = `${up.toFixed(2)}`;
+          if (parts.status) parts.status.textContent = status;
+          return;
+        }
+
+        const [x, , theta] = fsSimState.state || [0, 0, 0, 0];
         const deg = (theta * 180.0) / Math.PI;
         const status = fsSimState.terminated
           ? "fell"
           : (fsSimState.step >= fsSimState.maxSteps ? "balanced!" : (fsSimState.playing ? "live" : "paused"));
-        parts.step.textContent = `${fsSimState.step}/${fsSimState.maxSteps}`;
-        parts.x.textContent = `${x >= 0 ? "+" : ""}${x.toFixed(2)}m`;
-        parts.theta.textContent = `${deg >= 0 ? "+" : ""}${deg.toFixed(1)}\u00b0`;
-        parts.force.textContent = `${fsSimState.lastForce >= 0 ? "+" : ""}${fsSimState.lastForce.toFixed(1)}N`;
-        parts.status.textContent = status;
+        if (parts.step) parts.step.textContent = `${fsSimState.step}/${fsSimState.maxSteps}`;
+        if (parts.x) parts.x.textContent = `${x >= 0 ? "+" : ""}${x.toFixed(2)}m`;
+        if (parts.theta) parts.theta.textContent = `${deg >= 0 ? "+" : ""}${deg.toFixed(1)}\u00b0`;
+        if (parts.force) parts.force.textContent = `${fsSimState.lastForce >= 0 ? "+" : ""}${fsSimState.lastForce.toFixed(1)}N`;
+        if (parts.status) parts.status.textContent = status;
+      }
+
+      function paintFsLiveNetworkStep(stateObj) {
+        if (!fsNetInspector || fsViewMode !== "split" || !stateObj) return;
+        if (stateObj.taskId === "cartpole" && stateObj.decoded && stateObj.state) {
+          const obs = [
+            stateObj.state[0] / CARTPOLE_X_THRESHOLD,
+            stateObj.state[1] / 3.0,
+            stateObj.state[2] / CARTPOLE_THETA_THRESHOLD,
+            stateObj.state[3] / 3.0,
+          ];
+          const tr = forwardPolicyWithTrace(stateObj.decoded, obs);
+          fsNetInspector.updateActivations(tr.activations);
+          return;
+        }
+        if (stateObj.taskId === "halfcheetah" && stateObj.frames && stateObj.frames.length) {
+          const idx = Math.min(stateObj.step || 0, Math.max(0, stateObj.frames.length - 1));
+          if (stateObj.stepActivations && stateObj.stepActivations[idx]) {
+            fsNetInspector.updateActivations(stateObj.stepActivations[idx]);
+          } else if (stateObj.decoded) {
+            const obs = cheetahObsFromFrames(stateObj.frames, idx, stateObj.dt, stateObj.phaseFreq || 2.0);
+            const tr = forwardPolicyWithTrace(stateObj.decoded, obs);
+            fsNetInspector.updateActivations(tr.activations);
+          }
+        }
+      }
+
+      function paintFsCheetahFrame(stateObj) {
+        if (!stateObj || !stateObj.frames || !stateObj.frames.length) return;
+        const idx = Math.min(stateObj.step || 0, stateObj.frames.length - 1);
+        if (
+          fsGlSupported &&
+          Array.isArray(stateObj.geomSpecs) &&
+          Array.isArray(stateObj.geomPoses) &&
+          stateObj.geomPoses[idx]
+        ) {
+          const viewer = ensureFsMujocoViewer();
+          if (viewer && setFsCanvasMode(true)) {
+            const focusX = Number(stateObj.frames[idx][0] || 0);
+            viewer.renderFrame(stateObj.geomSpecs, stateObj.geomPoses[idx], focusX);
+            return;
+          }
+        }
+        setFsCanvasMode(false);
+        if (window.DetCheetahRenderer) {
+          window.DetCheetahRenderer.renderCheetahLiveFrame(fsCanvasEl, stateObj.frames, idx, stateObj.maxSteps);
+        }
+      }
+
+      function loadCheetahFullscreenRollout(stateObj, seed, nudgeId = null) {
+        stateObj.loading = true;
+        stateObj.nudgeTag = nudgeId || "";
+        stateObj.frames = [];
+        stateObj.vxTrace = [];
+        stateObj.stepActivations = null;
+        stateObj.geomSpecs = null;
+        stateObj.geomPoses = null;
+        stateObj.step = 0;
+        stateObj.doneAtPerf = 0;
+        setFsCanvasMode(false);
+        if (window.DetCheetahRenderer) {
+          window.DetCheetahRenderer.renderCheetahStaticCanvas(null, null, fsCanvasEl);
+        }
+        renderFullscreenTelemetry(true);
+
+        fetchTaskRollout("halfcheetah", stateObj.genome, seed, stateObj.maxSteps, nudgeId, true, fsGlSupported)
+          .then((ro) => {
+            if (fsSimState !== stateObj) return;
+            stateObj.loading = false;
+            stateObj.seed = seed;
+            stateObj.frames = ro.frames || [];
+            stateObj.vxTrace = ro.vx_trace || [];
+            stateObj.stepActivations = ro.stepActivations || null;
+            stateObj.geomSpecs = ro.geomSpecs || null;
+            stateObj.geomPoses = ro.geomPoses || null;
+            stateObj.step = 0;
+            stateObj.lastStepPerf = performance.now();
+            paintFsCheetahFrame(stateObj);
+            paintFsLiveNetworkStep(stateObj);
+            renderFullscreenTelemetry(true);
+          })
+          .catch((err) => {
+            if (fsSimState !== stateObj) return;
+            stateObj.loading = false;
+            if (fsHeldoutStatusEl) {
+              fsHeldoutStatusEl.style.color = "var(--err)";
+              fsHeldoutStatusEl.textContent = err.message || "HalfCheetah rollout failed.";
+              fsHeldoutStatusEl.hidden = false;
+            }
+            renderFullscreenTelemetry(true);
+          });
       }
 
       function resetFullscreenEpisode(newSeed) {
         if (!fsSimState) return;
         const s = typeof newSeed === "number" ? newSeed : fsSimState.seed;
         fsSimState.seed = s;
+        if (fsSimState.taskId === "halfcheetah") {
+          loadCheetahFullscreenRollout(fsSimState, s, null);
+          return;
+        }
         fsSimState.step = 0;
         fsSimState.state = cartpoleReset(s);
         fsSimState.lastForce = 0;
@@ -5953,6 +7826,7 @@
         fsSimState.doneAtPerf = 0;
         fsSimState.lastStepPerf = performance.now();
         renderCartpoleLiveFrame(fsCanvasEl, fsSimState.state, 0, 0, fsSimState.maxSteps);
+        paintFsLiveNetworkStep(fsSimState);
         renderFullscreenTelemetry(true);
       }
 
@@ -5961,35 +7835,112 @@
         clearFullscreenMediaUI();
         const spec = getTaskSpec(taskId);
         const maxSteps = spec.maxSteps || CARTPOLE_MAX_STEPS;
+        const dt = spec.dt || CARTPOLE_TAU;
         fsCanvasEl.width = FULLSCREEN_SIM_WIDTH;
         fsCanvasEl.height = FULLSCREEN_SIM_HEIGHT;
         fsCanvasEl.style.aspectRatio = `${FULLSCREEN_SIM_WIDTH} / ${FULLSCREEN_SIM_HEIGHT}`;
         if (fsSimBarEl) fsSimBarEl.hidden = false;
         if (fsSimPlayBtn) fsSimPlayBtn.textContent = "Pause";
+        if (fsSimVideoBtn) fsSimVideoBtn.hidden = !(spec.supportsVideo && spec.allowServerVideo !== false);
+        renderFullscreenNudgeButtons(taskId);
 
         const seed = selectedFullscreenSeed();
-        const decoded = decodeHyperNeatWeights(genome, [4, 8, 1]);
+        const decoded = decodePolicyForTask(genome, taskId);
         const stateObj = {
           genome,
           decoded,
           taskId,
           seed,
           maxSteps,
+          dt,
+          phaseFreq: spec.phaseFreq || 0,
           step: 0,
-          state: cartpoleReset(seed),
+          state: taskId === "cartpole" ? cartpoleReset(seed) : null,
           lastForce: 0,
           terminated: false,
+          frames: [],
+          vxTrace: [],
+          stepActivations: null,
+          loading: false,
+          nudgeTag: "",
           playing: true,
           doneAtPerf: 0,
           lastStepPerf: performance.now(),
           raf: 0,
         };
         fsSimState = stateObj;
-        renderCartpoleLiveFrame(fsCanvasEl, stateObj.state, 0, 0, maxSteps);
-        renderFullscreenTelemetry(true);
+
+        if (taskId === "halfcheetah") {
+          const cached = getCachedControlEntry("halfcheetah", genome);
+          if (cached && cached.primaryRollout && cached.primaryRollout.frames && seed === (spec.evalSeeds?.[0] ?? 0)) {
+            stateObj.frames = cached.primaryRollout.frames;
+            stateObj.vxTrace = cached.primaryRollout.vx_trace || [];
+            stateObj.stepActivations = cached.primaryRollout.stepActivations || null;
+            stateObj.geomSpecs = cached.primaryRollout.geomSpecs || null;
+            stateObj.geomPoses = cached.primaryRollout.geomPoses || null;
+            paintFsCheetahFrame(stateObj);
+            paintFsLiveNetworkStep(stateObj);
+            renderFullscreenTelemetry(true);
+            // Upgrade cached primary rollout with full 3D MuJoCo geoms + activations on demand
+            if ((fsGlSupported && !stateObj.geomPoses) || (!stateObj.stepActivations && fsViewMode === "split" && getEffectiveSimMode("halfcheetah") === "client")) {
+              fetchTaskRollout("halfcheetah", genome, seed, maxSteps, null, true, fsGlSupported)
+                .then((ro) => {
+                  if (fsSimState === stateObj && ro) {
+                    if (ro.stepActivations) stateObj.stepActivations = ro.stepActivations;
+                    if (ro.geomSpecs && ro.geomPoses) {
+                      stateObj.geomSpecs = ro.geomSpecs;
+                      stateObj.geomPoses = ro.geomPoses;
+                      cached.primaryRollout.geomSpecs = ro.geomSpecs;
+                      cached.primaryRollout.geomPoses = ro.geomPoses;
+                      paintFsCheetahFrame(stateObj);
+                    }
+                  }
+                })
+                .catch(() => {});
+            }
+          } else {
+            loadCheetahFullscreenRollout(stateObj, seed, null);
+          }
+        } else {
+          setFsCanvasMode(false);
+          renderCartpoleLiveFrame(fsCanvasEl, stateObj.state, 0, 0, maxSteps);
+          paintFsLiveNetworkStep(stateObj);
+          renderFullscreenTelemetry(true);
+        }
 
         function loop(now) {
           if (fsSimState !== stateObj || fullscreenModalEl.hidden) return;
+          if (stateObj.taskId === "halfcheetah") {
+            if (stateObj.playing && !stateObj.loading && stateObj.frames.length > 0) {
+              const lastFrameIdx = stateObj.frames.length - 1;
+              if (stateObj.step >= lastFrameIdx) {
+                if (!stateObj.doneAtPerf) stateObj.doneAtPerf = now;
+                else if (now - stateObj.doneAtPerf >= 1100) {
+                  stateObj.doneAtPerf = 0;
+                  stateObj.step = 0;
+                  stateObj.lastStepPerf = now;
+                  if (fsSimSeedSelect && fsSimSeedSelect.value === "random") {
+                    loadCheetahFullscreenRollout(stateObj, selectedFullscreenSeed(), null);
+                  }
+                }
+              } else {
+                const stepMs = stateObj.dt * 1000;
+                const delta = Math.min(3, Math.floor((now - stateObj.lastStepPerf) / stepMs));
+                if (delta > 0) {
+                  stateObj.lastStepPerf += delta * stepMs;
+                  stateObj.step = Math.min(lastFrameIdx, stateObj.step + delta);
+                  paintFsCheetahFrame(stateObj);
+                  paintFsLiveNetworkStep(stateObj);
+                  renderFullscreenTelemetry();
+                }
+              }
+            } else {
+              stateObj.lastStepPerf = now;
+            }
+            stateObj.raf = requestAnimationFrame(loop);
+            return;
+          }
+
           if (stateObj.playing) {
             if (stateObj.terminated || stateObj.step >= stateObj.maxSteps) {
               if (!stateObj.doneAtPerf) {
@@ -6022,6 +7973,7 @@
                   stateObj.step,
                   stateObj.maxSteps
                 );
+                paintFsLiveNetworkStep(stateObj);
                 renderFullscreenTelemetry();
               }
             }
@@ -6067,9 +8019,12 @@
           const { goalName, node } = fullscreenNode;
           const nodeGoal = goalsByName.get(goalName);
           const taskId = nodeGoal ? goalTaskId(nodeGoal) : "image";
+          const spec = getTaskSpec(taskId);
           fsTitleEl.textContent = `${goalName} #${node.id}`;
           fsSubEl.textContent = `lineage gen ${node.gen} (${node.op || "random"})`;
-          if (getTaskSpec(taskId).kind === "control") {
+          fsCurrentTarget = { genome: node, taskId, topology: null };
+          syncFsViewLayout();
+          if (spec.kind === "control" && taskId !== "external") {
             if (!Array.isArray(node.weights)) {
               stopFullscreenSim();
               clearFullscreenMediaUI();
@@ -6086,11 +8041,16 @@
           } else {
             stopFullscreenSim();
             clearFullscreenMediaUI();
+            setFsCanvasMode(false);
             if (fsSimBarEl) fsSimBarEl.hidden = true;
             fsCanvasEl.width = FULLSCREEN_CANVAS_SIZE;
             fsCanvasEl.height = FULLSCREEN_CANVAS_SIZE;
             fsCanvasEl.style.aspectRatio = "1 / 1";
-            renderCppnToCanvas(node, fsCanvasEl, FULLSCREEN_CANVAS_SIZE);
+            if (taskId === "external") {
+              TaskRenderers.external.renderCard(node, fsCanvasEl, null);
+            } else {
+              renderCppnToCanvas(node, fsCanvasEl, FULLSCREEN_CANVAS_SIZE);
+            }
           }
           renderFullscreenVotes();
           return;
@@ -6106,16 +8066,40 @@
         }
         const genome = goal.genomes[fullscreenIdx];
         const taskId = goalTaskId(goal);
+        const spec = getTaskSpec(taskId);
         const isCtrl = isControlGoal(goal);
+        const extEntry = taskId === "external"
+          ? getExternalEvalEntry(goal.name, goal.generation, genome)
+          : null;
+        if (taskId === "external" && !extEntry && !genomeShaCache.has(genome)) {
+          ensureGenomeSha256(genome).then(() => {
+            if (fullscreenIdx !== null && goalsByName.get(activeGoalName) === goal) renderFullscreen();
+          });
+        }
+        fsCurrentTarget = { genome, taskId, topology: extEntry && extEntry.topology ? extEntry.topology : null };
+        syncFsViewLayout();
+
         fsTitleEl.textContent = `${goal.name} #${fullscreenIdx + 1}`;
-        if (isCtrl) {
-          const summary = evaluateCartpoleSummary(genome);
-          const maxSteps = getTaskSpec(taskId).maxSteps || CARTPOLE_MAX_STEPS;
-          fsSubEl.textContent = `gen ${goal.generation} (${fullscreenIdx + 1}/${goal.genomes.length}) \u00b7 mean ${summary.meanSteps}/${maxSteps} steps`;
+        if (isCtrl && taskId !== "external") {
+          const cached = getCachedControlEntry(taskId, genome);
+          const metricLabel = cached && cached.summary ? cached.summary.primaryDisplay : "evaluating...";
+          fsSubEl.textContent = `gen ${goal.generation} (${fullscreenIdx + 1}/${goal.genomes.length}) \u00b7 ${metricLabel}`;
           startFullscreenSim(genome, taskId);
+        } else if (taskId === "external") {
+          stopFullscreenSim();
+          clearFullscreenMediaUI();
+          setFsCanvasMode(false);
+          if (fsSimBarEl) fsSimBarEl.hidden = true;
+          fsCanvasEl.width = FULLSCREEN_CANVAS_SIZE;
+          fsCanvasEl.height = FULLSCREEN_CANVAS_SIZE;
+          fsCanvasEl.style.aspectRatio = "1 / 1";
+          const extLabel = extEntry && extEntry.summary ? extEntry.summary.primaryDisplay : "awaiting worker";
+          fsSubEl.textContent = `gen ${goal.generation} (${fullscreenIdx + 1}/${goal.genomes.length}) \u00b7 ${extLabel}`;
+          TaskRenderers.external.renderCard(genome, fsCanvasEl, extEntry);
         } else {
           stopFullscreenSim();
           clearFullscreenMediaUI();
+          setFsCanvasMode(false);
           if (fsSimBarEl) fsSimBarEl.hidden = true;
           fsCanvasEl.width = FULLSCREEN_CANVAS_SIZE;
           fsCanvasEl.height = FULLSCREEN_CANVAS_SIZE;
@@ -6126,16 +8110,18 @@
         renderFullscreenVotes();
       }
 
-      function openFullscreen(idx) {
+      function openFullscreen(idx, initialView = "sim") {
         fullscreenNode = null;
         fullscreenIdx = idx;
+        fsViewMode = initialView === "net" || initialView === "split" ? initialView : "sim";
         fullscreenModalEl.hidden = false;
         renderFullscreen();
       }
 
-      function openFullscreenNode(goal, node) {
+      function openFullscreenNode(goal, node, initialView = "sim") {
         fullscreenIdx = null;
         fullscreenNode = { goalName: goal.name, node };
+        fsViewMode = initialView === "net" || initialView === "split" ? initialView : "sim";
         fullscreenModalEl.hidden = false;
         renderFullscreen();
       }
@@ -6143,7 +8129,13 @@
       function closeFullscreen() {
         stopFullscreenSim();
         clearFullscreenMediaUI();
+        setFsCanvasMode(false);
         if (fsSimBarEl) fsSimBarEl.hidden = true;
+        if (fsNetworkPanelEl) fsNetworkPanelEl.hidden = true;
+        if (fsCanvasPaneEl) fsCanvasPaneEl.hidden = false;
+        if (fsDialogEl) fsDialogEl.classList.remove("is-wide");
+        if (fsStageEl) fsStageEl.classList.remove("has-split");
+        fsCurrentTarget = null;
         fullscreenIdx = null;
         fullscreenNode = null;
         fullscreenModalEl.hidden = true;
@@ -6174,8 +8166,14 @@
           resetFullscreenEpisode(selectedFullscreenSeed());
         });
       }
-      function applyCartpoleNudge(direction) {
-        if (!fsSimState || fsSimState.terminated) return;
+      function applyFullscreenNudge(nudgeId) {
+        if (!fsSimState) return;
+        if (fsSimState.taskId === "halfcheetah") {
+          loadCheetahFullscreenRollout(fsSimState, fsSimState.seed, nudgeId);
+          return;
+        }
+        if (fsSimState.terminated) return;
+        const direction = nudgeId === "left" ? -1 : 1;
         const [x, xDot, theta, thetaDot] = fsSimState.state;
         fsSimState.state = [x, xDot + direction * 0.35, theta, thetaDot + direction * 0.55];
         fsSimState.lastForce = direction * CARTPOLE_FORCE_MAG;
@@ -6186,24 +8184,48 @@
           fsSimState.step,
           fsSimState.maxSteps
         );
+        paintFsLiveNetworkStep(fsSimState);
         renderFullscreenTelemetry(true);
       }
-      if (fsSimNudgeLBtn) fsSimNudgeLBtn.addEventListener("click", () => applyCartpoleNudge(-1));
-      if (fsSimNudgeRBtn) fsSimNudgeRBtn.addEventListener("click", () => applyCartpoleNudge(1));
 
       if (fsSimHeldoutBtn) {
-        fsSimHeldoutBtn.addEventListener("click", () => {
+        fsSimHeldoutBtn.addEventListener("click", async () => {
           if (!fsSimState || !fsHeldoutStatusEl) return;
-          const res = evaluateCartpoleSummary(fsSimState.genome, HELD_OUT_EVAL_SEEDS);
-          const status = res.solved
-            ? "SOLVED (all 10 unseen initial states >= 490/500)"
-            : (res.meanSteps >= 200 ? "Partial balance — keep selecting top balancers" : "Unconverged");
-          fsHeldoutStatusEl.style.color = res.solved
-            ? "var(--ok)"
-            : (res.meanSteps >= 200 ? "var(--gold)" : "var(--bad)");
-          fsHeldoutStatusEl.textContent =
-            `10 held-out seeds: mean ${res.meanSteps}/${fsSimState.maxSteps} · min ${res.minSteps}/${fsSimState.maxSteps} · ${status} · [${res.perSeed.join(", ")}]`;
-          fsHeldoutStatusEl.hidden = false;
+          const targetGenome = fsSimState.genome;
+          const targetTask = fsSimState.taskId;
+          const maxSteps = fsSimState.maxSteps;
+          fsSimHeldoutBtn.disabled = true;
+          fsSimHeldoutBtn.textContent = "Testing...";
+          try {
+            const items = await evaluateControlGenomes(targetTask, [targetGenome], HELD_OUT_EVAL_SEEDS);
+            if (!fsSimState || fsSimState.genome !== targetGenome) return;
+            const res = items && items[0] ? items[0].summary : null;
+            if (!res) throw new Error("Held-out evaluation returned no summary.");
+            const spec = getTaskSpec(targetTask);
+            fsHeldoutStatusEl.style.color = res.solved
+              ? "var(--ok)"
+              : (res.tier === "mid" ? "var(--gold)" : "var(--err)");
+            if (targetTask === "halfcheetah") {
+              const dists = res.distancesPerSeed || [];
+              const status = res.solved ? "SOLVED (mean >= 8.0m upright)" : (res.tier === "mid" ? "Partial gait" : "Unconverged");
+              fsHeldoutStatusEl.textContent =
+                `10 held-out seeds: mean ${res.primaryDisplay} · min ${Number(res.minDistance || 0).toFixed(2)}m · up=${Number(res.meanUpright || 0).toFixed(2)} · ${status} · [${dists.join(", ")}]`;
+            } else {
+              const status = res.solved
+                ? "SOLVED (all 10 unseen initial states >= 490/500)"
+                : (res.meanSteps >= 200 ? "Partial balance — keep selecting top balancers" : "Unconverged");
+              fsHeldoutStatusEl.textContent =
+                `10 held-out seeds: mean ${res.meanSteps}/${maxSteps} · min ${res.minSteps}/${maxSteps} · ${status} · [${(res.perSeed || []).join(", ")}]`;
+            }
+            fsHeldoutStatusEl.hidden = false;
+          } catch (err) {
+            fsHeldoutStatusEl.style.color = "var(--err)";
+            fsHeldoutStatusEl.textContent = err.message || "Held-out check failed.";
+            fsHeldoutStatusEl.hidden = false;
+          } finally {
+            fsSimHeldoutBtn.disabled = false;
+            fsSimHeldoutBtn.textContent = "Test 10 Held-Out";
+          }
         });
       }
 
@@ -6236,13 +8258,14 @@
             fsVideoEl.poster = data.posterUrl || "";
             fsVideoEl.src = data.videoUrl;
             fsVideoDlEl.href = data.videoUrl;
+            const distText = typeof data.distance === "number" ? ` · dist=${data.distance.toFixed(2)}m` : "";
             fsVideoCaptionEl.textContent =
-              `Server MP4 · seed=${data.seed} · ${data.steps}/${fsSimState.maxSteps} steps · return=${data.return}`;
+              `Server MP4 · seed=${data.seed} · ${data.steps}/${fsSimState.maxSteps} steps${distText} · return=${data.return}`;
             fsVideoWrapEl.hidden = false;
             fsVideoEl.play().catch(() => {});
           } catch (err) {
             if (fsHeldoutStatusEl) {
-              fsHeldoutStatusEl.style.color = "var(--bad)";
+              fsHeldoutStatusEl.style.color = "var(--err)";
               fsHeldoutStatusEl.textContent = err.message || "MP4 render failed.";
               fsHeldoutStatusEl.hidden = false;
             }

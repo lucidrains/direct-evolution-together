@@ -12,24 +12,21 @@ from direct_evolution_together.cppn import (
     resize_population,
     sync_genome_counter,
 )
+from direct_evolution_together.config import get_config
 from direct_evolution_together.environments import (
     clamp_pop_for_task,
     create_task_population,
     default_elite_for_task,
     default_pop_for_task,
-    evaluate_control_genome,
+    get_nim_task_configs_payload,
     get_task_spec,
+    is_gen0_founder_presolved,
     normalize_task_id,
 )
 from direct_evolution_together.models import ChatMessage, RoomEvolutionState
 
 HISTORY_LIMIT = 100
-DEFAULT_GOAL_SPECS: tuple[tuple[str, str, int | None], ...] = (
-    ("CartPole", "cartpole", 30),
-    ("Butterfly", "image", None),
-    ("Galaxy", "image", None),
-    ("Creature", "image", None),
-)
+DEFAULT_GOAL_SPECS: tuple[tuple[str, str, int | None], ...] = get_config().get_lobby_goal_specs()
 DEFAULT_GOALS = tuple(name for name, _, _ in DEFAULT_GOAL_SPECS)
 
 _bridge_lock = threading.Lock()
@@ -190,35 +187,37 @@ def _ensure_lobby_default_goals(
         ):
             p["maxVotesPerUser"] = int(default_max_votes)
             changed = True
-        if g.get("task") == "cartpole" and int(g.get("generation", 0)) == 0:
-            cp_spec = get_task_spec("cartpole")
+        task_id = normalize_task_id(str(g.get("task", "image")))
+        task_spec = get_task_spec(task_id)
+        if task_spec.kind == "control" and int(g.get("generation", 0)) == 0:
             p = g.get("params")
             if isinstance(p, dict):
-                cp_max_votes = max(
+                t_max_votes = max(
                     1,
                     int(p.get("maxVotesPerUser", base_params.get("maxVotesPerUser", 20))),
                 )
-                cp_min_votes = max(1, min(cp_spec.default_min_votes, cp_max_votes))
-                if int(p.get("minVotes", 0)) != cp_min_votes:
-                    p["minVotes"] = cp_min_votes
+                t_min_votes = max(1, min(task_spec.default_min_votes, t_max_votes))
+                if int(p.get("minVotes", 0)) != t_min_votes:
+                    p["minVotes"] = t_min_votes
                     changed = True
-                if float(p.get("eliteFrac", 0.0)) != 0.0:
-                    p["eliteFrac"] = 0.0
+                exp_elite = default_elite_for_task(task_id, float(p.get("eliteFrac", 0.0)))
+                if abs(float(p.get("eliteFrac", 0.0)) - exp_elite) > 1e-6:
+                    p["eliteFrac"] = exp_elite
                     changed = True
             cur_genomes = g.get("genomes")
             if isinstance(cur_genomes, list) and cur_genomes:
                 target_pop = clamp_pop_for_task(
-                    "cartpole",
-                    min(default_pop_size, cp_spec.default_pop_size),
+                    task_id,
+                    min(default_pop_size, task_spec.default_pop_size),
                 )
                 needs_resize = len(cur_genomes) != target_pop
                 needs_refresh = any(
-                    evaluate_control_genome("cartpole", cg, seeds=cp_spec.eval_seeds)["meanSteps"] >= 60.0
+                    is_gen0_founder_presolved(task_id, cg)
                     for cg in cur_genomes
                 )
                 if needs_resize or needs_refresh:
                     fresh = create_task_population(
-                        "cartpole",
+                        task_id,
                         target_pop if needs_resize else len(cur_genomes),
                     )
                     g["genomes"] = fresh
@@ -229,7 +228,7 @@ def _ensure_lobby_default_goals(
         1,
         int(base_params.get("maxVotesPerUser", default_max_votes or 20)),
     )
-    for name, task, cap_pop in DEFAULT_GOAL_SPECS:
+    for name, task, cap_pop in get_config().get_lobby_goal_specs():
         if name in existing:
             continue
         spec = get_task_spec(task)
@@ -356,7 +355,7 @@ def flush_evo_jobs() -> int:
             elif room != "lobby":
                 goal_specs = ()
             else:
-                goal_specs = DEFAULT_GOAL_SPECS
+                goal_specs = get_config().get_lobby_goal_specs()
             mummy_ws.apply_room_init(
                 room, _build_goals_payload(goal_specs, pop_size=pop_size)
             )
@@ -436,6 +435,7 @@ def start_ws_server(
             return
         _persist_to_db = bool(seed)
         resolved_admin_pw = os.getenv("DET_ADMIN_PASSWORD", "") if admin_password is None else admin_password
+        mummy_ws.register_task_configs(json.dumps(get_nim_task_configs_payload()))
         mummy_ws.set_admin_password(resolved_admin_pw)
         mummy_ws.set_evolve_token(evolve_token or "")
         if min_votes is not None or countdown_ms != 8000:
