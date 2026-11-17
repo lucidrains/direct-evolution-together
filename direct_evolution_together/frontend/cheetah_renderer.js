@@ -114,7 +114,19 @@
     ctx.fillRect(0, 0, w, h);
 
     const frames = (rollout && rollout.frames) || [];
-    if (!frames.length) return;
+    if (!frames.length) {
+      const restPose = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+      const groundY = w <= 40 ? h * 0.72 : Math.round(h * 0.60);
+      const pxPerM = w <= 40 ? h * 0.34 : h * 0.32;
+      ctx.strokeStyle = "#27272a";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(2, groundY);
+      ctx.lineTo(w - 2, groundY);
+      ctx.stroke();
+      drawCheetahPose(ctx, restPose, 0, w, h, groundY, pxPerM, 0.28, "#71717a");
+      return;
+    }
 
     const meanDx = summary && typeof summary.meanDistance === "number" ? summary.meanDistance : 0;
     const solved = Boolean(summary && summary.solved);

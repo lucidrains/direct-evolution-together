@@ -1789,12 +1789,28 @@ def test_vendored_mujoco_assets_and_network_viz_dag(client):
         assert kind in ctype, f"{url} unexpected Content-Type {ctype}"
     assert client.get("/assets/../settings.py").status_code == 404
 
-    # 2. Index template exposes local MuJoCo WASM URL, 3D GL canvas, Execution toggle, & Network Inspector
+    # Verify gzip pre-compression, immutable caching, & ETag 304 Not Modified on vendored WASM
+    wasm_gz = client.get("/assets/vendor/mujoco/mujoco.wasm", HTTP_ACCEPT_ENCODING="gzip")
+    assert wasm_gz.status_code == 200
+    assert wasm_gz.get("Content-Encoding") == "gzip"
+    assert "immutable" in wasm_gz.get("Cache-Control", "")
+    assert len(wasm_gz.content) < 5 * 1024 * 1024  # 11.2MB WASM compressed under 5MB
+    wasm_304 = client.get(
+        "/assets/vendor/mujoco/mujoco.wasm",
+        HTTP_ACCEPT_ENCODING="gzip",
+        HTTP_IF_NONE_MATCH=wasm_gz["ETag"],
+    )
+    assert wasm_304.status_code == 304
+
+    # 2. Index template exposes local MuJoCo WASM URL, lazy/pooled loader, 3D GL canvas, & Network Inspector
     page_html = client.get("/").content.decode("utf-8")
     assert "/assets/vendor/mujoco/mujoco.js" in page_html
     assert "/assets/cppn_core.js" in page_html
     assert "/assets/mujoco_gl.js" in page_html
     assert "/assets/network_viz.js" in page_html
+    assert "ensureAssetScript" in page_html
+    assert "callSimWorkerPoolEval" in page_html
+    assert "scheduleLazyLineageThumbs" in page_html
     assert 'id="sim-mode-bar"' in page_html
     assert 'id="crowd-trust-pill"' in page_html
     assert 'id="det-crowd-config"' in page_html

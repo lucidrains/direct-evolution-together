@@ -8,9 +8,13 @@ from django.db.backends.signals import connection_created
 
 def _enable_sqlite_wal(sender, connection, **kwargs) -> None:
     if connection.vendor == "sqlite":
+        db_name = str(connection.settings_dict.get("NAME") or "")
         with connection.cursor() as cursor:
-            cursor.execute("PRAGMA journal_mode=WAL;")
-            cursor.execute("PRAGMA synchronous=NORMAL;")
+            if ":memory:" in db_name or "mode=memory" in db_name:
+                cursor.execute("PRAGMA read_uncommitted=ON;")
+            else:
+                cursor.execute("PRAGMA journal_mode=WAL;")
+                cursor.execute("PRAGMA synchronous=NORMAL;")
             cursor.execute("PRAGMA busy_timeout=15000;")
 
 

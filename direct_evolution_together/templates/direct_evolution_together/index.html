@@ -3083,10 +3083,30 @@
     {{ room_has_worker|default:False|json_script:"det-room-has-worker" }}
     <script src="{{ base_path }}/assets/cppn_core.js"></script>
     <script src="{{ base_path }}/assets/cheetah_renderer.js"></script>
-    <script src="{{ base_path }}/assets/mujoco_gl.js"></script>
-    <script src="{{ base_path }}/assets/network_viz.js"></script>
     <script>
       const basePath = JSON.parse(document.getElementById("det-base-path").textContent) || "";
+      const ASSET_URLS = {
+        mujocoGl: `${basePath}/assets/mujoco_gl.js`,
+        networkViz: `${basePath}/assets/network_viz.js`,
+      };
+      const loadedAssetScripts = new Map();
+      function ensureAssetScript(url) {
+        if (!url) return Promise.resolve();
+        if (loadedAssetScripts.has(url)) return loadedAssetScripts.get(url);
+        const p = new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = url;
+          s.async = true;
+          s.onload = () => resolve();
+          s.onerror = () => {
+            loadedAssetScripts.delete(url);
+            reject(new Error(`Failed to load ${url}`));
+          };
+          document.head.appendChild(s);
+        });
+        loadedAssetScripts.set(url, p);
+        return p;
+      }
       const wsViaProxy = Boolean(JSON.parse(document.getElementById("det-ws-via-proxy").textContent));
       const roomName = JSON.parse(document.getElementById("det-room-name").textContent);
       const isPrivateRoom = Boolean(JSON.parse(document.getElementById("det-is-private").textContent));
@@ -3402,6 +3422,75 @@
             store.put(record);
           } catch (_) {}
         }
+      }
+
+      const EVAL_DB_PREFIX = "eval:v1:";
+      function evalDbKey(taskId, seeds, fp) {
+        return `${EVAL_DB_PREFIX}${taskId}:${(seeds || []).join(",")}:${fp}`;
+      }
+
+      function queueControlEvalPersist(taskId, seeds, entry) {
+        if (renderDbDisabled || !entry || !entry.summary) return;
+        const ro = entry.primaryRollout ? {
+          seed: entry.primaryRollout.seed,
+          steps: entry.primaryRollout.steps,
+          distance: entry.primaryRollout.distance,
+          mean_vx: entry.primaryRollout.mean_vx,
+          mean_upright: entry.primaryRollout.mean_upright,
+          frames: entry.primaryRollout.frames,
+          vx_trace: entry.primaryRollout.vx_trace,
+        } : null;
+        pendingImageWrites.set(evalDbKey(taskId, seeds, entry.fp), {
+          key: evalDbKey(taskId, seeds, entry.fp),
+          size: 0,
+          val: { fp: entry.fp, summary: entry.summary, primaryRollout: ro, engine: entry.engine },
+          createdAt: Date.now(),
+        });
+        if (imageFlushTimer === null) imageFlushTimer = setTimeout(flushImageWrites, 200);
+      }
+
+      async function hydrateControlEvalsFromDb(taskId, genomes, seeds, targetMap) {
+        if (renderDbDisabled || !Array.isArray(genomes) || !genomes.length) return;
+        const db = await openRenderDb();
+        if (!db || renderDbDisabled) return;
+        const checks = [];
+        const seen = new Set();
+        for (const g of genomes) {
+          if (!g || !Array.isArray(g.weights)) continue;
+          const fp = genomeFingerprint(g);
+          const mapKey = `${taskId}:${fp}`;
+          if (seen.has(mapKey) || targetMap.has(mapKey)) continue;
+          seen.add(mapKey);
+          checks.push({ mapKey, dbKey: evalDbKey(taskId, seeds, fp) });
+        }
+        if (!checks.length) return;
+        await new Promise((resolve) => {
+          let tx;
+          try {
+            tx = db.transaction(RENDER_CACHE_STORE, "readonly");
+          } catch (_) {
+            resolve();
+            return;
+          }
+          const store = tx.objectStore(RENDER_CACHE_STORE);
+          let rem = checks.length;
+          let settled = false;
+          const done = () => { if (--rem <= 0 && !settled) { settled = true; resolve(); } };
+          tx.onabort = tx.onerror = () => { if (!settled) { settled = true; resolve(); } };
+          checks.forEach(({ mapKey, dbKey }) => {
+            try {
+              const req = store.get(dbKey);
+              req.onsuccess = () => {
+                const v = req.result && req.result.val;
+                if (v && v.summary) targetMap.set(mapKey, v);
+                done();
+              };
+              req.onerror = done;
+            } catch (_) {
+              done();
+            }
+          });
+        });
       }
 
       function getCoords(size) {
@@ -3761,6 +3850,7 @@
       const workerCopyCmdBtn = document.getElementById("worker-copy-cmd-btn");
 
       const simResultCache = new Map(); // `${taskId}:${fp}` -> { fp, summary, primaryRollout, engine }
+      const lineageThumbCache = new Map(); // `${taskId}:${fp}` -> { fp, summary, primaryRollout }
       const externalEvalCache = new Map(); // `${goal}:${gen}:${shaOrFp}` -> { hash, summary, posterDataUrl, topology }
       const crowdEvalCache = new Map(); // `${goal}:${gen}:${sha}` -> { hash, summary, trust }
       const crowdSubmittedKeys = new Set();
@@ -4025,69 +4115,110 @@
         updateCrowdTrustPill(g && goalTaskId(g) === taskId ? g : null, spec);
       }
 
-      let simWorker = null;
-      let simWorkerInitPromise = null;
+      const SIM_POOL_MAX = Math.min(4, Math.max(2, Math.floor((Number(navigator.hardwareConcurrency) || 4) / 2)));
+      const simPool = [];
       let simWorkerNextId = 1;
-      const simWorkerPending = new Map();
 
-      function resetSimWorker(reason) {
-        if (simWorker) {
-          try { simWorker.terminate(); } catch {}
-          simWorker = null;
+      function resetSimWorkerSlot(slot, reason) {
+        if (!slot) return;
+        if (slot.worker) {
+          try { slot.worker.terminate(); } catch {}
+          slot.worker = null;
         }
-        simWorkerInitPromise = null;
-        for (const { reject, timer } of simWorkerPending.values()) {
+        slot.initPromise = null;
+        for (const { reject, timer } of slot.pending.values()) {
           clearTimeout(timer);
           reject(new Error(reason || "Simulation worker reset"));
         }
-        simWorkerPending.clear();
+        slot.pending.clear();
       }
 
-      function ensureSimWorker() {
-        if (typeof Worker !== "function") {
-          return Promise.reject(new Error("Web Workers unsupported in this browser."));
-        }
-        if (simWorkerInitPromise) return simWorkerInitPromise;
-        simWorker = new Worker(`${basePath}/assets/sim_worker.js`, { type: "module" });
-        simWorker.addEventListener("message", (ev) => {
-          const msg = ev.data || {};
-          const entry = simWorkerPending.get(msg.reqId);
-          if (!entry) return;
-          clearTimeout(entry.timer);
-          simWorkerPending.delete(msg.reqId);
-          if (msg.ok) entry.resolve(msg);
-          else entry.reject(new Error(msg.error || "Worker simulation failed"));
-        });
-        simWorker.addEventListener("error", (ev) => {
-          resetSimWorker(ev.message || "Worker runtime error");
-        });
-        simWorkerInitPromise = callSimWorkerRaw("init", {
-          taskSpecs,
-          mujocoWasmUrl,
-          cheetahXmlUrl: `${basePath}/assets/half_cheetah.xml`,
-        });
-        return simWorkerInitPromise;
+      function resetSimWorker(reason) {
+        simPool.forEach((slot) => resetSimWorkerSlot(slot, reason));
       }
 
-      function callSimWorkerRaw(type, payload, timeoutMs = 25000) {
+      function callSimWorkerSlot(slot, type, payload, timeoutMs = 25000) {
         return new Promise((resolve, reject) => {
-          if (!simWorker) {
+          if (!slot || !slot.worker) {
             reject(new Error("Sim worker unavailable"));
             return;
           }
           const reqId = simWorkerNextId++;
           const timer = setTimeout(() => {
-            simWorkerPending.delete(reqId);
+            slot.pending.delete(reqId);
             reject(new Error(`Sim worker timeout (${type})`));
           }, timeoutMs);
-          simWorkerPending.set(reqId, { resolve, reject, timer });
-          simWorker.postMessage({ reqId, type, ...(payload || {}) });
+          slot.pending.set(reqId, { resolve, reject, timer });
+          slot.worker.postMessage({ reqId, type, ...(payload || {}) });
         });
       }
 
-      async function callSimWorker(type, payload, timeoutMs = 25000) {
-        await ensureSimWorker();
-        return callSimWorkerRaw(type, payload, timeoutMs);
+      function ensureSimWorkerSlot(idx = 0, warmMujoco = false) {
+        if (typeof Worker !== "function") {
+          return Promise.reject(new Error("Web Workers unsupported in this browser."));
+        }
+        while (simPool.length <= idx) {
+          simPool.push({ worker: null, initPromise: null, pending: new Map() });
+        }
+        const slot = simPool[idx];
+        if (slot.initPromise) return slot.initPromise;
+        const w = new Worker(`${basePath}/assets/sim_worker.js`, { type: "module" });
+        slot.worker = w;
+        w.addEventListener("message", (ev) => {
+          const msg = ev.data || {};
+          const entry = slot.pending.get(msg.reqId);
+          if (!entry) return;
+          clearTimeout(entry.timer);
+          slot.pending.delete(msg.reqId);
+          if (msg.ok) entry.resolve(msg);
+          else entry.reject(new Error(msg.error || "Worker simulation failed"));
+        });
+        w.addEventListener("error", (ev) => {
+          resetSimWorkerSlot(slot, ev.message || "Worker runtime error");
+        });
+        slot.initPromise = callSimWorkerSlot(slot, "init", {
+          taskSpecs,
+          mujocoWasmUrl,
+          cheetahXmlUrl: `${basePath}/assets/half_cheetah.xml`,
+          warmMujoco,
+        }, warmMujoco ? 45000 : 25000);
+        return slot.initPromise;
+      }
+
+      function ensureSimWorker() {
+        return ensureSimWorkerSlot(0);
+      }
+
+      async function callSimWorker(type, payload, timeoutMs = 25000, slotIdx = 0) {
+        await ensureSimWorkerSlot(slotIdx);
+        return callSimWorkerSlot(simPool[slotIdx], type, payload, timeoutMs);
+      }
+
+      async function callSimWorkerPoolEval(taskId, genomes, evalSeeds, timeoutMs = 45000) {
+        const poolCount = genomes.length >= 2 ? Math.min(SIM_POOL_MAX, genomes.length) : 1;
+        if (poolCount === 1) {
+          return callSimWorker("evalBatch", { taskId, genomes, seeds: evalSeeds }, timeoutMs, 0);
+        }
+        // Warm slot 0 first so mujoco.wasm + XML land in HTTP immutable cache before parallel slots spin up.
+        await ensureSimWorkerSlot(0, taskId === "halfcheetah");
+        await Promise.all(Array.from({ length: poolCount - 1 }, (_, k) => ensureSimWorkerSlot(k + 1, false)));
+        const buckets = Array.from({ length: poolCount }, () => []);
+        const bucketIdx = Array.from({ length: poolCount }, () => []);
+        genomes.forEach((g, i) => {
+          const wIdx = i % poolCount;
+          buckets[wIdx].push(g);
+          bucketIdx[wIdx].push(i);
+        });
+        const responses = await Promise.all(
+          buckets.map((sub, k) => callSimWorkerSlot(simPool[k], "evalBatch", { taskId, genomes: sub, seeds: evalSeeds }, timeoutMs))
+        );
+        const merged = new Array(genomes.length);
+        let engine = "";
+        responses.forEach((resp, k) => {
+          if (resp.engine) engine = resp.engine;
+          resp.items.forEach((it, bi) => { merged[bucketIdx[k][bi]] = it; });
+        });
+        return { ok: true, items: merged, engine };
       }
 
       async function fetchServerEvalBatch(taskId, genomes, seeds = null, includeRollout = true) {
@@ -4156,6 +4287,11 @@
         const allowServer = Array.isArray(spec.simModes) && spec.simModes.includes("server");
         const evalSeeds = Array.isArray(seeds) && seeds.length ? seeds : (spec.evalSeeds || [0, 1]);
         const isDefault = !seeds;
+
+        if (isDefault && effMode === "client" && taskId === "halfcheetah") {
+          await hydrateControlEvalsFromDb(taskId, genomes, evalSeeds, simResultCache);
+        }
+
         const missing = [];
         const missingIdx = [];
         const results = new Array(genomes.length).fill(null);
@@ -4200,7 +4336,7 @@
           let engineUsed = effMode === "server" ? "server" : (taskId === "halfcheetah" ? "client-wasm" : "client-js");
           if (effMode === "client") {
             try {
-              const resp = await callSimWorker("evalBatch", { taskId, genomes: missing, seeds: evalSeeds }, 45000);
+              const resp = await callSimWorkerPoolEval(taskId, missing, evalSeeds, 45000);
               items = resp.items;
               engineUsed = resp.engine || engineUsed;
               simEngineStatus = engineUsed;
@@ -4231,6 +4367,9 @@
             if (isDefault) {
               if (simResultCache.size > 2000) simResultCache.clear();
               simResultCache.set(`${taskId}:${entry.fp}`, entry);
+              if (taskId === "halfcheetah" && engineUsed !== "server") {
+                queueControlEvalPersist(taskId, evalSeeds, entry);
+              }
             }
             results[missingIdx[mIdx].idx] = entry;
           });
@@ -4687,7 +4826,7 @@
           renderLineageNode(node, canvas) {
             canvas.width = LINEAGE_CANVAS_SIZE;
             canvas.height = LINEAGE_CANVAS_SIZE;
-            const cached = getCachedControlEntry("halfcheetah", node);
+            const cached = getControlLineageEntry("halfcheetah", node);
             if (window.DetCheetahRenderer) {
               return window.DetCheetahRenderer.renderCheetahStaticCanvas(
                 cached ? cached.summary : null,
@@ -5616,53 +5755,98 @@
           const localEnt = getCachedControlEntry(taskId, g);
           const crowdEnt = getCrowdTrustEntry(goal.name, goal.generation, g);
           const eff = localEnt || crowdEnt;
+          if (!eff && badge.dataset.queued === "1") return;
+          delete badge.dataset.queued;
           applySummaryToCardBadge(badge, eff ? eff.summary : null, taskId, maxSteps, spec, crowdEnt ? crowdEnt.trust : null);
         });
+      }
+
+      function getControlLineageEntry(taskId, node) {
+        if (!node) return null;
+        return getCachedControlEntry(taskId, node) || lineageThumbCache.get(`${taskId}:${genomeFingerprint(node)}`) || null;
+      }
+
+      function refreshControlLineageNodes(goal) {
+        if (!goal || goal.name !== activeGoalName || !lineageColumnsEl) return;
+        const taskId = goalTaskId(goal);
+        if (taskId !== "halfcheetah") return;
+        const spec = getTaskSpec(taskId);
+        const renderer = getTaskRenderer(taskId);
+        lineageColumnsEl.querySelectorAll(".lineage-node[data-fp]").forEach((el) => {
+          const node = el._detNode;
+          const cvs = el._detCanvas;
+          if (!node || !cvs) return;
+          const ent = getControlLineageEntry(taskId, node);
+          if (!ent || !ent.summary || el.dataset.thumbDone === "1") return;
+          el.dataset.thumbDone = "1";
+          renderer.renderLineageNode(node, cvs);
+          if (ent.summary.primaryDisplay && !el.title.includes(ent.summary.primaryDisplay)) {
+            const opLabel = el.dataset.opTitle || spec.label;
+            const parents = Array.isArray(node.parents) && node.parents.length
+              ? ` · parents: ${node.parents.map((p) => `#${p}`).join(", ")}`
+              : "";
+            el.title = `#${node.id} · Gen ${node.gen} · ${opLabel} · ${ent.summary.primaryDisplay}${parents}`;
+          }
+        });
+      }
+
+      let gridCardObserver = null;
+      let lineageThumbObserver = null;
+
+      function clearGridCardObserver() {
+        if (gridCardObserver) {
+          gridCardObserver.disconnect();
+          gridCardObserver = null;
+        }
+      }
+
+      function clearLineageThumbObserver() {
+        if (lineageThumbObserver) {
+          lineageThumbObserver.disconnect();
+          lineageThumbObserver = null;
+        }
       }
 
       async function hydrateCrowdControlGoal(goalSnap, cardRefs, renderer, maxSteps, spec, renderTokenSnap) {
         const taskId = goalTaskId(goalSnap);
         const isStale = () => renderTokenSnap !== activeGoalRenderToken || goalsByName.get(activeGoalName) !== goalSnap;
-        await Promise.all(goalSnap.genomes.map(ensureGenomeSha256));
+        const evalSeeds = spec.evalSeeds || [0, 1];
+        clearGridCardObserver();
+
+        await Promise.all([
+          Promise.all(goalSnap.genomes.map(ensureGenomeSha256)),
+          hydrateControlEvalsFromDb(taskId, goalSnap.genomes, evalSeeds, simResultCache),
+          crowdConfig.enabled ? fetchCrowdRoomEvals(goalSnap) : Promise.resolve([]),
+        ]);
         if (isStale()) return;
 
-        if (crowdConfig.enabled) {
-          await fetchCrowdRoomEvals(goalSnap);
-          if (isStale()) return;
-          cardRefs.forEach((r) => {
-            const localEnt = getCachedControlEntry(taskId, r.genome);
-            const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
-            const eff = localEnt || crowdEnt;
-            if (eff) {
-              applySummaryToCardBadge(r.simBadge, eff.summary, taskId, maxSteps, spec, crowdEnt ? crowdEnt.trust : null);
-              if (!localEnt && crowdEnt) renderer.renderCard(r.genome, r.canvas, crowdEnt);
-            }
-          });
-          updateCrowdTrustPill(goalSnap, spec);
-        }
-
-        const unverifiedRefs = [];
-        const verifiedRefs = [];
         const toPostExisting = [];
         cardRefs.forEach((r) => {
           const localEnt = getCachedControlEntry(taskId, r.genome);
           const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
-          const isVerified = Boolean(crowdEnt && crowdEnt.trust && crowdEnt.trust.status === "verified");
-          if (!localEnt) {
-            if (isVerified) verifiedRefs.push(r);
-            else unverifiedRefs.push(r);
-          } else if (crowdConfig.enabled && !crowdContributorState.quarantined) {
+          const eff = localEnt || crowdEnt;
+          if (eff) {
+            delete r.simBadge.dataset.queued;
+            applySummaryToCardBadge(r.simBadge, eff.summary, taskId, maxSteps, spec, crowdEnt ? crowdEnt.trust : null);
+            renderer.renderCard(r.genome, r.canvas, eff);
+          } else if (r.simBadge) {
+            r.simBadge.dataset.queued = "1";
+            r.simBadge.textContent = "queued";
+            r.simBadge.title = "Evaluates automatically when scrolled into view";
+          }
+          if (localEnt && crowdConfig.enabled && !crowdContributorState.quarantined) {
             const sha = getKnownGenomeSha(r.genome);
             const subKey = `${goalSnap.name}:${goalSnap.generation}:${sha}`;
-            if (sha && !crowdSubmittedKeys.has(subKey)) {
-              const rate = Number(crowdConfig.spotCheckRate ?? 0.15);
-              if (!isVerified || Math.random() < rate) {
-                crowdSubmittedKeys.add(subKey);
-                toPostExisting.push({ hash: sha, summary: localEnt.summary });
-              }
+            const isVerified = Boolean(crowdEnt && crowdEnt.trust && crowdEnt.trust.status === "verified");
+            const rate = Number(crowdConfig.spotCheckRate ?? 0.15);
+            if (sha && !crowdSubmittedKeys.has(subKey) && (!isVerified || Math.random() < rate)) {
+              crowdSubmittedKeys.add(subKey);
+              toPostExisting.push({ hash: sha, summary: localEnt.summary });
             }
           }
         });
+        updateCrowdTrustPill(goalSnap, spec);
+        refreshControlLineageNodes(goalSnap);
 
         if (toPostExisting.length) {
           await postCrowdRoomResults(goalSnap, toPostExisting);
@@ -5670,56 +5854,133 @@
           syncCrowdBadgesInDom(goalSnap);
         }
 
-        const orderedUnverified = (crowdConfig.shardShuffle !== false)
-          ? shuffleIntList(unverifiedRefs)
-          : unverifiedRefs;
-        const workRefs = orderedUnverified.concat(verifiedRefs);
-        const CHUNK = 4;
-        for (let offset = 0; offset < workRefs.length; offset += CHUNK) {
-          if (isStale()) return;
-          const chunk = workRefs.slice(offset, offset + CHUNK);
-          const chunkEntries = await evaluateControlGenomes(taskId, chunk.map((r) => r.genome)).catch(() => []);
-          if (isStale()) return;
-          const chunkPosts = [];
-          chunk.forEach((r, ci) => {
-            const ent = chunkEntries[ci];
+        const missingRefs = cardRefs.filter((r) => !getCachedControlEntry(taskId, r.genome));
+        if (!missingRefs.length) {
+          const summariesByIdx = {};
+          cardRefs.forEach((r) => {
+            const localEnt = getCachedControlEntry(taskId, r.genome);
             const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
-            const eff = ent || crowdEnt;
-            if (eff) {
-              applySummaryToCardBadge(r.simBadge, eff.summary, taskId, maxSteps, spec, crowdEnt ? crowdEnt.trust : null);
-              renderer.renderCard(r.genome, r.canvas, eff);
-            }
-            if (ent && crowdConfig.enabled && !crowdContributorState.quarantined) {
-              const sha = getKnownGenomeSha(r.genome);
-              const subKey = `${goalSnap.name}:${goalSnap.generation}:${sha}`;
-              const isVerified = Boolean(crowdEnt && crowdEnt.trust && crowdEnt.trust.status === "verified");
-              const rate = Number(crowdConfig.spotCheckRate ?? 0.15);
-              if (sha && !crowdSubmittedKeys.has(subKey) && (!isVerified || Math.random() < rate)) {
-                crowdSubmittedKeys.add(subKey);
-                chunkPosts.push({ hash: sha, summary: ent.summary });
-              }
-            }
+            const eff = localEnt || crowdEnt;
+            summariesByIdx[r.idx] = eff ? eff.summary : null;
           });
-          if (chunkPosts.length) {
-            await postCrowdRoomResults(goalSnap, chunkPosts);
-            if (isStale()) return;
-            syncCrowdBadgesInDom(goalSnap);
+          if (controlSortMode === "steps") {
+            sortControlCardRefs(cardRefs, summariesByIdx);
+            applyCardFilter(false);
           }
+          if (fullscreenIdx !== null || fullscreenNode !== null) renderFullscreen();
+          return;
         }
 
-        if (isStale()) return;
-        const summariesByIdx = {};
-        cardRefs.forEach((r) => {
-          const localEnt = getCachedControlEntry(taskId, r.genome);
-          const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
-          const eff = localEnt || crowdEnt;
-          summariesByIdx[r.idx] = eff ? eff.summary : null;
-        });
-        if (controlSortMode === "steps") {
-          sortControlCardRefs(cardRefs, summariesByIdx);
-          applyCardFilter(false);
+        const pendingVisible = new Set();
+        const queuedDone = new Set();
+        let flushing = false;
+        let flushScheduled = false;
+
+        const scheduleFlush = () => {
+          if (flushScheduled) return;
+          flushScheduled = true;
+          setTimeout(flushVisibleCards, 16);
+        };
+
+        const flushVisibleCards = async () => {
+          flushScheduled = false;
+          if (flushing || isStale() || !pendingVisible.size) return;
+          flushing = true;
+          try {
+            while (pendingVisible.size && !isStale()) {
+              const allVisible = Array.from(pendingVisible).filter((r) => !queuedDone.has(r) && !getCachedControlEntry(taskId, r.genome));
+              pendingVisible.clear();
+              if (!allVisible.length) break;
+
+              const unverifiedFirst = allVisible.filter((r) => {
+                const ce = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
+                return !(ce && ce.trust && ce.trust.status === "verified");
+              });
+              const restVerified = allVisible.filter((r) => !unverifiedFirst.includes(r));
+              const ordered = ((crowdConfig.shardShuffle !== false) ? shuffleIntList(unverifiedFirst) : unverifiedFirst).concat(restVerified);
+
+              const CHUNK = 4;
+              for (let offset = 0; offset < ordered.length; offset += CHUNK) {
+                if (isStale()) break;
+                const chunk = ordered.slice(offset, offset + CHUNK);
+                chunk.forEach((r) => {
+                  queuedDone.add(r);
+                  if (gridCardObserver) gridCardObserver.unobserve(r.card);
+                  if (r.simBadge) {
+                    delete r.simBadge.dataset.queued;
+                    if (!getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome)) {
+                      r.simBadge.textContent = "evaluating...";
+                    }
+                  }
+                });
+                const chunkEntries = await evaluateControlGenomes(taskId, chunk.map((r) => r.genome)).catch(() => []);
+                if (isStale()) break;
+                const chunkPosts = [];
+                chunk.forEach((r, ci) => {
+                  const ent = chunkEntries[ci];
+                  const crowdEnt = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
+                  const eff = ent || crowdEnt;
+                  if (eff) {
+                    applySummaryToCardBadge(r.simBadge, eff.summary, taskId, maxSteps, spec, crowdEnt ? crowdEnt.trust : null);
+                    renderer.renderCard(r.genome, r.canvas, eff);
+                  }
+                  if (ent && crowdConfig.enabled && !crowdContributorState.quarantined) {
+                    const sha = getKnownGenomeSha(r.genome);
+                    const subKey = `${goalSnap.name}:${goalSnap.generation}:${sha}`;
+                    const isVerified = Boolean(crowdEnt && crowdEnt.trust && crowdEnt.trust.status === "verified");
+                    const rate = Number(crowdConfig.spotCheckRate ?? 0.15);
+                    if (sha && !crowdSubmittedKeys.has(subKey) && (!isVerified || Math.random() < rate)) {
+                      crowdSubmittedKeys.add(subKey);
+                      chunkPosts.push({ hash: sha, summary: ent.summary });
+                    }
+                  }
+                });
+                refreshControlLineageNodes(goalSnap);
+                if (chunkPosts.length) {
+                  await postCrowdRoomResults(goalSnap, chunkPosts);
+                  if (!isStale()) syncCrowdBadgesInDom(goalSnap);
+                }
+              }
+            }
+            if (!isStale()) {
+              const allEvaluated = cardRefs.every((r) => Boolean(getCachedControlEntry(taskId, r.genome)));
+              if (allEvaluated && controlSortMode === "steps" && !activeHoverAnim) {
+                const summariesByIdx = {};
+                cardRefs.forEach((r) => {
+                  const ent = getCachedControlEntry(taskId, r.genome) || getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
+                  summariesByIdx[r.idx] = ent ? ent.summary : null;
+                });
+                sortControlCardRefs(cardRefs, summariesByIdx);
+                applyCardFilter(false);
+              }
+              if (fullscreenIdx !== null || fullscreenNode !== null) renderFullscreen();
+            }
+          } finally {
+            flushing = false;
+            if (pendingVisible.size && !isStale()) scheduleFlush();
+          }
+        };
+
+        if (typeof IntersectionObserver === "function") {
+          const refByCard = new Map(missingRefs.map((r) => [r.card, r]));
+          gridCardObserver = new IntersectionObserver((entries) => {
+            if (isStale()) return;
+            let added = false;
+            for (const entry of entries) {
+              if (!entry.isIntersecting) continue;
+              const r = refByCard.get(entry.target);
+              if (r && !queuedDone.has(r)) {
+                pendingVisible.add(r);
+                added = true;
+              }
+            }
+            if (added) scheduleFlush();
+          }, { root: null, rootMargin: "140px" });
+          missingRefs.forEach((r) => gridCardObserver.observe(r.card));
+        } else {
+          missingRefs.forEach((r) => pendingVisible.add(r));
+          scheduleFlush();
         }
-        if (fullscreenIdx !== null || fullscreenNode !== null) renderFullscreen();
       }
 
       function sortControlCardRefs(cardRefs, summariesByIdx) {
@@ -5740,6 +6001,7 @@
       }
 
       function renderActiveGoal(rerenderCanvases) {
+        clearGridCardObserver();
         const goal = goalsByName.get(activeGoalName);
         if (!goal || addingExtraGoal) {
           stopCardHoverAnim();
@@ -6149,8 +6411,91 @@
         lineageSvgEl.replaceChildren(frag);
       }
 
+      function scheduleLazyLineageThumbs(goal, candidates) {
+        clearLineageThumbObserver();
+        const taskId = goalTaskId(goal);
+        if (taskId !== "halfcheetah" || !candidates.length) return;
+        const spec = getTaskSpec(taskId);
+        const thumbSeed = (spec.evalSeeds && spec.evalSeeds.length) ? spec.evalSeeds[0] : 0;
+        const thumbSeeds = [thumbSeed];
+        const goalName = goal.name;
+        const gen = goal.generation;
+        const isStale = () => {
+          const cur = goalsByName.get(activeGoalName);
+          return !cur || cur.name !== goalName || cur.generation !== gen || lineageCollapsed;
+        };
+
+        hydrateControlEvalsFromDb(taskId, candidates.map((c) => c.node), thumbSeeds, lineageThumbCache).then(() => {
+          if (!isStale()) refreshControlLineageNodes(goal);
+        });
+
+        const pendingEls = new Set();
+        const doneEls = new Set();
+        let flushing = false;
+        let scheduled = false;
+
+        const queueFlush = () => {
+          if (scheduled) return;
+          scheduled = true;
+          setTimeout(flushLineageBatch, 24);
+        };
+
+        const flushLineageBatch = async () => {
+          scheduled = false;
+          if (flushing || isStale() || !pendingEls.size) return;
+          flushing = true;
+          try {
+            while (pendingEls.size && !isStale()) {
+              const items = Array.from(pendingEls).filter((el) => !doneEls.has(el));
+              pendingEls.clear();
+              const byFp = new Map();
+              for (const el of items) {
+                doneEls.add(el);
+                if (lineageThumbObserver) lineageThumbObserver.unobserve(el);
+                const node = el._detNode;
+                if (!node || getControlLineageEntry(taskId, node)) continue;
+                const fp = el.dataset.fp || genomeFingerprint(node);
+                if (!byFp.has(fp)) byFp.set(fp, node);
+              }
+              const uniqNodes = Array.from(byFp.values());
+              for (let offset = 0; offset < uniqNodes.length; offset += 4) {
+                if (isStale()) break;
+                const chunk = uniqNodes.slice(offset, offset + 4);
+                const entries = await evaluateControlGenomes(taskId, chunk, thumbSeeds).catch(() => []);
+                if (isStale()) break;
+                entries.forEach((ent) => {
+                  if (!ent || !ent.summary) return;
+                  if (lineageThumbCache.size > 1500) lineageThumbCache.clear();
+                  lineageThumbCache.set(`${taskId}:${ent.fp}`, ent);
+                  queueControlEvalPersist(taskId, thumbSeeds, ent);
+                });
+                refreshControlLineageNodes(goal);
+              }
+            }
+          } finally {
+            flushing = false;
+            if (pendingEls.size && !isStale()) queueFlush();
+          }
+        };
+
+        if (typeof IntersectionObserver === "function") {
+          lineageThumbObserver = new IntersectionObserver((entries) => {
+            if (isStale()) return;
+            let added = false;
+            for (const e of entries) {
+              if (!e.isIntersecting || doneEls.has(e.target)) continue;
+              pendingEls.add(e.target);
+              added = true;
+            }
+            if (added) queueFlush();
+          }, { root: null, rootMargin: "140px" });
+          candidates.forEach(({ el }) => lineageThumbObserver.observe(el));
+        }
+      }
+
       function renderLineageTree(goal) {
         if (!lineagePanelEl) return;
+        clearLineageThumbObserver();
         if (!goal || !Array.isArray(goal.lineage) || goal.lineage.length === 0) {
           lineagePanelEl.hidden = true;
           return;
@@ -6201,6 +6546,9 @@
         const colFrag = document.createDocumentFragment();
         const nodeEls = new Map();
         const edges = [];
+        const lazyThumbEls = [];
+        const taskId = goalTaskId(goal);
+        const lineageRenderer = getTaskRenderer(goal);
 
         for (const gen of sortedGens) {
           const col = document.createElement("div");
@@ -6212,18 +6560,24 @@
           col.appendChild(hdr);
 
           const colNodes = byGen.get(gen) || [];
-          const isCtrlGoal = isControlGoal(goal);
-          const lineageRenderer = getTaskRenderer(goal);
           for (const node of colNodes) {
             const op = LINEAGE_OP_META[node.op] ? node.op : "random";
             const opMeta = LINEAGE_OP_META[op];
             const hasWeights = Array.isArray(node.weights);
-            const nodeSummary = (isCtrlGoal && hasWeights) ? evaluateCartpoleSummary(node) : null;
+            let nodeTooltipExtra = "";
+            if (hasWeights && taskId === "cartpole") {
+              const cpSum = evaluateCartpoleSummary(node);
+              nodeTooltipExtra = ` · ${cpSum.meanSteps}/${CARTPOLE_MAX_STEPS} steps`;
+            } else if (hasWeights && taskId === "halfcheetah") {
+              const cachedEnt = getControlLineageEntry("halfcheetah", node);
+              if (cachedEnt && cachedEnt.summary && cachedEnt.summary.primaryDisplay) {
+                nodeTooltipExtra = ` · ${cachedEnt.summary.primaryDisplay}`;
+              }
+            }
             const el = document.createElement("div");
             el.className = "lineage-node" + (gen === goal.generation ? " is-live" : "");
-            el.title = `#${node.id} · Gen ${node.gen} · ${opMeta.title}` + (
-              nodeSummary ? ` · ${nodeSummary.meanSteps}/${CARTPOLE_MAX_STEPS} steps` : ""
-            ) + (
+            el.dataset.opTitle = opMeta.title;
+            el.title = `#${node.id} · Gen ${node.gen} · ${opMeta.title}${nodeTooltipExtra}` + (
               Array.isArray(node.parents) && node.parents.length > 0
                 ? ` · parents: ${node.parents.map((p) => `#${p}`).join(", ")}`
                 : ""
@@ -6234,6 +6588,14 @@
             cvs.height = LINEAGE_CANVAS_SIZE;
             if (hasWeights) {
               lineageRenderer.renderLineageNode(node, cvs);
+              if (taskId === "halfcheetah") {
+                el.dataset.fp = genomeFingerprint(node);
+                el._detNode = node;
+                el._detCanvas = cvs;
+                const existingEnt = getControlLineageEntry("halfcheetah", node);
+                if (existingEnt) el.dataset.thumbDone = "1";
+                else lazyThumbEls.push({ el, node, cvs });
+              }
             } else {
               const lctx = cvs.getContext("2d");
               lctx.fillStyle = "#141418";
@@ -6282,6 +6644,9 @@
           drawLineageEdges();
           if (lineageViewportEl.scrollWidth > lineageViewportEl.clientWidth) {
             lineageViewportEl.scrollLeft = lineageViewportEl.scrollWidth;
+          }
+          if (lazyThumbEls.length) {
+            scheduleLazyLineageThumbs(goal, lazyThumbEls);
           }
         });
       }
@@ -7497,17 +7862,23 @@
       const fsGlCanvasEl = document.getElementById("fs-gl-canvas");
       const fsGlHintEl = document.getElementById("fs-gl-hint");
       let fsMujocoViewer = null;
-      const fsGlSupported = Boolean(
-        fsGlCanvasEl &&
-        window.DetMujocoGL &&
-        window.DetMujocoGL.DetMujocoViewer.isSupported()
-      );
+      const hasWebGL2 = Boolean(fsGlCanvasEl && (() => {
+        try {
+          const c = document.createElement("canvas");
+          const gl = c.getContext("webgl2");
+          if (gl) gl.getExtension("WEBGL_lose_context")?.loseContext();
+          return Boolean(gl);
+        } catch { return false; }
+      })());
+      function isFsGlReady() {
+        return Boolean(hasWebGL2 && fsGlCanvasEl && window.DetMujocoGL);
+      }
       function setFsCanvasMode(use3d) {
-        const active3d = Boolean(use3d && fsGlSupported && fsGlCanvasEl);
+        const active3d = Boolean(use3d && isFsGlReady());
         if (fsCanvasEl) fsCanvasEl.hidden = active3d;
         if (fsGlCanvasEl) {
           fsGlCanvasEl.hidden = !active3d;
-          if (active3d) {
+          if (active3d && (fsGlCanvasEl.width !== FULLSCREEN_SIM_WIDTH || fsGlCanvasEl.height !== FULLSCREEN_SIM_HEIGHT)) {
             fsGlCanvasEl.width = FULLSCREEN_SIM_WIDTH;
             fsGlCanvasEl.height = FULLSCREEN_SIM_HEIGHT;
             fsGlCanvasEl.style.aspectRatio = `${FULLSCREEN_SIM_WIDTH} / ${FULLSCREEN_SIM_HEIGHT}`;
@@ -7517,7 +7888,7 @@
         return active3d;
       }
       function ensureFsMujocoViewer() {
-        if (!fsGlSupported || !fsGlCanvasEl) return null;
+        if (!isFsGlReady()) return null;
         if (!fsMujocoViewer) {
           fsMujocoViewer = new window.DetMujocoGL.DetMujocoViewer(fsGlCanvasEl);
         }
@@ -7577,6 +7948,14 @@
           const insp = ensureFsNetworkInspector();
           if (insp) {
             insp.setData(topology || genome, spec);
+            paintFsLiveNetworkStep(fsSimState);
+          } else if (fsNetworkPanelEl) {
+            fsNetworkPanelEl.innerHTML = '<div class="det-nv-empty">Loading network inspector...</div>';
+            ensureAssetScript(ASSET_URLS.networkViz).then(() => {
+              if (!fullscreenModalEl.hidden && fsCurrentTarget && fsViewMode !== "sim") {
+                syncFsViewLayout();
+              }
+            }).catch(() => {});
           }
         }
       }
@@ -7749,7 +8128,7 @@
         if (!stateObj || !stateObj.frames || !stateObj.frames.length) return;
         const idx = Math.min(stateObj.step || 0, stateObj.frames.length - 1);
         if (
-          fsGlSupported &&
+          isFsGlReady() &&
           Array.isArray(stateObj.geomSpecs) &&
           Array.isArray(stateObj.geomPoses) &&
           stateObj.geomPoses[idx]
@@ -7783,8 +8162,12 @@
         }
         renderFullscreenTelemetry(true);
 
-        fetchTaskRollout("halfcheetah", stateObj.genome, seed, stateObj.maxSteps, nudgeId, true, fsGlSupported)
-          .then((ro) => {
+        const glReady = hasWebGL2 ? ensureAssetScript(ASSET_URLS.mujocoGl).catch(() => {}) : Promise.resolve();
+        Promise.all([
+          fetchTaskRollout("halfcheetah", stateObj.genome, seed, stateObj.maxSteps, nudgeId, true, hasWebGL2),
+          glReady,
+        ])
+          .then(([ro]) => {
             if (fsSimState !== stateObj) return;
             stateObj.loading = false;
             stateObj.seed = seed;
@@ -7882,9 +8265,13 @@
             paintFsLiveNetworkStep(stateObj);
             renderFullscreenTelemetry(true);
             // Upgrade cached primary rollout with full 3D MuJoCo geoms + activations on demand
-            if ((fsGlSupported && !stateObj.geomPoses) || (!stateObj.stepActivations && fsViewMode === "split" && getEffectiveSimMode("halfcheetah") === "client")) {
-              fetchTaskRollout("halfcheetah", genome, seed, maxSteps, null, true, fsGlSupported)
-                .then((ro) => {
+            if ((hasWebGL2 && !stateObj.geomPoses) || (!stateObj.stepActivations && fsViewMode === "split" && getEffectiveSimMode("halfcheetah") === "client")) {
+              const glReady = hasWebGL2 ? ensureAssetScript(ASSET_URLS.mujocoGl).catch(() => {}) : Promise.resolve();
+              Promise.all([
+                fetchTaskRollout("halfcheetah", genome, seed, maxSteps, null, true, hasWebGL2),
+                glReady,
+              ])
+                .then(([ro]) => {
                   if (fsSimState === stateObj && ro) {
                     if (ro.stepActivations) stateObj.stepActivations = ro.stepActivations;
                     if (ro.geomSpecs && ro.geomPoses) {
@@ -7897,6 +8284,10 @@
                   }
                 })
                 .catch(() => {});
+            } else if (hasWebGL2 && stateObj.geomPoses && !isFsGlReady()) {
+              ensureAssetScript(ASSET_URLS.mujocoGl).then(() => {
+                if (fsSimState === stateObj) paintFsCheetahFrame(stateObj);
+              }).catch(() => {});
             }
           } else {
             loadCheetahFullscreenRollout(stateObj, seed, null);

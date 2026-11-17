@@ -514,13 +514,18 @@
     }
   }
 
+  DetMujocoViewer._supported = null;
   DetMujocoViewer.isSupported = function () {
+    if (DetMujocoViewer._supported !== null) return DetMujocoViewer._supported;
     try {
       const c = document.createElement("canvas");
-      return Boolean(c.getContext("webgl2"));
+      const gl = c.getContext("webgl2");
+      DetMujocoViewer._supported = Boolean(gl);
+      if (gl) gl.getExtension("WEBGL_lose_context")?.loseContext();
     } catch {
-      return false;
+      DetMujocoViewer._supported = false;
     }
+    return DetMujocoViewer._supported;
   };
 
   global.DetMujocoGL = { DetMujocoViewer };

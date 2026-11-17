@@ -1,4 +1,5 @@
 import base64
+import gzip
 import hashlib
 import hmac
 import io
@@ -7,6 +8,7 @@ import mimetypes
 import os
 from pathlib import Path, PurePosixPath
 import secrets
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +22,7 @@ from django.http import (
     HttpRequest,
     HttpResponse,
     HttpResponseBadRequest,
+    HttpResponseNotModified,
     JsonResponse,
 )
 from django.shortcuts import render
@@ -224,11 +227,34 @@ _ASSET_CONTENT_TYPES = {
     ".json": "application/json; charset=utf-8",
 }
 _PKG_DIR = Path(__file__).resolve().parent
+_ASSET_CACHE_LOCK = threading.Lock()
+_ASSET_CACHE: dict[tuple[str, int, int], tuple[bytes, bytes | None, str, str]] = {}
+
+
+def _get_cached_asset(candidate: Path) -> tuple[bytes, bytes | None, str, str]:
+    st = candidate.stat()
+    key = (str(candidate), st.st_mtime_ns, st.st_size)
+    with _ASSET_CACHE_LOCK:
+        hit = _ASSET_CACHE.get(key)
+    if hit is not None:
+        return hit
+
+    raw = candidate.read_bytes()
+    gz = gzip.compress(raw, compresslevel=6) if len(raw) >= 1024 else None
+    if gz is not None and len(gz) >= len(raw):
+        gz = None
+    base_tag = f"{st.st_mtime_ns:x}-{st.st_size:x}"
+    entry = (raw, gz, f'"{base_tag}"', f'"{base_tag}-gz"')
+    with _ASSET_CACHE_LOCK:
+        if len(_ASSET_CACHE) > 32:
+            _ASSET_CACHE.clear()
+        _ASSET_CACHE[key] = entry
+    return entry
 
 
 @require_GET
 def serve_asset(request: HttpRequest, asset_name: str) -> HttpResponse:
-    """Serve bundled frontend scripts and simulation assets (works with DEBUG=0 under Uvicorn)."""
+    """Serve bundled frontend scripts and simulation assets with cached gzip & ETag."""
     clean = PurePosixPath(asset_name)
     if (
         clean.is_absolute()
@@ -246,12 +272,30 @@ def serve_asset(request: HttpRequest, asset_name: str) -> HttpResponse:
         except ValueError:
             continue
         if candidate.is_file():
-            ctype = _ASSET_CONTENT_TYPES[candidate.suffix.lower()]
-            resp = HttpResponse(candidate.read_bytes(), content_type=ctype)
-            if candidate.suffix.lower() == ".wasm":
-                resp["Cache-Control"] = "public, max-age=86400"
-            else:
-                resp["Cache-Control"] = "public, max-age=300"
+            suffix = candidate.suffix.lower()
+            ctype = _ASSET_CONTENT_TYPES[suffix]
+            raw, gz, raw_tag, gz_tag = _get_cached_asset(candidate)
+            accept_enc = (request.META.get("HTTP_ACCEPT_ENCODING") or "").lower()
+            use_gz = gz is not None and "gzip" in accept_enc
+            etag = gz_tag if use_gz else raw_tag
+            cache_ctrl = (
+                "public, max-age=31536000, immutable"
+                if ("vendor/" in asset_name or suffix == ".wasm")
+                else "public, max-age=3600"
+            )
+            if request.META.get("HTTP_IF_NONE_MATCH") == etag:
+                resp = HttpResponseNotModified()
+                resp["ETag"] = etag
+                resp["Cache-Control"] = cache_ctrl
+                resp["Vary"] = "Accept-Encoding"
+                return resp
+
+            resp = HttpResponse(gz if use_gz else raw, content_type=ctype)
+            if use_gz:
+                resp["Content-Encoding"] = "gzip"
+            resp["ETag"] = etag
+            resp["Cache-Control"] = cache_ctrl
+            resp["Vary"] = "Accept-Encoding"
             resp["X-Content-Type-Options"] = "nosniff"
             return resp
     raise Http404("Asset not found")

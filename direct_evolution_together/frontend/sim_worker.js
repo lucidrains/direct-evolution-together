@@ -171,9 +171,31 @@ function decodeHyperNeat(genome, dims, layerCoords) {
   return decoded;
 }
 
+const _polBufA = new Float64Array(64);
+const _polBufB = new Float64Array(64);
+const _polOut = { action: _polBufA, activations: null };
+
 function forwardPolicy(decoded, obs, recordActs = false) {
   let h = obs;
-  const acts = recordActs ? [Array.from(obs, (v) => Math.round(v * 1000) / 1000)] : null;
+  if (!recordActs) {
+    for (let l = 0; l < decoded.length; l++) {
+      const layer = decoded[l];
+      const next = l % 2 === 0 ? _polBufA : _polBufB;
+      for (let j = 0; j < layer.dOut; j++) {
+        let z = layer.b[j];
+        const w = layer.w;
+        for (let i = 0; i < layer.dIn; i++) {
+          z += h[i] * w[i * layer.dOut + j];
+        }
+        next[j] = Math.tanh(z);
+      }
+      h = next;
+    }
+    _polOut.action = h;
+    _polOut.activations = null;
+    return _polOut;
+  }
+  const acts = [Array.from(obs, (v) => Math.round(v * 1000) / 1000)];
   for (let l = 0; l < decoded.length; l++) {
     const layer = decoded[l];
     const next = new Float64Array(layer.dOut);
@@ -185,9 +207,7 @@ function forwardPolicy(decoded, obs, recordActs = false) {
       next[j] = Math.tanh(z);
     }
     h = next;
-    if (recordActs) {
-      acts.push(Array.from(h, (v) => Math.round(v * 1000) / 1000));
-    }
+    acts.push(Array.from(h, (v) => Math.round(v * 1000) / 1000));
   }
   return { action: h, activations: acts };
 }
@@ -338,11 +358,15 @@ async function ensureMujocoCheetah() {
       return await loadFn();
     })();
   }
-  const mujoco = await mujocoPromise;
+  let xmlTextPromise = null;
   if (!cheetahModel) {
-    const resp = await fetch(absXmlUrl, { cache: "force-cache" });
-    if (!resp.ok) throw new Error(`Failed to load HalfCheetah XML (${resp.status})`);
-    const xmlText = await resp.text();
+    xmlTextPromise = fetch(absXmlUrl, { cache: "force-cache" }).then((resp) => {
+      if (!resp.ok) throw new Error(`Failed to load HalfCheetah XML (${resp.status})`);
+      return resp.text();
+    });
+  }
+  const [mujoco, xmlText] = await Promise.all([mujocoPromise, xmlTextPromise]);
+  if (!cheetahModel) {
     cheetahModel = mujoco.MjModel.from_xml_string(xmlText);
     cheetahData = new mujoco.MjData(cheetahModel);
     const specs = [];
@@ -378,13 +402,16 @@ async function ensureMujocoCheetah() {
   };
 }
 
+const _hcObsBuf = new Float64Array(21);
+
 function cheetahObs(data, stepIdx) {
-  const obs = new Float64Array(21);
-  obs[0] = (data.qpos[1] - 0.7) / HC_OBS_SCALE[0];
-  for (let i = 1; i < 8; i++) obs[i] = data.qpos[i + 1] / HC_OBS_SCALE[i];
-  for (let i = 0; i < 9; i++) obs[8 + i] = data.qvel[i] / HC_OBS_SCALE[8 + i];
-  const t = stepIdx * HC_DT;
-  const ang = 2.0 * Math.PI * HC_PHASE_FREQ * t;
+  const obs = _hcObsBuf;
+  const qpos = data.qpos;
+  const qvel = data.qvel;
+  obs[0] = (qpos[1] - 0.7) / HC_OBS_SCALE[0];
+  for (let i = 1; i < 8; i++) obs[i] = qpos[i + 1] / HC_OBS_SCALE[i];
+  for (let i = 0; i < 9; i++) obs[8 + i] = qvel[i] / HC_OBS_SCALE[8 + i];
+  const ang = 2.0 * Math.PI * HC_PHASE_FREQ * stepIdx * HC_DT;
   obs[17] = Math.sin(ang);
   obs[18] = Math.cos(ang);
   obs[19] = Math.sin(2.0 * ang);
@@ -560,6 +587,9 @@ self.addEventListener("message", async (event) => {
       taskSpecs = msg.taskSpecs || {};
       mujocoWasmUrl = msg.mujocoWasmUrl || "";
       cheetahXmlUrl = msg.cheetahXmlUrl || "";
+      if (msg.warmMujoco && mujocoWasmUrl && cheetahXmlUrl) {
+        await ensureMujocoCheetah();
+      }
       self.postMessage({ reqId, ok: true, type: "init" });
       return;
     }
