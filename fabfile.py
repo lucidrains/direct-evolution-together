@@ -190,6 +190,8 @@ def _render_runtime_env(cfg: DeployConfig) -> str:
         "DET_TASK_ENABLED_",
         "DET_POP_SIZE_",
         "DET_MAX_POP_SIZE_",
+        "DET_MIN_VOTES_",
+        "DET_ELITE_FRAC_",
         "DET_ALLOW_VIDEO_",
     )
     for key, val in sorted(os.environ.items()):

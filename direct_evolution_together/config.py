@@ -1,3 +1,10 @@
+"""Deployment policy: per-environment defaults plus file/env overrides.
+
+Per-task numbers (population, quorum, elite fraction, execution policy) are declared
+exactly once in ``DEFAULT_ENV_POLICIES``. Task mechanics and labels live in
+``direct_evolution_together.environments``; runtime lookups merge the two.
+"""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -8,6 +15,7 @@ import threading
 
 _VALID_POLICIES = {"client_locked", "client_preferred", "server_only", "external_worker"}
 _VALID_AGGS = {"median", "weighted_mean"}
+_IMAGE_LOBBY_GOALS = ("Butterfly", "Galaxy", "Creature")
 
 
 @dataclass(frozen=True)
@@ -49,8 +57,6 @@ class EnvPolicyConfig:
     max_pop_size: int = 64
     default_min_votes: int = 20
     default_elite_frac: float | None = None
-    default_mut_sigma: float = 0.30
-    default_crossover_rate: float = 0.75
 
     @property
     def sim_modes(self) -> tuple[str, ...]:
@@ -58,6 +64,7 @@ class EnvPolicyConfig:
             "client_locked": ("client",),
             "client_preferred": ("client", "server"),
             "server_only": ("server",),
+            "external_worker": ("external",),
         }.get(self.execution_policy, ("external",))
 
     @property
@@ -91,7 +98,7 @@ class CentralConfig:
         specs: list[tuple[str, str, int | None]] = []
         for cfg in items:
             if cfg.task == "image":
-                for img_name in ("Butterfly", "Galaxy", "Creature"):
+                for img_name in _IMAGE_LOBBY_GOALS:
                     specs.append((img_name, "image", None))
             else:
                 specs.append((cfg.lobby_name or cfg.task.title(), cfg.task, cfg.default_pop_size))
@@ -108,7 +115,9 @@ class CentralConfig:
         }
 
 
-_DEFAULT_ENVS: dict[str, EnvPolicyConfig] = {
+# Single source of truth for per-environment policy defaults.
+# `halfcheetah` runs a smaller 16-member demo population, so its quorum is 8.
+DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
     "halfcheetah": EnvPolicyConfig(
         task="halfcheetah",
         lobby_name="HalfCheetah",
@@ -119,7 +128,7 @@ _DEFAULT_ENVS: dict[str, EnvPolicyConfig] = {
         allow_server_video=True,
         default_pop_size=16,
         max_pop_size=24,
-        default_min_votes=20,
+        default_min_votes=8,
         default_elite_frac=0.05,
     ),
     "cartpole": EnvPolicyConfig(
@@ -145,7 +154,7 @@ _DEFAULT_ENVS: dict[str, EnvPolicyConfig] = {
         allow_server_video=False,
         default_pop_size=30,
         max_pop_size=64,
-        default_min_votes=0,
+        default_min_votes=0,  # 0 = let the room derive quorum from live votes
         default_elite_frac=None,
     ),
     "external": EnvPolicyConfig(
@@ -162,6 +171,20 @@ _DEFAULT_ENVS: dict[str, EnvPolicyConfig] = {
         default_elite_frac=0.10,
     ),
 }
+
+# (field, env var template) -- `{task}` expands to the upper-cased task id.
+_ENV_VAR_OVERRIDES: tuple[tuple[str, str], ...] = (
+    ("enabled", "DET_TASK_ENABLED_{task}"),
+    ("crowd_contribute", "DET_CROWD_CONTRIBUTE_{task}"),
+    ("allow_server_video", "DET_ALLOW_VIDEO_{task}"),
+    ("execution_policy", "DET_EXECUTION_POLICY_{task}"),
+    ("default_pop_size", "DET_POP_SIZE_{task}"),
+    ("max_pop_size", "DET_MAX_POP_SIZE_{task}"),
+    ("default_min_votes", "DET_MIN_VOTES_{task}"),
+    ("default_elite_frac", "DET_ELITE_FRAC_{task}"),
+)
+
+_ENV_POLICY_FIELDS = frozenset(EnvPolicyConfig.__dataclass_fields__) - {"task"}
 
 # (field, env_name, lo, hi)
 _TRUST_FIELDS: tuple[tuple[str, str, float | None, float | None], ...] = (
@@ -201,9 +224,59 @@ def _coerce_field(raw: object, default: object, lo: float | None, hi: float | No
     return s if s in _VALID_AGGS else default
 
 
+def _coerce_bool(raw: object, default: bool) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    text = str(raw).strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _coerce_int(raw: object, default: int, lo: int, hi: int) -> int:
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, value))
+
+
+def _coerce_env_value(field_name: str, raw: object, default: object) -> object:
+    """Validate one per-environment override, falling back to `default` on bad input."""
+    if raw is None:
+        return default
+    if field_name in ("enabled", "crowd_contribute", "allow_server_video", "lobby_default"):
+        return _coerce_bool(raw, bool(default))
+    if field_name == "execution_policy":
+        policy = str(raw).strip().lower()
+        return policy if policy in _VALID_POLICIES else default
+    if field_name == "default_pop_size":
+        return _coerce_int(raw, int(default), 3, 64)
+    if field_name == "max_pop_size":
+        return _coerce_int(raw, int(default), 3, 64)
+    if field_name == "default_min_votes":
+        return _coerce_int(raw, int(default), 0, 256)
+    if field_name == "default_elite_frac":
+        text = str(raw).strip().lower()
+        if text in ("", "none", "null"):
+            return None
+        try:
+            value = float(text)
+        except ValueError:
+            return default
+        return max(0.0, min(0.5, value))
+    if field_name == "lobby_order":
+        return _coerce_int(raw, int(default), 0, 999)
+    if field_name == "lobby_name":
+        return str(raw).strip()[:64] or default
+    return default
+
+
 def build_config() -> CentralConfig:
     t_dict = asdict(TrustPolicyConfig())
-    envs = {k: EnvPolicyConfig(**asdict(v)) for k, v in _DEFAULT_ENVS.items()}
+    envs = dict(DEFAULT_ENV_POLICIES)
     wasm_url = os.getenv("DET_MUJOCO_WASM_URL", "").strip()
 
     cfg_raw = os.getenv("DET_CONFIG_FILE", "").strip()
@@ -222,41 +295,30 @@ def build_config() -> CentralConfig:
                         t_dict[fname] = _coerce_field(raw_t[fname], t_dict[fname], lo, hi)
             raw_e = loaded.get("environments")
             if isinstance(raw_e, dict):
-                for tid, ov in raw_e.items():
-                    if tid not in envs or not isinstance(ov, dict):
+                for tid, overrides in raw_e.items():
+                    base = envs.get(tid)
+                    if base is None or not isinstance(overrides, dict):
                         continue
-                    ek = {**asdict(envs[tid]), **{k: v for k, v in ov.items() if k in envs[tid].__dataclass_fields__}}
-                    if ek["execution_policy"] not in _VALID_POLICIES:
-                        ek["execution_policy"] = envs[tid].execution_policy
-                    ek["enabled"] = bool(ek["enabled"])
-                    ek["default_pop_size"] = max(3, min(64, int(ek["default_pop_size"])))
-                    ek["max_pop_size"] = max(ek["default_pop_size"], min(64, int(ek["max_pop_size"])))
-                    envs[tid] = EnvPolicyConfig(**ek)
+                    values = asdict(base)
+                    for field_name, raw in overrides.items():
+                        if field_name in _ENV_POLICY_FIELDS:
+                            values[field_name] = _coerce_env_value(field_name, raw, values[field_name])
+                    values["max_pop_size"] = max(int(values["default_pop_size"]), int(values["max_pop_size"]))
+                    envs[tid] = EnvPolicyConfig(**values)
 
     for fname, env_key, lo, hi in _TRUST_FIELDS:
         raw_env = os.getenv(env_key)
         if raw_env is not None and raw_env.strip():
             t_dict[fname] = _coerce_field(raw_env, t_dict[fname], lo, hi)
 
-    for tid, base in list(envs.items()):
-        u = tid.upper()
-        ek = asdict(base)
-        for field_name, env_key in (
-            ("enabled", f"DET_TASK_ENABLED_{u}"),
-            ("crowd_contribute", f"DET_CROWD_CONTRIBUTE_{u}"),
-            ("allow_server_video", f"DET_ALLOW_VIDEO_{u}"),
-            ("default_pop_size", f"DET_POP_SIZE_{u}"),
-            ("max_pop_size", f"DET_MAX_POP_SIZE_{u}"),
-        ):
-            raw_val = os.getenv(env_key)
-            if raw_val is not None and raw_val.strip():
-                lo, hi = (3, 64) if "POP_SIZE" in env_key else (None, None)
-                ek[field_name] = _coerce_field(raw_val, ek[field_name], lo, hi)
-        pol = os.getenv(f"DET_EXECUTION_POLICY_{u}", "").strip().lower()
-        if pol in _VALID_POLICIES:
-            ek["execution_policy"] = pol
-        ek["max_pop_size"] = max(ek["default_pop_size"], ek["max_pop_size"])
-        envs[tid] = EnvPolicyConfig(**ek)
+    for tid, base in envs.items():
+        values = asdict(base)
+        for field_name, template in _ENV_VAR_OVERRIDES:
+            raw = os.getenv(template.format(task=tid.upper()))
+            if raw is not None and raw.strip():
+                values[field_name] = _coerce_env_value(field_name, raw, values[field_name])
+        values["max_pop_size"] = max(int(values["default_pop_size"]), int(values["max_pop_size"]))
+        envs[tid] = EnvPolicyConfig(**values)
 
     return CentralConfig(trust=TrustPolicyConfig(**t_dict), environments=envs, mujoco_wasm_url=wasm_url)
 

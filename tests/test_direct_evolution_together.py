@@ -1487,6 +1487,7 @@ def test_halfcheetah_fk_parity_convergence_server_eval_and_video(client, setting
     hc_spec = TASK_SPECS["halfcheetah"]
     assert hc_spec.default_pop_size == 16
     assert hc_spec.max_pop_size == 24
+    assert hc_spec.default_min_votes == 8
     too_big = client.post(
         "/api/rooms/",
         data=json.dumps({"name": "Huge Cheetah", "task": "halfcheetah", "population_size": 25}),
@@ -1906,11 +1907,13 @@ def test_centralized_config_client_lock_and_crowd_trust(client, monkeypatch, tmp
     monkeypatch.setenv("DET_CONFIG_FILE", str(cfg_file))
     monkeypatch.setenv("DET_CROWD_QUORUM", "2")
     monkeypatch.setenv("DET_EXECUTION_POLICY_HALFCHEETAH", "client_preferred")
+    monkeypatch.setenv("DET_MIN_VOTES_HALFCHEETAH", "12")
     try:
         reload_config()
         hc = get_task_spec("halfcheetah")
         ext = get_task_spec("external")
         assert hc.default_pop_size == 12
+        assert hc.default_min_votes == 12
         assert hc.execution_policy == "client_preferred"
         assert hc.sim_modes == ("client", "server")
         assert ext.enabled is False
@@ -1922,6 +1925,7 @@ def test_centralized_config_client_lock_and_crowd_trust(client, monkeypatch, tmp
         monkeypatch.delenv("DET_CONFIG_FILE", raising=False)
         monkeypatch.delenv("DET_CROWD_QUORUM", raising=False)
         monkeypatch.delenv("DET_EXECUTION_POLICY_HALFCHEETAH", raising=False)
+        monkeypatch.delenv("DET_MIN_VOTES_HALFCHEETAH", raising=False)
         reload_config()
 
     # 3. Crowd consensus + reputation reward/penalty + Byzantine quarantine across 3 sessions

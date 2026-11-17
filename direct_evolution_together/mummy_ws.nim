@@ -157,6 +157,8 @@ func default_runtime_config(): RuntimeConfig {.inline.} =
     params: default_goal_params(),
   )
 
+# Bootstrap fallbacks only. Python `register_task_configs` installs the authoritative
+# per-task policy (population, quorum, elite fraction) during server startup.
 func default_task_configs(): Table[string, TaskConfig] =
   result = initTable[string, TaskConfig]()
   result["image"] = TaskConfig(
