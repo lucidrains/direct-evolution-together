@@ -32,7 +32,7 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 
 from direct_evolution_together import mummy_ws, ws_bridge
 from direct_evolution_together.config import get_config
-from direct_evolution_together.crowd_trust import fetch_room_evals, submit_eval_attestations
+from direct_evolution_together.crowd_trust import SQLITE_SYNC_LOCK, fetch_room_evals, submit_eval_attestations
 from direct_evolution_together.cppn import (
     MAX_ARCHIVE_BYTES,
     MAX_CHECKPOINT_BYTES,
@@ -54,6 +54,7 @@ from direct_evolution_together.environments import (
     create_task_population,
     default_elite_for_task,
     evaluate_control_batch,
+    get_scene_manifest,
     get_task_spec,
     get_task_specs_payload,
     normalize_task_id,
@@ -61,6 +62,14 @@ from direct_evolution_together.environments import (
     rollout_control_episode,
 )
 from direct_evolution_together.models import ExternalEvalResult, Room, RoomEvolutionState
+from direct_evolution_together.populora_engine import (
+    MAX_POPULORA_CHECKPOINT_BYTES,
+    create_populora_population,
+    get_or_create_base_model,
+    load_populora_checkpoint_bytes,
+    reset_populora_goal_runtime,
+    save_populora_checkpoint_bytes,
+)
 
 
 _LOOPBACK_ADDRS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
@@ -115,13 +124,32 @@ def _room_slug(name: str) -> str:
     return slug
 
 
-def _get_or_create_contributor_id(request: HttpRequest) -> str:
-    """Stable per-session contributor identifier for crowd trust scoring."""
-    cid = str(request.session.get("det_contributor_id") or "").strip()
-    if len(cid) < 8:
-        cid = f"peer_{secrets.token_hex(10)}"
-        request.session["det_contributor_id"] = cid
-    return cid[:64]
+_CONTRIBUTOR_COOKIE = "det_cid"
+_CONTRIBUTOR_SALT = "det.contributor"
+
+
+def _resolve_contributor_id(request: HttpRequest) -> tuple[str, bool]:
+    """Return ``(contributor_id, is_new)`` backed by a tamper-evident signed cookie (no session DB writes)."""
+    try:
+        cid = str(request.get_signed_cookie(_CONTRIBUTOR_COOKIE, salt=_CONTRIBUTOR_SALT, default="") or "").strip()
+    except Exception:
+        cid = ""
+    if len(cid) >= 8:
+        return cid[:64], False
+    return f"peer_{secrets.token_hex(10)}", True
+
+
+def _attach_contributor_cookie(resp: HttpResponse, cid: str, is_new: bool) -> HttpResponse:
+    if is_new:
+        resp.set_signed_cookie(
+            _CONTRIBUTOR_COOKIE,
+            cid,
+            salt=_CONTRIBUTOR_SALT,
+            max_age=365 * 86400,
+            httponly=True,
+            samesite="Lax",
+        )
+    return resp
 
 
 def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
@@ -177,12 +205,19 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
             mujoco_wasm_url = f"{base_path}/assets/vendor/mujoco/mujoco.js"
         else:
             mujoco_wasm_url = "https://cdn.jsdelivr.net/npm/@mujoco/mujoco@4.0.1/mujoco.js"
-    contributor_id = _get_or_create_contributor_id(request)
-    return render(
+    contributor_id, cid_is_new = _resolve_contributor_id(request)
+    fe_dir = Path(__file__).resolve().parent / "frontend"
+    fe_sig = hashlib.sha256()
+    for js_p in sorted(fe_dir.glob("*.js")):
+        st = js_p.stat()
+        fe_sig.update(f"{js_p.name}:{st.st_size}:{st.st_mtime_ns}|".encode("ascii"))
+    asset_ver = fe_sig.hexdigest()[:10]
+    resp = render(
         request,
         "direct_evolution_together/index.html",
         {
             "base_path": base_path,
+            "asset_ver": asset_ver,
             "ws_via_proxy": ws_via_proxy,
             "ws_host": settings.WS_HOST,
             "ws_port": settings.WS_PORT,
@@ -211,6 +246,7 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
             },
         },
     )
+    return _attach_contributor_cookie(resp, contributor_id, cid_is_new)
 
 
 def health(request: HttpRequest) -> JsonResponse:
@@ -225,6 +261,10 @@ _ASSET_CONTENT_TYPES = {
     ".xml": "application/xml; charset=utf-8",
     ".wasm": "application/wasm",
     ".json": "application/json; charset=utf-8",
+    ".bin": "application/octet-stream",
+    ".stl": "model/stl",
+    ".obj": "text/plain; charset=utf-8",
+    ".png": "image/png",
 }
 _PKG_DIR = Path(__file__).resolve().parent
 _ASSET_CACHE_LOCK = threading.Lock()
@@ -280,7 +320,11 @@ def serve_asset(request: HttpRequest, asset_name: str) -> HttpResponse:
             etag = gz_tag if use_gz else raw_tag
             cache_ctrl = (
                 "public, max-age=31536000, immutable"
-                if ("vendor/" in asset_name or suffix == ".wasm")
+                if (
+                    "vendor/" in asset_name
+                    or suffix == ".wasm"
+                    or ("scenes/" in asset_name and bool(request.GET.get("v")))
+                )
                 else "public, max-age=3600"
             )
             if request.META.get("HTTP_IF_NONE_MATCH") == etag:
@@ -403,9 +447,68 @@ def _extract_uploaded_strains(
     return strains
 
 
+def _extract_uploaded_populora_strains(
+    uploaded_files: list,
+    task_id: str,
+    policy_spec,
+    remaining_slots: int,
+) -> list[tuple[str, dict, bytes]]:
+    """Read, bound-check, and parse uploaded `.pt`/`.zip` PopuLoRA checkpoints."""
+    strains: list[tuple[str, dict, bytes]] = []
+    max_total = max(MAX_TOTAL_UPLOAD_BYTES, MAX_POPULORA_CHECKPOINT_BYTES)
+    bytes_remaining = max_total
+    for up in uploaded_files:
+        if remaining_slots <= 0:
+            break
+        filename = str(getattr(up, "name", "") or "weights.pt")
+        cap = min(MAX_POPULORA_CHECKPOINT_BYTES, bytes_remaining)
+        raw_bytes = getattr(up, "read")(cap + 1)
+        if len(raw_bytes) > cap:
+            raise ValueError(f"{filename}: Checkpoint exceeds upload limit.")
+        bytes_remaining -= len(raw_bytes)
+
+        if filename.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
+                    pt_members = [
+                        m for m in zf.infolist()
+                        if not m.is_dir() and m.filename.lower().endswith(".pt")
+                    ]
+                    if not pt_members:
+                        raise ValueError(f"{filename}: No .pt checkpoint found inside zip archive.")
+                    for info in pt_members[:remaining_slots]:
+                        if info.file_size > MAX_POPULORA_CHECKPOINT_BYTES:
+                            raise ValueError(f"{info.filename}: Checkpoint inside zip exceeds size limit.")
+                        pt_b = zf.read(info)
+                        genome = load_populora_checkpoint_bytes(
+                            pt_b,
+                            policy_spec,
+                            task_id=task_id,
+                            source_name=info.filename,
+                            assign_id=False,
+                        )
+                        stem = PurePosixPath(info.filename).stem or "populora_seed"
+                        strains.append((stem[:48], genome, pt_b))
+                        remaining_slots -= 1
+            except zipfile.BadZipFile as exc:
+                raise ValueError(f"{filename}: Invalid zip archive.") from exc
+        else:
+            genome = load_populora_checkpoint_bytes(
+                raw_bytes,
+                policy_spec,
+                task_id=task_id,
+                source_name=filename,
+                assign_id=False,
+            )
+            stem = PurePosixPath(filename).stem or "populora_seed"
+            strains.append((stem[:48], genome, raw_bytes))
+            remaining_slots -= 1
+    return strains
+
+
 @require_POST
 def api_validate_weights(request: HttpRequest) -> JsonResponse:
-    """Validate uploaded `.pt` or `.zip` CPPN checkpoints and return preview genomes."""
+    """Validate uploaded `.pt` or `.zip` checkpoints (CPPN or PopuLoRA) and return preview genomes."""
     post_data, uploaded_files, err = _parse_multipart_upload(request)
     if err:
         return JsonResponse({"ok": False, "error": err[1]}, status=err[0])
@@ -415,24 +518,32 @@ def api_validate_weights(request: HttpRequest) -> JsonResponse:
             status=400,
         )
 
+    task_id = normalize_task_id(str(post_data.get("task") or "image"))
+    task_spec = get_task_spec(task_id)
+    max_slots = task_spec.max_pop_size if task_spec.genome_kind == "populora" else MAX_POPULATION_SIZE
     existing_count = _parse_clamped_int_param(
-        post_data.get("existing_count"), 0, 0, MAX_POPULATION_SIZE
+        post_data.get("existing_count"), 0, 0, max_slots
     )
-    remaining_slots = MAX_POPULATION_SIZE - existing_count
+    remaining_slots = max_slots - existing_count
     if remaining_slots < 1:
         return JsonResponse(
             {
                 "ok": False,
                 "error": (
-                    f"Cannot exceed {MAX_POPULATION_SIZE} uploaded strains "
-                    f"(max population size is {MAX_POPULATION_SIZE})."
+                    f"Cannot exceed {max_slots} uploaded strains "
+                    f"(max population size is {max_slots})."
                 ),
             },
             status=400,
         )
 
     try:
-        parsed = _extract_uploaded_strains(uploaded_files, remaining_slots)
+        if task_spec.genome_kind == "populora" and task_spec.policy_spec is not None:
+            parsed = _extract_uploaded_populora_strains(
+                uploaded_files, task_id, task_spec.policy_spec, remaining_slots
+            )
+        else:
+            parsed = _extract_uploaded_strains(uploaded_files, remaining_slots)
     except ValueError as exc:
         return JsonResponse({"ok": False, "error": str(exc)}, status=400)
 
@@ -511,30 +622,50 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
 
     if uploaded_files or task != "image":
         if uploaded_files:
-            try:
-                seed_genomes = [
-                    genome
-                    for _, genome, _ in _extract_uploaded_strains(uploaded_files, task_spec.max_pop_size)
-                ]
-            except ValueError as exc:
-                return JsonResponse({"error": str(exc)}, status=400)
-
-            if len(seed_genomes) > pop_size:
-                return JsonResponse(
-                    {
-                        "error": (
-                            f"Uploaded strains ({len(seed_genomes)}) cannot exceed "
-                            f"total population size ({pop_size})."
+            if task_spec.genome_kind == "populora" and task_spec.policy_spec is not None:
+                try:
+                    seed_genomes = [
+                        genome
+                        for _, genome, _ in _extract_uploaded_populora_strains(
+                            uploaded_files, task, task_spec.policy_spec, task_spec.max_pop_size
                         )
-                    },
-                    status=400,
+                    ]
+                except ValueError as exc:
+                    return JsonResponse({"error": str(exc)}, status=400)
+                if len(seed_genomes) > pop_size:
+                    return JsonResponse(
+                        {"error": f"Uploaded strains ({len(seed_genomes)}) cannot exceed total population size ({pop_size})."},
+                        status=400,
+                    )
+                genomes = create_populora_population(
+                    task, task_spec.policy_spec, pop_size=pop_size, seed_genomes=seed_genomes
                 )
+                seeded_count = len(seed_genomes)
+            else:
+                try:
+                    seed_genomes = [
+                        genome
+                        for _, genome, _ in _extract_uploaded_strains(uploaded_files, task_spec.max_pop_size)
+                    ]
+                except ValueError as exc:
+                    return JsonResponse({"error": str(exc)}, status=400)
 
-            try:
-                genomes = create_seeded_population(seed_genomes, pop_size=pop_size)
-            except ValueError as exc:
-                return JsonResponse({"error": str(exc)}, status=400)
-            seeded_count = len(seed_genomes)
+                if len(seed_genomes) > pop_size:
+                    return JsonResponse(
+                        {
+                            "error": (
+                                f"Uploaded strains ({len(seed_genomes)}) cannot exceed "
+                                f"total population size ({pop_size})."
+                            )
+                        },
+                        status=400,
+                    )
+
+                try:
+                    genomes = create_seeded_population(seed_genomes, pop_size=pop_size)
+                except ValueError as exc:
+                    return JsonResponse({"error": str(exc)}, status=400)
+                seeded_count = len(seed_genomes)
         else:
             genomes = create_task_population(task, pop_size)
             seeded_count = 0
@@ -589,6 +720,12 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
     if seeded_meta is not None:
         raw_goal = str(payload.get("goal") or "").strip()
         goal_name = _truncate_utf8(raw_goal or name, 32) or room.slug[:32]
+        raw_auto_ev = payload.get("auto_evolve")
+        auto_ev_opt = (
+            str(raw_auto_ev).strip().lower() in ("1", "true", "yes", "on")
+            if raw_auto_ev is not None and str(raw_auto_ev).strip() != ""
+            else None
+        )
         state_json = ws_bridge.build_room_state_json(
             goal_name,
             seeded_meta["genomes"],
@@ -598,6 +735,7 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
             mut_sigma=seeded_meta["mut_sigma"],
             elite_frac=seeded_meta["elite_frac"],
             crossover_rate=seeded_meta["crossover_rate"],
+            auto_evolve=auto_ev_opt,
         )
         RoomEvolutionState.objects.update_or_create(
             room=room.slug,
@@ -619,26 +757,37 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
 def _parse_export_payload(request: HttpRequest) -> tuple[dict, str, str]:
     payload = json.loads(request.body.decode("utf-8"))
     genome = payload.get("genome")
-    if not isinstance(genome, dict) or not {"weights", "biases", "activations"} <= set(genome):
+    is_populora = isinstance(genome, dict) and genome.get("kind") == "populora" and isinstance(genome.get("adapters"), dict)
+    is_cppn = isinstance(genome, dict) and {"weights", "biases", "activations"} <= set(genome)
+    if not (is_populora or is_cppn):
         raise ValueError("Invalid genome payload")
     genome = dict(genome)
     genome.setdefault("id", 0)
     goal = str(payload.get("goal", "policy"))
-    task = normalize_task_id(str(payload.get("task") or "image"))
+    task = normalize_task_id(str(payload.get("task") or (genome.get("task") if is_populora else "image") or ("microduck" if is_populora else "image")))
     generation = int(payload.get("generation", 0))
     index = int(payload.get("index", 0))
     return genome, slugify_policy_name(goal, generation, index), task
 
 
+def _serialize_policy_checkpoint(genome: dict, task: str) -> bytes:
+    if genome.get("kind") == "populora":
+        spec = get_task_spec(task)
+        if spec.policy_spec is None:
+            raise ValueError(f"Task '{task}' has no PopuLoRA policy specification.")
+        return save_populora_checkpoint_bytes(genome, spec.policy_spec)
+    return save_cppn_bytes(genome)
+
+
 @require_POST
 def export_weights(request: HttpRequest) -> HttpResponse:
-    """Download a trained/evolved CPPN genome as a save_load .pt checkpoint."""
+    """Download a trained/evolved CPPN or PopuLoRA genome as a .pt checkpoint."""
     try:
-        genome, slug, _ = _parse_export_payload(request)
+        genome, slug, task = _parse_export_payload(request)
+        data = _serialize_policy_checkpoint(genome, task)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         return HttpResponseBadRequest(str(exc))
 
-    data = save_cppn_bytes(genome)
     resp = HttpResponse(data, content_type="application/octet-stream")
     resp["Content-Disposition"] = f'attachment; filename="{slug}.pt"'
     return resp
@@ -646,7 +795,7 @@ def export_weights(request: HttpRequest) -> HttpResponse:
 
 @require_GET
 def export_script(request: HttpRequest) -> HttpResponse:
-    """Download the standalone uv runner script for CPPN checkpoints."""
+    """Download the standalone uv runner script for checkpoints."""
     task = normalize_task_id(request.GET.get("task", "image"))
     script = build_runner_script("weights.pt", task=task)
     resp = HttpResponse(script, content_type="text/x-python; charset=utf-8")
@@ -659,10 +808,10 @@ def export_bundle(request: HttpRequest) -> HttpResponse:
     """Download a zip containing weights.pt and the standalone uv runner script."""
     try:
         genome, slug, task = _parse_export_payload(request)
+        weights_bytes = _serialize_policy_checkpoint(genome, task)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         return HttpResponseBadRequest(str(exc))
 
-    weights_bytes = save_cppn_bytes(genome)
     script_text = build_runner_script("weights.pt", task=task)
 
     buf = io.BytesIO()
@@ -674,6 +823,10 @@ def export_bundle(request: HttpRequest) -> HttpResponse:
             xml_path = _PKG_DIR / "assets" / spec.mjcf_asset
             if xml_path.is_file():
                 zf.writestr(f"{slug}/{spec.mjcf_asset}", xml_path.read_bytes())
+        if spec.scene_id:
+            lic_path = _PKG_DIR / "assets" / "scenes" / spec.scene_id / "LICENSE"
+            if lic_path.is_file():
+                zf.writestr(f"{slug}/SCENE_LICENSE", lic_path.read_bytes())
 
     resp = HttpResponse(buf.getvalue(), content_type="application/zip")
     resp["Content-Disposition"] = f'attachment; filename="{slug}.zip"'
@@ -815,6 +968,38 @@ def api_sim_rollout(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"ok": True, "engine": "server", "task": task, "rollout": rollout})
 
 
+@require_GET
+def api_sim_base_model(request: HttpRequest) -> JsonResponse:
+    """Serve shared PopuLoRA base model weights (cached immutably by content hash)."""
+    task = normalize_task_id(request.GET.get("task", "microduck"))
+    spec = get_task_spec(task)
+    if spec.genome_kind != "populora" or spec.policy_spec is None:
+        return JsonResponse({"ok": False, "error": f"Task '{task}' has no PopuLoRA base model."}, status=400)
+    req_hash = request.GET.get("hash", "").strip()[:32]
+    try:
+        base_seed = int(request.GET.get("seed", "1"))
+    except ValueError:
+        base_seed = 1
+    _, resolved_hash, payload = get_or_create_base_model(
+        spec.policy_spec, base_seed=base_seed, base_hash=req_hash or None
+    )
+    resp = JsonResponse({"ok": True, "task": spec.task_id, **payload})
+    if req_hash and req_hash == resolved_hash:
+        resp["Cache-Control"] = "public, max-age=31536000, immutable"
+    else:
+        resp["Cache-Control"] = "public, max-age=3600"
+    return resp
+
+
+@require_GET
+def api_sim_scene_manifest(request: HttpRequest, scene_id: str) -> JsonResponse:
+    """Serve compiled MuJoCo scene manifest (physics VFS + visual meshpack hashes)."""
+    manifest = get_scene_manifest(scene_id)
+    if manifest is None:
+        return JsonResponse({"ok": False, "error": f"Scene '{scene_id}' not found."}, status=404)
+    return JsonResponse({"ok": True, **manifest})
+
+
 def _verify_worker_token(request: HttpRequest, room_obj: Room | None) -> bool:
     if room_obj is None or not room_obj.worker_token_hash:
         return False
@@ -851,6 +1036,81 @@ def _fetch_room_snapshot(room: str) -> dict | None:
         except ValueError:
             pass
     return None
+
+
+def _get_live_room_peer_count(room: str) -> int | None:
+    """Return active WS peer count in `room` when WS server is active, else None."""
+    if ws_bridge.is_running():
+        cnt = int(mummy_ws.get_room_peer_count(room))
+        return cnt if cnt >= 1 else None
+    configured = _configured_admin_password()
+    if configured:
+        status, text = _ws_internal_request(
+            "GET",
+            f"/internal/room-peers/{urllib.parse.quote(room, safe='')}",
+            configured,
+            timeout=1.5,
+        )
+        if status == 200 and text:
+            try:
+                cnt = int(json.loads(text).get("peers", 0))
+                return cnt if cnt >= 1 else None
+            except Exception:
+                pass
+    return None
+
+
+def _notify_goal_sim_progress(room: str, goal_name: str, generation: int, verified_count: int) -> str:
+    if ws_bridge.is_running():
+        return str(mummy_ws.notify_goal_sim_progress(room, goal_name, int(generation), int(verified_count)))
+    configured = _configured_admin_password()
+    if configured:
+        status, text = _ws_internal_request(
+            "POST",
+            "/internal/sim-progress",
+            configured,
+            {
+                "room": room,
+                "goal": goal_name,
+                "generation": int(generation),
+                "verifiedCount": int(verified_count),
+            },
+            timeout=1.5,
+        )
+        if status == 200 and text:
+            try:
+                return str(json.loads(text).get("phase", ""))
+            except Exception:
+                pass
+    return ""
+
+
+def _sync_goal_sim_phase(room: str, goal_name: str, generation: int) -> tuple[int, str]:
+    """Count verified genomes belonging to the active goal population and advance phase if ready."""
+    snapshot = _fetch_room_snapshot(room)
+    goals = (snapshot or {}).get("goals") or []
+    target = next((g for g in goals if g.get("name") == goal_name), None)
+    if not isinstance(target, dict) or int(target.get("generation", -1)) != int(generation):
+        return 0, ""
+    genomes = target.get("genomes") or []
+    if not genomes:
+        return 0, ""
+    pop_hashes = [genome_content_hash(g, length=20) for g in genomes if isinstance(g, dict)]
+    if not pop_hashes:
+        return 0, ""
+    with SQLITE_SYNC_LOCK:
+        verified_hashes = set(
+            ExternalEvalResult.objects.filter(
+                room=room,
+                goal=goal_name,
+                generation=generation,
+                status="verified",
+                genome_hash__in=set(pop_hashes),
+            ).values_list("genome_hash", flat=True)
+        )
+    verified_in_pop = sum(1 for h in pop_hashes if h in verified_hashes)
+    phase = _notify_goal_sim_progress(room, goal_name, generation, verified_in_pop)
+    return verified_in_pop, phase
 
 
 def _broadcast_room_event(room: str, payload: dict) -> None:
@@ -961,6 +1221,7 @@ def api_worker_results(request: HttpRequest, room: str) -> JsonResponse:
                 "items": stored_items,
             },
         )
+        _sync_goal_sim_phase(room, goal_name, generation)
     return JsonResponse({"ok": True, "accepted": len(stored_items)})
 
 
@@ -988,7 +1249,7 @@ def api_worker_evals(request: HttpRequest, room: str) -> JsonResponse:
 def api_crowd_evals(request: HttpRequest, room: str) -> JsonResponse:
     """Fetch crowd WASM/WebGPU consensus results and caller contributor trust status."""
     cfg = get_config().trust
-    cid = _get_or_create_contributor_id(request)
+    cid, cid_is_new = _resolve_contributor_id(request)
     goal_name = request.GET.get("goal", "").strip()[:64]
     try:
         generation = int(request.GET.get("generation", "0"))
@@ -996,15 +1257,22 @@ def api_crowd_evals(request: HttpRequest, room: str) -> JsonResponse:
         generation = 0
     trusted_only = request.GET.get("trusted_only", "").strip().lower() in ("1", "true", "yes")
     items = fetch_room_evals(room, goal_name, generation, trusted_only=trusted_only) if goal_name else []
-    return JsonResponse({
+    live_peers = _get_live_room_peer_count(room)
+    eff_quorum = (
+        1
+        if (live_peers is not None and live_peers <= 1)
+        else (min(cfg.quorum, max(1, live_peers)) if live_peers is not None else cfg.quorum)
+    )
+    resp = JsonResponse({
         "ok": True,
         "room": room,
         "goal": goal_name,
         "generation": generation,
-        "quorum": cfg.quorum,
+        "quorum": eff_quorum,
         "contributorId": cid,
         "items": items,
     })
+    return _attach_contributor_cookie(resp, cid, cid_is_new)
 
 
 @require_POST
@@ -1031,7 +1299,8 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
     if not goal_name or not isinstance(results, list) or not results:
         return JsonResponse({"ok": False, "error": "goal, generation, and non-empty results are required."}, status=400)
 
-    cid = _get_or_create_contributor_id(request)
+    cid, cid_is_new = _resolve_contributor_id(request)
+    live_peers = _get_live_room_peer_count(room)
     outcome = submit_eval_attestations(
         room=room,
         goal=goal_name,
@@ -1039,6 +1308,7 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
         results=results,
         contributor_id=cid,
         authority=False,
+        active_peers=live_peers,
     )
     items = outcome["items"]
     changed_items = outcome.get("changedItems") or []
@@ -1052,14 +1322,19 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
                 "items": changed_items,
             },
         )
-    return JsonResponse({
+    pop_verified, phase = _sync_goal_sim_phase(room, goal_name, generation)
+    resp = JsonResponse({
         "ok": True,
         "accepted": len(items),
         "verifiedCount": outcome["verifiedCount"],
+        "goalVerifiedCount": pop_verified,
+        "phase": phase,
+        "quorum": outcome.get("quorum", trust_cfg.quorum),
         "contributorReputation": outcome["contributorReputation"],
         "quarantined": outcome["quarantined"],
         "items": items,
     })
+    return _attach_contributor_cookie(resp, cid, cid_is_new)
 
 
 @require_GET
@@ -1323,6 +1598,7 @@ def _perform_admin_reset(room: str, goal: str, configured: str) -> tuple[bool, i
     task_map = _room_goal_tasks(room)
     reset_goals: list[str] = []
     for goal_name, pop_size in targets:
+        reset_populora_goal_runtime(room, goal_name)
         genomes = create_task_population(task_map.get(goal_name, "image"), int(pop_size))
         r_status, r_err = _apply_goal_reset_dispatch(room, goal_name, genomes, configured)
         if r_status != 200:
@@ -1380,6 +1656,8 @@ def _perform_admin_clear(room: str, goal: str, configured: str) -> tuple[bool, i
         return False, 404, f"Room '{room}' has no initialized or persisted goals.", []
 
     cleared = list(all_goals) if is_all else [goal]
+    for g_cl in cleared:
+        reset_populora_goal_runtime(room, g_cl)
     _clear_persisted_room_state(room, "" if is_all else goal)
     c_status, c_err = _apply_room_clear_dispatch(room, [], "" if is_all else goal, configured)
     if c_status != 200:

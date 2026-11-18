@@ -59,6 +59,9 @@ def create_task_population(
     clean_task = normalize_task_id(task_id)
     spec = get_task_spec(clean_task)
     eff_pop = clamp_pop_for_task(clean_task, pop_size)
+    if spec.genome_kind == "populora" and spec.policy_spec is not None:
+        from direct_evolution_together.populora_engine import create_populora_population
+        return create_populora_population(spec.task_id, spec.policy_spec, pop_size=eff_pop)
     adapter = TASK_ADAPTERS.get(clean_task)
     if spec.kind != "control" or adapter is None:
         return create_random_population(pop_size=eff_pop)

@@ -176,23 +176,41 @@ def test_e2e_chat_persistence_cursor_and_evolution():
             assert _recv_until(a1, "identity")["username"] == "alice"
             evo0 = _recv_until(a1, "evolution_state")
             assert [g["name"] for g in evo0["goals"]] == [
+                "Microduck",
+                "Unitree Go2",
+                "SO-101 Arm",
                 "HalfCheetah",
                 "CartPole",
                 "Butterfly",
                 "Galaxy",
                 "Creature",
             ]
-            assert evo0["goals"][0]["task"] == "halfcheetah"
-            assert evo0["goals"][0]["minVotes"] == 2
-            assert evo0["goals"][0]["eliteFrac"] == 0.05
-            assert len(evo0["goals"][0]["genomes"]) == 12
-            assert evo0["goals"][1]["task"] == "cartpole"
-            assert evo0["goals"][1]["minVotes"] == 2
-            assert evo0["goals"][1]["eliteFrac"] == 0.0
-            assert len(evo0["goals"][1]["genomes"]) == 12
-            assert evo0["goals"][2]["task"] == "image"
-            assert evo0["goals"][2]["minVotes"] == 2
-            assert len(evo0["goals"][2]["genomes"]) == 12
+            assert evo0["goals"][0]["task"] == "microduck"
+            assert evo0["goals"][0]["phase"] == "simulating"
+            assert evo0["goals"][0]["simPhaseEnabled"] is True
+            assert evo0["goals"][0]["eliteFrac"] == 0.25
+            assert len(evo0["goals"][0]["genomes"]) == 8
+            assert evo0["goals"][1]["task"] == "unitree_go2"
+            assert evo0["goals"][1]["phase"] == "simulating"
+            assert evo0["goals"][1]["simPhaseEnabled"] is True
+            assert evo0["goals"][1]["eliteFrac"] == 0.25
+            assert len(evo0["goals"][1]["genomes"]) == 8
+            assert evo0["goals"][2]["task"] == "so101"
+            assert evo0["goals"][2]["phase"] == "simulating"
+            assert evo0["goals"][2]["simPhaseEnabled"] is True
+            assert evo0["goals"][2]["eliteFrac"] == 0.25
+            assert len(evo0["goals"][2]["genomes"]) == 8
+            assert evo0["goals"][3]["task"] == "halfcheetah"
+            assert evo0["goals"][3]["minVotes"] == 2
+            assert evo0["goals"][3]["eliteFrac"] == 0.05
+            assert len(evo0["goals"][3]["genomes"]) == 12
+            assert evo0["goals"][4]["task"] == "cartpole"
+            assert evo0["goals"][4]["minVotes"] == 2
+            assert evo0["goals"][4]["eliteFrac"] == 0.0
+            assert len(evo0["goals"][4]["genomes"]) == 12
+            assert evo0["goals"][5]["task"] == "image"
+            assert evo0["goals"][5]["minVotes"] == 2
+            assert len(evo0["goals"][5]["genomes"]) == 12
 
             with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice") as a2:
                 assert _recv_until(a2, "identity")["username"] == "alice-2"
@@ -247,7 +265,12 @@ def test_ws_gzip_state_and_lazy_lineage():
                     break
             assert saw_binary
 
-            goal = msg["goals"][0]
+            md_goal = msg["goals"][0]
+            assert md_goal["task"] == "microduck"
+            assert md_goal["lineageTotal"] == len(md_goal["lineage"]) == 6
+            assert all(node.get("kind") == "populora" and "adapters" not in node for node in md_goal["lineage"])
+
+            goal = next(g for g in msg["goals"] if g["task"] == "image")
             assert goal["lineageTotal"] == len(goal["lineage"]) == 6
             assert all("weights" not in node for node in goal["lineage"])
 
@@ -1196,25 +1219,37 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
         with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=mig") as ws_lob:
             lob_state = _recv_until(ws_lob, "evolution_state")
             assert [g["name"] for g in lob_state["goals"]] == [
+                "Microduck",
+                "Unitree Go2",
+                "SO-101 Arm",
                 "HalfCheetah",
                 "CartPole",
                 "Butterfly",
                 "Galaxy",
                 "Creature",
             ]
-            assert lob_state["goals"][0]["task"] == "halfcheetah"
-            assert lob_state["goals"][0]["eliteFrac"] == 0.05
-            assert lob_state["goals"][0]["minVotes"] == 6
+            assert lob_state["goals"][0]["task"] == "microduck"
+            assert len(lob_state["goals"][0]["genomes"]) == 8
+            assert lob_state["goals"][0]["minVotes"] == 4
+            assert lob_state["goals"][1]["task"] == "unitree_go2"
+            assert len(lob_state["goals"][1]["genomes"]) == 8
+            assert lob_state["goals"][1]["minVotes"] == 4
+            assert lob_state["goals"][2]["task"] == "so101"
+            assert len(lob_state["goals"][2]["genomes"]) == 8
+            assert lob_state["goals"][2]["minVotes"] == 4
+            assert lob_state["goals"][3]["task"] == "halfcheetah"
+            assert lob_state["goals"][3]["eliteFrac"] == 0.05
+            assert lob_state["goals"][3]["minVotes"] == 6
             assert all(
                 evaluate_control_genome("halfcheetah", cand, seeds=(0, 1))["meanDistance"] < 4.5
-                for cand in lob_state["goals"][0]["genomes"]
+                for cand in lob_state["goals"][3]["genomes"]
             )
-            assert lob_state["goals"][1]["task"] == "cartpole"
-            assert lob_state["goals"][1]["eliteFrac"] == 0.0
-            assert lob_state["goals"][1]["minVotes"] == 6
+            assert lob_state["goals"][4]["task"] == "cartpole"
+            assert lob_state["goals"][4]["eliteFrac"] == 0.0
+            assert lob_state["goals"][4]["minVotes"] == 6
             assert all(
                 evaluate_control_genome("cartpole", cand, seeds=(0, 1, 2))["meanSteps"] < 60.0
-                for cand in lob_state["goals"][1]["genomes"]
+                for cand in lob_state["goals"][4]["genomes"]
             )
 
         # CartPole quorum is capped by the per-person vote budget; image quorum stays independent
@@ -1574,6 +1609,7 @@ console.log(JSON.stringify(segs));
 
     # 3. Verify Python vs JS anatomical (21, 12, 6) HyperNEAT substrate weight decoding parity
     rng = random.Random(1234)
+    torch.manual_seed(1234)
     torch_free_genome = create_task_population("halfcheetah", 1)[0]
     substrate = get_substrate(hc_spec.substrate_dims, hc_spec.layer_coords)
     py_weights, py_biases = substrate.decode(torch_free_genome)
@@ -2149,6 +2185,9 @@ def test_halfcheetah_fast_rollout_parity_and_fault_tolerant_evolve(monkeypatch):
     from direct_evolution_together.models import RoomEvolutionState
 
     # 1. Verify HyperNEAT NumPy decode parity vs PyTorch CPPN and HalfCheetah capture_frames=False parity
+    import random
+    random.seed(777)
+    torch.manual_seed(777)
     genome = CPPN.random(777).to_dict()
     sub = HyperNEATSubstrate((21, 12, 6))
     sub._decode_cache.clear()
@@ -2310,6 +2349,921 @@ def test_crowd_trust_changed_items_dedup_and_ws_nginx_timeout():
     nginx_tpl = (Path(__file__).resolve().parent.parent / "deploy" / "nginx.conf.tpl").read_text(encoding="utf-8")
     assert "proxy_read_timeout 120;" in nginx_tpl
     assert "proxy_send_timeout 86400;" in nginx_tpl
+
+
+@pytest.mark.django_db
+def test_general_scene_compiler_so101_and_microduck_assets(client, tmp_path):
+    from pathlib import Path
+    import struct
+    import mujoco
+    import numpy as np
+    from direct_evolution_together.environments.scene_assets import (
+        compile_mjcf_scene,
+        unpack_vfs_entries,
+    )
+
+    # 1. Verify precompiled Microduck scene assets & endpoints serve cleanly with immutable ETag + gzip
+    for url, kind in (
+        ("/assets/scene_cache.js", "javascript"),
+        ("/assets/scenes/microduck/manifest.json", "json"),
+        ("/assets/scenes/microduck/physics.bin", "octet-stream"),
+        ("/assets/scenes/microduck/visual.bin", "octet-stream"),
+    ):
+        resp = client.get(url, HTTP_ACCEPT_ENCODING="gzip")
+        assert resp.status_code == 200, f"{url} returned {resp.status_code}"
+        assert kind in resp["Content-Type"].lower()
+
+    phys_gz = client.get("/assets/scenes/microduck/physics.bin", HTTP_ACCEPT_ENCODING="gzip")
+    assert phys_gz.get("Content-Encoding") == "gzip"
+    assert len(phys_gz.content) < 1_500_000  # ~1.1 MB gzipped down from 23 MB raw STLs
+    phys_304 = client.get(
+        "/assets/scenes/microduck/physics.bin",
+        HTTP_ACCEPT_ENCODING="gzip",
+        HTTP_IF_NONE_MATCH=phys_gz["ETag"],
+    )
+    assert phys_304.status_code == 304
+
+    manifest = client.get("/api/sim/scene/microduck/").json()
+    assert manifest["ok"] is True
+    assert manifest["sceneId"] == "microduck"
+    assert manifest["visualStats"]["bodyMeshCount"] == 15
+    assert manifest["visualStats"]["totalTris"] > 10_000
+
+    # 2. Generalizability test: compile a synthetic so101-style 4-DOF robotic arm MJCF + binary STL
+    #    WITHOUT explicit <inertial> tags -> verify inertial baking, visual mesh stripping, & 0.0 physics error!
+    def _write_tetra_stl(stl_path: Path, scale: float) -> None:
+        v = np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [scale, 0.0, 0.0],
+                [0.0, scale, 0.0],
+                [0.0, 0.0, scale],
+            ],
+            dtype=np.float32,
+        )
+        faces = [(0, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3)]
+        buf = bytearray(80)
+        buf.extend(struct.pack("<I", len(faces)))
+        for i0, i1, i2 in faces:
+            n = np.cross(v[i1] - v[i0], v[i2] - v[i0])
+            n /= max(1e-8, float(np.linalg.norm(n)))
+            buf.extend(struct.pack("<12fH", *n, *v[i0], *v[i1], *v[i2], 0))
+        stl_path.write_bytes(bytes(buf))
+
+    src_dir = tmp_path / "so101_src"
+    meshes_dir = src_dir / "meshes"
+    meshes_dir.mkdir(parents=True)
+    _write_tetra_stl(meshes_dir / "visual_housing.stl", 0.09)
+    _write_tetra_stl(meshes_dir / "gripper_tip.stl", 0.03)
+
+    entry_xml = src_dir / "so101_scene.xml"
+    entry_xml.write_text(
+        """<mujoco model="so101_arm">
+  <compiler angle="radian" meshdir="meshes"/>
+  <option timestep="0.005"/>
+  <asset>
+    <material name="orange_abs" rgba="0.95 0.45 0.12 1"/>
+    <material name="dark_metal" rgba="0.18 0.20 0.24 1"/>
+    <mesh name="housing_vis" file="visual_housing.stl"/>
+    <mesh name="tip_col" file="gripper_tip.stl"/>
+  </asset>
+  <worldbody>
+    <geom name="table" type="plane" size="1 1 0.05"/>
+    <body name="shoulder_pan" pos="0 0 0.08">
+      <joint name="j1" type="hinge" axis="0 0 1" damping="0.2"/>
+      <geom type="mesh" mesh="housing_vis" material="orange_abs" contype="0" conaffinity="0" mass="0.25"/>
+      <geom type="capsule" fromto="0 0 0 0 0 0.12" size="0.02" material="dark_metal"/>
+      <body name="upper_arm" pos="0 0 0.12">
+        <joint name="j2" type="hinge" axis="0 1 0" damping="0.15"/>
+        <geom type="mesh" mesh="housing_vis" material="orange_abs" contype="0" conaffinity="0" mass="0.18"/>
+        <geom type="box" pos="0 0 0.08" size="0.018 0.018 0.08" material="orange_abs"/>
+        <body name="forearm" pos="0 0 0.16">
+          <joint name="j3" type="hinge" axis="0 1 0" damping="0.10"/>
+          <geom type="cylinder" pos="0 0 0.06" size="0.014 0.06" material="dark_metal"/>
+          <body name="wrist_gripper" pos="0 0 0.12">
+            <joint name="j4" type="hinge" axis="1 0 0" damping="0.05"/>
+            <geom type="mesh" mesh="tip_col" material="dark_metal" contype="1" conaffinity="1"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="a1" joint="j1" kp="15"/>
+    <position name="a2" joint="j2" kp="15"/>
+    <position name="a3" joint="j3" kp="10"/>
+    <position name="a4" joint="j4" kp="5"/>
+  </actuator>
+</mujoco>
+""",
+        encoding="utf-8",
+    )
+
+    out_dir = tmp_path / "so101_compiled"
+    so_manifest = compile_mjcf_scene("so101", entry_xml, out_dir)
+    assert so_manifest["sceneId"] == "so101"
+    assert so_manifest["nq"] == 4 and so_manifest["nu"] == 4
+    assert so_manifest["visualStats"]["bodyMeshCount"] == 4
+
+    vfs_files = unpack_vfs_entries((out_dir / "physics.bin").read_bytes())
+    assert "meshes/visual_housing.stl" not in vfs_files  # visual-only STL stripped
+    assert "meshes/gripper_tip.stl" in vfs_files  # collision STL preserved
+    stripped_xml = vfs_files["so101_scene.xml"].decode("utf-8")
+    assert "<inertial " in stripped_xml  # baked automatically from full MjModel!
+
+    # Verify bit-exact physics parity between original MJCF and stripped DETVFS1 archive
+    orig_m = mujoco.MjModel.from_xml_path(str(entry_xml))
+    orig_d = mujoco.MjData(orig_m)
+    unpacked_dir = tmp_path / "so101_vfs"
+    for rel_p, payload in vfs_files.items():
+        dst = unpacked_dir / rel_p
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(payload)
+    comp_m = mujoco.MjModel.from_xml_path(str(unpacked_dir / "so101_scene.xml"))
+    comp_d = mujoco.MjData(comp_m)
+    for step in range(100):
+        ctrl = np.array([0.4 * np.sin(0.1 * step + k) for k in range(4)], dtype=np.float64)
+        orig_d.ctrl[:] = ctrl
+        comp_d.ctrl[:] = ctrl
+        mujoco.mj_step(orig_m, orig_d)
+        mujoco.mj_step(comp_m, comp_d)
+    assert float(np.max(np.abs(orig_d.qpos - comp_d.qpos))) < 1e-9
+    assert float(np.max(np.abs(orig_d.qvel - comp_d.qvel))) < 1e-9
+
+    # Verify scene_cache.js parseVisualMeshpack parses both so101 and microduck visual.bin cleanly
+    pkg_dir = Path(__file__).resolve().parent.parent / "direct_evolution_together"
+    scene_cache_js = str(pkg_dir / "frontend" / "scene_cache.js")
+    so_vis_path = str(out_dir / "visual.bin")
+    md_vis_path = str(pkg_dir / "assets" / "scenes" / "microduck" / "visual.bin")
+    parse_check = f"""
+const fs = require("fs");
+const sc = require({json.dumps(scene_cache_js)});
+const b1 = fs.readFileSync({json.dumps(so_vis_path)});
+const b2 = fs.readFileSync({json.dumps(md_vis_path)});
+const p1 = sc.parseVisualMeshpack(b1.buffer.slice(b1.byteOffset, b1.byteOffset + b1.byteLength), {{}});
+const p2 = sc.parseVisualMeshpack(b2.buffer.slice(b2.byteOffset, b2.byteOffset + b2.byteLength), {json.dumps(manifest)});
+console.log(JSON.stringify({{
+  soBodies: p1.bodyMeshes.length,
+  mdBodies: p2.bodyMeshes.length,
+  mdTris: p2.bodyMeshes.reduce((a, b) => a + b.numTris, 0),
+}}));
+"""
+    parsed = json.loads(subprocess.check_output(["node", "-e", parse_check], text=True))
+    assert parsed["soBodies"] == 4
+    assert parsed["mdBodies"] == 15
+    assert parsed["mdTris"] == manifest["visualStats"]["totalTris"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_populora_checkpoint_roundtrip_and_multi_round_crowd_evolution(client, settings):
+    import time
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    from django.test import Client
+
+    # 1. Base model API + client-lock enforcement on server eval/rollout/video for microduck
+    bm_resp = client.get("/api/sim/base-model/?task=microduck")
+    assert bm_resp.status_code == 200
+    base_model = bm_resp.json()
+    assert base_model["ok"] is True
+    assert base_model["arch"] == "gru_mlp"
+    assert base_model["obsDim"] == 55 and base_model["actionDim"] == 14
+    assert len(base_model["baseHash"]) == 16
+
+    room_resp = client.post(
+        "/api/rooms/",
+        data=json.dumps({"name": "Duck Crowd Lab", "task": "microduck", "population_size": 8}),
+        content_type="application/json",
+    )
+    assert room_resp.status_code == 200
+    rdata = room_resp.json()
+    slug = rdata["slug"]
+    assert rdata["task"] == "microduck"
+    assert rdata["population_size"] == 8
+
+    # Client-locked enforcement: server refuses heavy Microduck physics & video
+    sample_resp = client.get(rdata["url"])
+    assert sample_resp.status_code == 200
+    assert 'id="auto-evolve-btn"' in sample_resp.content.decode("utf-8")
+
+    # Export .pt & .zip from initial room state and validate/reseed in another room
+    from direct_evolution_together.models import RoomEvolutionState
+
+    init_state = json.loads(RoomEvolutionState.objects.get(room=slug).state_json)
+    g0 = init_state["goals"][0]["genomes"][0]
+    assert g0["kind"] == "populora" and g0["baseHash"] == base_model["baseHash"]
+
+    for bad_ep, body in (
+        ("/api/sim/eval-batch/", {"task": "microduck", "genomes": [g0]}),
+        ("/api/sim/rollout/", {"task": "microduck", "genome": g0, "seed": 0}),
+        ("/api/render/video/", {"task": "microduck", "genome": g0, "seed": 0}),
+    ):
+        r_lock = client.post(bad_ep, data=json.dumps(body), content_type="application/json")
+        assert r_lock.status_code == 400
+
+    pt_exp = client.post(
+        "/export/weights/",
+        data=json.dumps({"goal": "Duck Crowd Lab", "task": "microduck", "generation": 0, "index": 0, "genome": g0}),
+        content_type="application/json",
+    )
+    assert pt_exp.status_code == 200
+
+    zip_exp = client.post(
+        "/export/bundle/",
+        data=json.dumps({"goal": "Duck Crowd Lab", "task": "microduck", "generation": 0, "index": 0, "genome": g0}),
+        content_type="application/json",
+    )
+    assert zip_exp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(zip_exp.content)) as zf:
+        znames = zf.namelist()
+        assert any(n.endswith("/weights.pt") for n in znames)
+        run_py = [n for n in znames if n.endswith("/run.py")][0]
+        compile(zf.read(run_py).decode("utf-8"), "run.py", "exec")
+
+    val_resp = client.post(
+        "/api/weights/validate/",
+        {
+            "task": "microduck",
+            "weights": [
+                SimpleUploadedFile("duck0.pt", pt_exp.content),
+                SimpleUploadedFile("duck0_bundle.zip", zip_exp.content),
+            ],
+        },
+    )
+    assert val_resp.status_code == 200
+    v_strains = val_resp.json()["strains"]
+    assert len(v_strains) == 2
+    assert v_strains[0]["genome"]["hash"] == v_strains[1]["genome"]["hash"]
+    assert v_strains[0]["genome"]["baseHash"] == g0["baseHash"]
+
+    # Verify exported merged state_dict loads cleanly with strict=True into GRUMLPPolicy
+    import copy
+    from direct_evolution_together.environments.microduck import MICRODUCK_POLICY_SPEC
+    from direct_evolution_together.populora_engine import get_or_create_base_model, save_populora_checkpoint_bytes
+
+    strict_policy = copy.deepcopy(get_or_create_base_model(MICRODUCK_POLICY_SPEC)[0])
+    orig_sd = torch.load(io.BytesIO(pt_exp.content), map_location="cpu", weights_only=True)
+    strict_policy.load_state_dict(orig_sd, strict=True)
+    re_saved_sd = torch.load(
+        io.BytesIO(save_populora_checkpoint_bytes(v_strains[0]["genome"], MICRODUCK_POLICY_SPEC)),
+        map_location="cpu",
+        weights_only=True,
+    )
+    for k in orig_sd:
+        assert float((orig_sd[k].float() - re_saved_sd[k].float()).abs().max()) < 5e-3
+
+    reseed_room = client.post(
+        "/api/rooms/",
+        {
+            "name": "Duck Reseeded",
+            "task": "microduck",
+            "population_size": "8",
+            "weights": [SimpleUploadedFile("duck0.pt", pt_exp.content)],
+        },
+    )
+    assert reseed_room.status_code == 200 and reseed_room.json()["seeded"] == 1
+
+    # 2. Live WebSocket + Crowd Simulation Phase + Multi-Round PopuLoRA Evolution (pop=8)
+    with _ws_server(seed=True, pop_size=8, max_votes=4) as port:
+        settings.WS_HOST = "127.0.0.1"
+        settings.WS_PORT = port
+        seed_from_db(default_pop_size=8, default_max_votes=4)
+        mummy_ws.set_round_config(2, 80)
+
+        peer_a, peer_b = Client(), Client()
+
+        def _submit_crowd_batch(http_peer, goal_name: str, gen: int, genomes: list[dict], offset: float = 0.0):
+            results = []
+            for idx, cand in enumerate(genomes):
+                ret = 12.0 + 3.5 * idx + offset
+                dist = 0.15 + 0.08 * idx
+                traj = [[round(0.05 * (idx + 1) + 0.01 * t + 0.002 * d, 4) for d in range(16)] for t in range(12)]
+                pose0 = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0] + [float(idx) * 0.02, 0.0, 0.14, 1.0, 0.0, 0.0, 0.0] + [0.0] * (14 * 7)
+                results.append({
+                    "hash": cand["hash"],
+                    "summary": {
+                        "return": ret,
+                        "primaryValue": ret,
+                        "meanDistance": dist,
+                        "minDistance": dist * 0.9,
+                        "meanSteps": 220.0 + idx * 10.0,
+                        "primaryDisplay": f"{ret:+.1f} ret ({dist:+.2f}m)",
+                        "badgeText": f"{dist:+.2f}m",
+                        "tier": "mid",
+                    },
+                    "trajSample": traj,
+                    "replay": {"bodyPoses": [pose0, pose0], "poseStride": 2, "vx_trace": [0.2, 0.25]},
+                })
+            resp = http_peer.post(
+                f"/api/rooms/{slug}/crowd/results/",
+                data=json.dumps({"goal": goal_name, "generation": gen, "results": results}),
+                content_type="application/json",
+            )
+            assert resp.status_code == 200
+            return resp.json()
+
+        # Phase A: 2 peers connected -> adaptive quorum = 2; Phase 1 blocks blind votes, unlocks Phase 2 at 8/8!
+        with (
+            connect(f"ws://127.0.0.1:{port}/ws/chat/{slug}/?username=alice&cid=alice0000001") as ws_a,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/{slug}/?username=bob&cid=bob000000002") as ws_b,
+        ):
+            _recv_until(ws_a, "identity")
+            evo0 = _recv_until(ws_a, "evolution_state")
+            _recv_until(ws_b, "evolution_state")
+            goal0 = evo0["goals"][0]
+            gname = goal0["name"]
+            assert goal0["generation"] == 0
+            assert goal0["phase"] == "simulating"
+            assert goal0["simPhaseEnabled"] is True
+            assert goal0["autoEvolve"] is False
+            assert len(goal0["genomes"]) == 8
+
+            # Blind vote during Phase 1 ("simulating") must be rejected with simulations-running throttle
+            ws_a.send(json.dumps({"type": "cast_vote", "goal": gname, "generation": 0, "index": 0, "vote": 1}))
+            throttled = _recv_until(ws_a, "vote_throttled")
+            assert "Simulations still running" in throttled["message"]
+
+            # Peer A submits all 8 -> with 2 peers in room, quorum=2 so verifiedCount == 0 (still simulating)
+            sub_a = _submit_crowd_batch(peer_a, gname, 0, goal0["genomes"], offset=0.0)
+            assert sub_a["quorum"] == 2
+            assert sub_a["verifiedCount"] == 0
+
+            # Peer B corroborates all 8 -> quorum reached (8/8 verified) -> phase transitions to "voting"!
+            sub_b = _submit_crowd_batch(peer_b, gname, 0, goal0["genomes"], offset=0.02)
+            assert sub_b["quorum"] == 2
+            assert sub_b["verifiedCount"] == 8
+
+            unlocked = None
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                msg = _decode_ws_message(ws_a.recv(timeout=2.0))
+                if msg.get("type") == "votes_updated" and msg.get("goal") == gname and msg.get("phase") == "voting":
+                    unlocked = msg
+                    break
+            assert unlocked is not None
+            assert unlocked["simCompleted"] == 8 and unlocked["simTotal"] == 8
+
+            # Crowd evals endpoint returns peer 3D replay poses cleanly
+            evals_g0 = peer_a.get(f"/api/rooms/{slug}/crowd/evals/?goal={gname}&generation=0").json()
+            assert len(evals_g0["items"]) == 8
+            assert "replay" in evals_g0["items"][0] and len(evals_g0["items"][0]["replay"]["bodyPoses"]) == 2
+
+            # Cast 4 votes (half of pop=8) in Phase 2 -> triggers PopuLoRA evolution -> Gen 1!
+            assert goal0["minVotes"] == 4
+            ws_a.send(json.dumps({"type": "cast_vote", "goal": gname, "generation": 0, "index": 7, "vote": 1}))
+            ws_b.send(json.dumps({"type": "cast_vote", "goal": gname, "generation": 0, "index": 6, "vote": 1}))
+            ws_a.send(json.dumps({"type": "cast_vote", "goal": gname, "generation": 0, "index": 5, "vote": 1}))
+            ws_b.send(json.dumps({"type": "cast_vote", "goal": gname, "generation": 0, "index": 4, "vote": 1}))
+            gen1 = _recv_until(ws_a, "goal_updated", timeout=8.0)["goal"]
+            assert gen1["generation"] == 1
+            assert gen1["phase"] == "simulating"
+            assert gen1["simCompleted"] == 0
+            assert len(gen1["genomes"]) == 8
+            assert all(g["kind"] == "populora" and g["baseHash"] == base_model["baseHash"] for g in gen1["genomes"])
+            # Slot 0 champion backup preserves top candidate's weights/hash or evolves diverse LoRA deltas
+            assert len({g["hash"] for g in gen1["genomes"]}) >= 6
+
+        # Phase B: Solo client (only alice connected -> adaptive quorum = 1) + Auto-Evolve across 3 full rounds!
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/{slug}/?username=alice&cid=alice0000001") as ws_solo:
+            _recv_until(ws_solo, "identity")
+            cur_goal = _recv_until(ws_solo, "evolution_state")["goals"][0]
+            assert cur_goal["generation"] == 1
+
+            # Enable hands-free Auto-Evolve over WebSocket
+            ws_solo.send(json.dumps({"type": "set_auto_evolve", "goal": gname, "enabled": True}))
+            ae_upd = _recv_until(ws_solo, "votes_updated")
+            assert ae_upd["autoEvolve"] is True
+
+            # Simulate 3 consecutive generations (Gen 1 -> Gen 2 -> Gen 3 -> Gen 4) solo without casting manual votes!
+            for expected_next_gen in (2, 3, 4):
+                cur_gen = expected_next_gen - 1
+                sub_solo = _submit_crowd_batch(peer_a, gname, cur_gen, cur_goal["genomes"])
+                assert sub_solo["quorum"] == 1
+                assert sub_solo["verifiedCount"] == 8
+
+                next_goal = None
+                deadline = time.monotonic() + 8.0
+                while time.monotonic() < deadline:
+                    msg = _decode_ws_message(ws_solo.recv(timeout=3.0))
+                    if msg.get("type") == "goal_updated" and msg.get("goal", {}).get("name") == gname:
+                        next_goal = msg["goal"]
+                        break
+                assert next_goal is not None, f"Auto-Evolve did not advance to Gen {expected_next_gen}"
+                assert next_goal["generation"] == expected_next_gen
+                assert next_goal["autoEvolve"] is True
+                assert next_goal["phase"] == "simulating"
+                assert len(next_goal["genomes"]) == 8
+                cur_goal = next_goal
+
+
+def test_microduck_wasm_worker_and_populora_network_viz_in_node(tmp_path):
+    from pathlib import Path
+    from direct_evolution_together.environments import get_task_specs_payload
+    from direct_evolution_together.environments.microduck import MICRODUCK_POLICY_SPEC
+    from direct_evolution_together.populora_engine import (
+        create_populora_population,
+        get_or_create_base_model,
+    )
+
+    pkg_dir = Path(__file__).resolve().parent.parent / "direct_evolution_together"
+    _, base_hash, base_payload = get_or_create_base_model(MICRODUCK_POLICY_SPEC)
+    genomes = create_populora_population("microduck", MICRODUCK_POLICY_SPEC, pop_size=8)
+    assert len(genomes) == 8 and all(g["baseHash"] == base_hash for g in genomes)
+
+    # 1. Verify DetNetworkViz builds low-rank PopuLoRA adapter graph + delta-W matrices
+    nv_js = str(pkg_dir / "frontend" / "network_viz.js")
+    specs = get_task_specs_payload()
+    nv_check = f"""
+const nv = require({json.dumps(nv_js)});
+const model = nv.buildGraphModel({json.dumps(genomes[0])}, {json.dumps(specs["microduck"])});
+console.log(JSON.stringify({{
+  kind: model.kind,
+  nodeCount: model.nodes.length,
+  edgeCount: model.edges.length,
+  matrixCount: model.matrices.length,
+  firstMat: [model.matrices[0].dIn, model.matrices[0].dOut],
+}}));
+"""
+    nv_out = json.loads(subprocess.check_output(["node", "-e", nv_check], text=True))
+    assert nv_out["kind"] == "populora"
+    assert nv_out["matrixCount"] == 4
+    assert nv_out["firstMat"] == [16, 16]
+    assert nv_out["edgeCount"] > 0
+
+    # 2. Verify frontend/sim_worker.js executes all 8 PopuLoRA Microduck genomes in @mujoco/mujoco WASM
+    worker_src = (pkg_dir / "frontend" / "sim_worker.js").read_text(encoding="utf-8")
+    phys_bin = str(pkg_dir / "assets" / "scenes" / "microduck" / "physics.bin")
+    wasm_js = (pkg_dir / "assets" / "vendor" / "mujoco" / "mujoco.js").as_uri()
+    data_json = tmp_path / "worker_input.json"
+    data_json.write_text(
+        json.dumps({"baseModel": base_payload, "specs": specs, "genomes": genomes}),
+        encoding="utf-8",
+    )
+    harness_mjs = tmp_path / "worker_harness.mjs"
+    harness_mjs.write_text(
+        f"""
+import fs from "fs";
+const physBuf = fs.readFileSync({json.dumps(phys_bin)});
+const inp = JSON.parse(fs.readFileSync({json.dumps(str(data_json))}, "utf8"));
+const responses = new Map();
+let listener = null;
+globalThis.self = {{
+  location: {{ origin: "http://localhost:8000" }},
+  addEventListener: (ev, fn) => {{ if (ev === "message") listener = fn; }},
+  postMessage: (msg) => {{
+    const r = responses.get(msg.reqId);
+    if (r) r(msg);
+  }},
+}};
+{worker_src}
+function send(reqId, payload) {{
+  return new Promise((resolve) => {{
+    responses.set(reqId, resolve);
+    listener({{ data: {{ reqId, ...payload }} }});
+  }});
+}}
+const initRes = await send(1, {{
+  type: "init",
+  taskSpecs: inp.specs,
+  mujocoWasmUrl: {json.dumps(wasm_js)},
+  warmMujoco: true,
+}});
+if (!initRes.ok) throw new Error(initRes.error);
+const batchRes = await send(2, {{
+  type: "evalBatch",
+  taskId: "microduck",
+  genomes: inp.genomes,
+  seeds: [0, 1],
+  baseModel: inp.baseModel,
+  physicsBuffer: physBuf.buffer.slice(physBuf.byteOffset, physBuf.byteOffset + physBuf.byteLength),
+}});
+if (!batchRes.ok) throw new Error(batchRes.error);
+const roRes = await send(3, {{
+  type: "rollout",
+  taskId: "microduck",
+  genome: inp.genomes[0],
+  seed: 0,
+  maxSteps: 60,
+  nudge: "fwd",
+  includeActivations: true,
+  includeGeoms: true,
+}});
+if (!roRes.ok) throw new Error(roRes.error);
+console.log(JSON.stringify({{
+  engine: batchRes.engine,
+  count: batchRes.items.length,
+  hasTraj: batchRes.items.every((x) => Array.isArray(x.trajSample) && x.trajSample.length > 0),
+  hasPoses: batchRes.items.every((x) => Array.isArray(x.primaryRollout.bodyPoses) && x.primaryRollout.bodyPoses[0].length === 15 * 7),
+  roFrames: roRes.rollout.bodyPoses.length,
+  roActLen: roRes.rollout.stepActivations.length,
+  roActLayers: roRes.rollout.stepActivations[0].length,
+}}));
+""",
+        encoding="utf-8",
+    )
+    wasm_out = json.loads(
+        subprocess.check_output(["node", str(harness_mjs)], text=True)
+    )
+    assert wasm_out["engine"] == "client-wasm"
+    assert wasm_out["count"] == 8
+    assert wasm_out["hasTraj"] is True
+    assert wasm_out["hasPoses"] is True
+    assert wasm_out["roFrames"] >= 2
+    assert wasm_out["roActLen"] >= 1
+    assert wasm_out["roActLayers"] == 5
+
+
+@pytest.mark.django_db
+def test_unitree_go2_scene_assets_populora_and_wasm_worker(client, tmp_path):
+    import math
+    from pathlib import Path
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    from direct_evolution_together.environments import (
+        UNITREE_GO2_POLICY_SPEC,
+        create_task_population,
+        get_scene_manifest,
+        get_task_specs_payload,
+        unpack_vfs_entries,
+    )
+    from direct_evolution_together.populora_engine import (
+        evolve_populora_population,
+        get_or_create_base_model,
+        reset_populora_goal_runtime,
+    )
+
+    pkg_dir = Path(__file__).resolve().parent.parent / "direct_evolution_together"
+
+    # 1. Verify precompiled Unitree Go2 assets (27.7MB raw OBJs -> <20KB physics.bin + 13-body visual.bin)
+    m_resp = client.get("/api/sim/scene/unitree_go2/")
+    assert m_resp.status_code == 200
+    manifest = m_resp.json()
+    assert manifest["sceneId"] == "unitree_go2"
+    assert manifest["physicsBytes"] < 20_000
+    assert manifest["collisionMeshes"] == []
+    assert manifest["visualStats"]["bodyMeshCount"] == 13
+
+    phys_resp = client.get(f"/assets/{manifest['physicsAsset']}", HTTP_ACCEPT_ENCODING="gzip")
+    vis_resp = client.get(f"/assets/{manifest['visualAsset']}", HTTP_ACCEPT_ENCODING="gzip")
+    assert phys_resp.status_code == 200 and vis_resp.status_code == 200
+
+    raw_phys = (pkg_dir / "assets" / "scenes" / "unitree_go2" / "physics.bin").read_bytes()
+    vfs = unpack_vfs_entries(raw_phys)
+    assert set(vfs.keys()) == {"go2_walk.xml", "scene_walk.xml"}
+    assert not any(k.endswith(".obj") for k in vfs)
+
+    # 2. Verify Unitree Go2 PopuLoRA base model, .pt export/upload roundtrip, & client_locked policy
+    bm_resp = client.get("/api/sim/base-model/?task=unitree_go2&seed=1")
+    assert bm_resp.status_code == 200
+    bm_json = bm_resp.json()
+    assert bm_json["obsDim"] == 49
+    assert bm_json["actionDim"] == 12
+
+    torch.manual_seed(7)
+    genomes = create_task_population("unitree_go2", 8)
+    assert len(genomes) == 8
+    assert all(g["kind"] == "populora" and g["task"] == "unitree_go2" for g in genomes)
+
+    exp_resp = client.post(
+        "/export/weights/",
+        data=json.dumps({
+            "genome": genomes[0],
+            "goal": "Unitree Go2",
+            "generation": 0,
+            "index": 0,
+            "task": "unitree_go2",
+        }),
+        content_type="application/json",
+    )
+    assert exp_resp.status_code == 200
+    val_resp = client.post(
+        "/api/weights/validate/",
+        data={
+            "task": "unitree_go2",
+            "files": [SimpleUploadedFile("unitree_go2_gen0_0.pt", exp_resp.content)],
+        },
+    )
+    assert val_resp.status_code == 200
+    v_data = val_resp.json()
+    assert v_data["ok"] is True
+    assert v_data["strains"][0]["genome"]["task"] == "unitree_go2"
+
+    # Server refuses server-side rollout & video for client_locked unitree_go2
+    ro_deny = client.post(
+        "/api/sim/rollout/",
+        data=json.dumps({"task": "unitree_go2", "genome": genomes[0], "seed": 0}),
+        content_type="application/json",
+    )
+    assert ro_deny.status_code == 400 and ro_deny.json()["ok"] is False
+
+    # 3. Verify frontend/sim_worker.js evaluates all 8 Go2 PopuLoRA genomes in @mujoco/mujoco WASM
+    _, _, base_payload = get_or_create_base_model(UNITREE_GO2_POLICY_SPEC, base_seed=1)
+    specs = get_task_specs_payload()
+    worker_src = (pkg_dir / "frontend" / "sim_worker.js").read_text(encoding="utf-8")
+    phys_bin = str(pkg_dir / "assets" / "scenes" / "unitree_go2" / "physics.bin")
+    wasm_js = (pkg_dir / "assets" / "vendor" / "mujoco" / "mujoco.js").as_uri()
+    data_json = tmp_path / "go2_worker_input.json"
+    data_json.write_text(
+        json.dumps({"baseModel": base_payload, "specs": specs, "genomes": genomes}),
+        encoding="utf-8",
+    )
+    harness_mjs = tmp_path / "go2_worker_harness.mjs"
+    harness_mjs.write_text(
+        f"""
+import fs from "fs";
+const physBuf = fs.readFileSync({json.dumps(phys_bin)});
+const inp = JSON.parse(fs.readFileSync({json.dumps(str(data_json))}, "utf8"));
+const responses = new Map();
+let listener = null;
+globalThis.self = {{
+  location: {{ origin: "http://localhost:8000" }},
+  addEventListener: (ev, fn) => {{ if (ev === "message") listener = fn; }},
+  postMessage: (msg) => {{
+    const r = responses.get(msg.reqId);
+    if (r) r(msg);
+  }},
+}};
+{worker_src}
+function send(reqId, payload) {{
+  return new Promise((resolve) => {{
+    responses.set(reqId, resolve);
+    listener({{ data: {{ reqId, ...payload }} }});
+  }});
+}}
+const initRes = await send(1, {{
+  type: "init",
+  taskSpecs: inp.specs,
+  mujocoWasmUrl: {json.dumps(wasm_js)},
+  warmMujoco: true,
+  warmTaskId: "unitree_go2",
+  physicsBuffer: physBuf.buffer.slice(physBuf.byteOffset, physBuf.byteOffset + physBuf.byteLength),
+}});
+if (!initRes.ok) throw new Error(initRes.error);
+const batchRes = await send(2, {{
+  type: "evalBatch",
+  taskId: "unitree_go2",
+  genomes: inp.genomes,
+  seeds: [0, 1],
+  baseModel: inp.baseModel,
+  physicsBuffer: physBuf.buffer.slice(physBuf.byteOffset, physBuf.byteOffset + physBuf.byteLength),
+}});
+if (!batchRes.ok) throw new Error(batchRes.error);
+const roRes = await send(3, {{
+  type: "rollout",
+  taskId: "unitree_go2",
+  genome: inp.genomes[0],
+  seed: 0,
+  maxSteps: 60,
+  nudge: "fwd",
+  includeActivations: true,
+}});
+if (!roRes.ok) throw new Error(roRes.error);
+console.log(JSON.stringify({{
+  engine: batchRes.engine,
+  count: batchRes.items.length,
+  summaries: batchRes.items.map((x) => x.summary),
+  trajs: batchRes.items.map((x) => x.trajSample),
+  poseRowLen: batchRes.items[0].primaryRollout.bodyPoses[0].length,
+  roFrames: roRes.rollout.bodyPoses.length,
+  roStepTraceLen: roRes.rollout.stepTrace[0].length,
+  roActLayers: roRes.rollout.stepActivations[0].length,
+}}));
+""",
+        encoding="utf-8",
+    )
+    wasm_out = json.loads(subprocess.check_output(["node", str(harness_mjs)], text=True))
+    assert wasm_out["engine"] == "client-wasm"
+    assert wasm_out["count"] == 8
+    assert wasm_out["poseRowLen"] == 13 * 7
+    assert wasm_out["roFrames"] >= 2
+    assert wasm_out["roStepTraceLen"] == 5
+    assert wasm_out["roActLayers"] == 5
+    assert all(len(t) == 16 and len(t[0]) == 22 for t in wasm_out["trajs"])
+    assert all(
+        isinstance(s["return"], (int, float)) and math.isfinite(s["return"]) and s["minSteps"] > 0
+        for s in wasm_out["summaries"]
+    )
+
+    # 4. Verify PopuLoRA evolution step accepts the 22-D WASM Go2 trajectories cleanly
+    reset_populora_goal_runtime("lobby", "Unitree Go2")
+    eval_map = {
+        genomes[i]["hash"]: {
+            "summary": wasm_out["summaries"][i],
+            "trajSample": wasm_out["trajs"][i],
+        }
+        for i in range(8)
+    }
+    next_genomes, top_score = evolve_populora_population(
+        room="lobby",
+        goal="Unitree Go2",
+        task_id="unitree_go2",
+        generation=0,
+        policy_spec=UNITREE_GO2_POLICY_SPEC,
+        genome_dicts=genomes,
+        scores=[0] * 8,
+        up_counts=[0] * 8,
+        eval_by_hash=eval_map,
+        pop_size=8,
+        elite_frac=0.25,
+    )
+    assert len(next_genomes) == 8
+    assert all(g["task"] == "unitree_go2" for g in next_genomes)
+    assert isinstance(top_score, int) and top_score > -200
+
+
+@pytest.mark.django_db
+def test_so101_arm_scene_assets_populora_and_wasm_worker(client, tmp_path):
+    import math
+    from pathlib import Path
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    from direct_evolution_together.environments import (
+        SO101_POLICY_SPEC,
+        create_task_population,
+        get_task_specs_payload,
+        unpack_vfs_entries,
+    )
+    from direct_evolution_together.populora_engine import (
+        evolve_populora_population,
+        get_or_create_base_model,
+        reset_populora_goal_runtime,
+    )
+    from direct_evolution_together.ws_bridge import _ensure_lobby_default_goals
+
+    pkg_dir = Path(__file__).resolve().parent.parent / "direct_evolution_together"
+
+    # 1. Verify _ensure_lobby_default_goals ALWAYS keeps Microduck as default tab #0
+    partial_lobby = json.dumps({
+        "defaultParams": {"maxVotesPerUser": 20, "minVotes": 3, "mutSigma": 0.3, "eliteFrac": 0.25, "crossoverRate": 0.75},
+        "goals": [
+            {"name": "Unitree Go2", "task": "unitree_go2", "generation": 1, "genomes": create_task_population("unitree_go2", 8), "lineage": [], "params": {"maxVotesPerUser": 20, "minVotes": 3, "mutSigma": 0.3, "eliteFrac": 0.25, "crossoverRate": 0.75}},
+            {"name": "Microduck", "task": "microduck", "generation": 0, "genomes": create_task_population("microduck", 8), "lineage": [], "params": {"maxVotesPerUser": 20, "minVotes": 3, "mutSigma": 0.3, "eliteFrac": 0.25, "crossoverRate": 0.75}},
+        ],
+    })
+    upgraded_json, changed = _ensure_lobby_default_goals(partial_lobby, default_pop_size=8, default_max_votes=20)
+    assert changed is True
+    upgraded_names = [g["name"] for g in json.loads(upgraded_json)["goals"]]
+    assert upgraded_names[:3] == ["Microduck", "Unitree Go2", "SO-101 Arm"]
+
+    # 2. Verify precompiled SO-101 assets (17.9MB raw STLs -> <15KB physics.bin + 8-body visual.bin with cube)
+    m_resp = client.get("/api/sim/scene/so101/")
+    assert m_resp.status_code == 200
+    manifest = m_resp.json()
+    assert manifest["sceneId"] == "so101"
+    assert manifest["physicsBytes"] < 15_000
+    assert manifest["collisionMeshes"] == []
+    assert manifest["visualStats"]["bodyMeshCount"] == 8
+    assert "cube" in manifest["bodyNames"]
+
+    raw_phys = (pkg_dir / "assets" / "scenes" / "so101" / "physics.bin").read_bytes()
+    vfs = unpack_vfs_entries(raw_phys)
+    assert set(vfs.keys()) == {"scene_pick.xml", "so101_arm.xml"}
+    assert not any(k.endswith(".stl") for k in vfs)
+
+    # 3. Verify SO-101 PopuLoRA base model & .pt export/upload roundtrip
+    bm_resp = client.get("/api/sim/base-model/?task=so101&seed=1")
+    assert bm_resp.status_code == 200
+    bm_json = bm_resp.json()
+    assert bm_json["obsDim"] == 33
+    assert bm_json["actionDim"] == 6
+
+    genomes = create_task_population("so101", 8)
+    assert len(genomes) == 8
+    assert all(g["kind"] == "populora" and g["task"] == "so101" for g in genomes)
+
+    exp_resp = client.post(
+        "/export/weights/",
+        data=json.dumps({
+            "genome": genomes[0],
+            "goal": "SO-101 Arm",
+            "generation": 0,
+            "index": 0,
+            "task": "so101",
+        }),
+        content_type="application/json",
+    )
+    assert exp_resp.status_code == 200
+    val_resp = client.post(
+        "/api/weights/validate/",
+        data={
+            "task": "so101",
+            "files": [SimpleUploadedFile("so101_gen0_0.pt", exp_resp.content)],
+        },
+    )
+    assert val_resp.status_code == 200
+    assert val_resp.json()["strains"][0]["genome"]["task"] == "so101"
+
+    # 4. Verify frontend/sim_worker.js evaluates all 8 SO-101 PopuLoRA genomes in @mujoco/mujoco WASM
+    _, _, base_payload = get_or_create_base_model(SO101_POLICY_SPEC, base_seed=1)
+    specs = get_task_specs_payload()
+    worker_src = (pkg_dir / "frontend" / "sim_worker.js").read_text(encoding="utf-8")
+    phys_bin = str(pkg_dir / "assets" / "scenes" / "so101" / "physics.bin")
+    wasm_js = (pkg_dir / "assets" / "vendor" / "mujoco" / "mujoco.js").as_uri()
+    data_json = tmp_path / "so101_worker_input.json"
+    data_json.write_text(
+        json.dumps({"baseModel": base_payload, "specs": specs, "genomes": genomes}),
+        encoding="utf-8",
+    )
+    harness_mjs = tmp_path / "so101_worker_harness.mjs"
+    harness_mjs.write_text(
+        f"""
+import fs from "fs";
+const physBuf = fs.readFileSync({json.dumps(phys_bin)});
+const inp = JSON.parse(fs.readFileSync({json.dumps(str(data_json))}, "utf8"));
+const responses = new Map();
+let listener = null;
+globalThis.self = {{
+  location: {{ origin: "http://localhost:8000" }},
+  addEventListener: (ev, fn) => {{ if (ev === "message") listener = fn; }},
+  postMessage: (msg) => {{
+    const r = responses.get(msg.reqId);
+    if (r) r(msg);
+  }},
+}};
+{worker_src}
+function send(reqId, payload) {{
+  return new Promise((resolve) => {{
+    responses.set(reqId, resolve);
+    listener({{ data: {{ reqId, ...payload }} }});
+  }});
+}}
+const initRes = await send(1, {{
+  type: "init",
+  taskSpecs: inp.specs,
+  mujocoWasmUrl: {json.dumps(wasm_js)},
+  warmMujoco: true,
+  warmTaskId: "so101",
+  physicsBuffer: physBuf.buffer.slice(physBuf.byteOffset, physBuf.byteOffset + physBuf.byteLength),
+}});
+if (!initRes.ok) throw new Error(initRes.error);
+const batchRes = await send(2, {{
+  type: "evalBatch",
+  taskId: "so101",
+  genomes: inp.genomes,
+  seeds: [0, 1],
+  baseModel: inp.baseModel,
+  physicsBuffer: physBuf.buffer.slice(physBuf.byteOffset, physBuf.byteOffset + physBuf.byteLength),
+}});
+if (!batchRes.ok) throw new Error(batchRes.error);
+const roRes = await send(3, {{
+  type: "rollout",
+  taskId: "so101",
+  genome: inp.genomes[0],
+  seed: 0,
+  maxSteps: 60,
+  nudge: "left",
+  includeActivations: true,
+}});
+if (!roRes.ok) throw new Error(roRes.error);
+console.log(JSON.stringify({{
+  engine: batchRes.engine,
+  count: batchRes.items.length,
+  summaries: batchRes.items.map((x) => x.summary),
+  trajs: batchRes.items.map((x) => x.trajSample),
+  poseRowLen: batchRes.items[0].primaryRollout.bodyPoses[0].length,
+  roFrames: roRes.rollout.bodyPoses.length,
+  roStepTraceLen: roRes.rollout.stepTrace[0].length,
+  roActLayers: roRes.rollout.stepActivations[0].length,
+}}));
+""",
+        encoding="utf-8",
+    )
+    wasm_out = json.loads(subprocess.check_output(["node", str(harness_mjs)], text=True))
+    assert wasm_out["engine"] == "client-wasm"
+    assert wasm_out["count"] == 8
+    assert wasm_out["poseRowLen"] == 8 * 7
+    assert wasm_out["roFrames"] >= 2
+    assert wasm_out["roStepTraceLen"] == 5
+    assert wasm_out["roActLayers"] == 5
+    assert all(len(t) == 16 and len(t[0]) == 15 for t in wasm_out["trajs"])
+    assert all(
+        isinstance(s["return"], (int, float)) and math.isfinite(s["return"])
+        for s in wasm_out["summaries"]
+    )
+
+    # 5. Verify PopuLoRA evolution step accepts the 15-D WASM SO-101 trajectories cleanly
+    reset_populora_goal_runtime("lobby", "SO-101 Arm")
+    eval_map = {
+        genomes[i]["hash"]: {
+            "summary": wasm_out["summaries"][i],
+            "trajSample": wasm_out["trajs"][i],
+        }
+        for i in range(8)
+    }
+    next_genomes, _ = evolve_populora_population(
+        room="lobby",
+        goal="SO-101 Arm",
+        task_id="so101",
+        generation=0,
+        policy_spec=SO101_POLICY_SPEC,
+        genome_dicts=genomes,
+        scores=[0] * 8,
+        up_counts=[0] * 8,
+        eval_by_hash=eval_map,
+        pop_size=8,
+        elite_frac=0.25,
+    )
+    assert len(next_genomes) == 8
+    assert all(g["task"] == "so101" for g in next_genomes)
+
+
 
 
 

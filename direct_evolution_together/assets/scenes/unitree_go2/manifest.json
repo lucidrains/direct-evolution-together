@@ -1,0 +1,44 @@
+{
+  "sceneId": "unitree_go2",
+  "entryXml": "scene_walk.xml",
+  "physicsAsset": "scenes/unitree_go2/physics.bin",
+  "physicsSha256": "2d2bae2d8b799fa06cfa3bfe0b52af36755cf720a593b80133d0caa3b2ef8ea2",
+  "physicsBytes": 9373,
+  "visualAsset": "scenes/unitree_go2/visual.bin",
+  "visualSha256": "e6dfded344db39fbd3a3b5da90e363d42e33d7c805431f1c5e05c6847bb557aa",
+  "visualBytes": 404120,
+  "nbody": 14,
+  "nq": 19,
+  "nv": 18,
+  "nu": 12,
+  "collisionMeshes": [],
+  "bodyNames": [
+    "world",
+    "base",
+    "FL_hip",
+    "FL_thigh",
+    "FL_calf",
+    "FR_hip",
+    "FR_thigh",
+    "FR_calf",
+    "RL_hip",
+    "RL_thigh",
+    "RL_calf",
+    "RR_hip",
+    "RR_thigh",
+    "RR_calf"
+  ],
+  "visualStats": {
+    "bodyMeshCount": 13,
+    "totalVerts": 12209,
+    "totalTris": 28658
+  },
+  "cameraDefaults": {
+    "trackBodyId": 1,
+    "targetHeight": 0.19,
+    "distance": 1.18,
+    "yaw": 0.56,
+    "pitch": 0.24,
+    "gridScale": 0.5
+  }
+}

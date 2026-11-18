@@ -75,7 +75,9 @@
     const memo = genomeFingerprints.get(genome);
     if (memo) return memo;
     let fp;
-    if (Array.isArray(genome.nodes)) {
+    if (genome.kind === "populora" && typeof genome.hash === "string") {
+      fp = genome.hash.slice(0, 16);
+    } else if (Array.isArray(genome.nodes)) {
       fp = "neat:" + JSON.stringify([genome.nodes.length, (genome.edges || genome.connections || []).length]);
     } else {
       const w = Array.isArray(genome.weights) ? genome.weights : [];

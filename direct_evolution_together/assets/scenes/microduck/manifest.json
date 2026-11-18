@@ -1,0 +1,51 @@
+{
+  "sceneId": "microduck",
+  "entryXml": "scene_walk.xml",
+  "physicsAsset": "scenes/microduck/physics.bin",
+  "physicsSha256": "53bbd15a316e68691b592a4556d41e45a4c0aeac305e940fbd168b5057cd88be",
+  "physicsBytes": 2982415,
+  "visualAsset": "scenes/microduck/visual.bin",
+  "visualSha256": "770c2b17cdf77cc7fb7454b92823c28d8192f9efa1099d38cef686df39699df3",
+  "visualBytes": 492576,
+  "nbody": 16,
+  "nq": 21,
+  "nv": 20,
+  "nu": 14,
+  "collisionMeshes": [
+    "leg",
+    "power_support",
+    "sole_left",
+    "sole_right"
+  ],
+  "bodyNames": [
+    "world",
+    "trunk_base",
+    "yaw2roll",
+    "hip_l",
+    "upper_leg_left",
+    "leg",
+    "ankle_left",
+    "neck",
+    "neck_pitch",
+    "yaw_roll_motion",
+    "jaw_soft",
+    "bearing_roll",
+    "hip_l_2",
+    "upper_leg_right",
+    "leg_2",
+    "ankle_right"
+  ],
+  "visualStats": {
+    "bodyMeshCount": 15,
+    "totalVerts": 14345,
+    "totalTris": 36634
+  },
+  "cameraDefaults": {
+    "trackBodyId": 1,
+    "targetHeight": 0.121,
+    "distance": 0.721,
+    "yaw": -0.68,
+    "pitch": 0.26,
+    "gridScale": 0.25
+  }
+}

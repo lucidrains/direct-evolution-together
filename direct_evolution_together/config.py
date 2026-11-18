@@ -52,6 +52,8 @@ class EnvPolicyConfig:
     lobby_order: int = 99
     execution_policy: str = "client_preferred"  # client_locked | client_preferred | server_only | external_worker
     crowd_contribute: bool = False
+    sim_phase_enabled: bool = False
+    default_auto_evolve: bool = False
     allow_server_video: bool = True
     default_pop_size: int = 30
     max_pop_size: int = 64
@@ -116,13 +118,59 @@ class CentralConfig:
 
 
 # Single source of truth for per-environment policy defaults.
-# `halfcheetah` runs a smaller 16-member demo population, so its quorum is 8.
+# `microduck` and `unitree_go2` run 8-member PopuLoRA populations simulated across browser WASM peers;
+# `halfcheetah` runs a 16-member demo population with quorum 8.
 DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
+    "microduck": EnvPolicyConfig(
+        task="microduck",
+        lobby_name="Microduck",
+        lobby_default=True,
+        lobby_order=0,
+        execution_policy="client_locked",
+        crowd_contribute=True,
+        sim_phase_enabled=True,
+        default_auto_evolve=False,
+        allow_server_video=False,
+        default_pop_size=8,
+        max_pop_size=32,
+        default_min_votes=4,
+        default_elite_frac=0.25,
+    ),
+    "unitree_go2": EnvPolicyConfig(
+        task="unitree_go2",
+        lobby_name="Unitree Go2",
+        lobby_default=True,
+        lobby_order=1,
+        execution_policy="client_locked",
+        crowd_contribute=True,
+        sim_phase_enabled=True,
+        default_auto_evolve=False,
+        allow_server_video=False,
+        default_pop_size=8,
+        max_pop_size=32,
+        default_min_votes=4,
+        default_elite_frac=0.25,
+    ),
+    "so101": EnvPolicyConfig(
+        task="so101",
+        lobby_name="SO-101 Arm",
+        lobby_default=True,
+        lobby_order=2,
+        execution_policy="client_locked",
+        crowd_contribute=True,
+        sim_phase_enabled=True,
+        default_auto_evolve=False,
+        allow_server_video=False,
+        default_pop_size=8,
+        max_pop_size=32,
+        default_min_votes=4,
+        default_elite_frac=0.25,
+    ),
     "halfcheetah": EnvPolicyConfig(
         task="halfcheetah",
         lobby_name="HalfCheetah",
         lobby_default=True,
-        lobby_order=0,
+        lobby_order=3,
         execution_policy="client_locked",
         crowd_contribute=True,
         allow_server_video=True,
@@ -135,7 +183,7 @@ DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
         task="cartpole",
         lobby_name="CartPole",
         lobby_default=True,
-        lobby_order=1,
+        lobby_order=4,
         execution_policy="client_preferred",
         crowd_contribute=False,
         allow_server_video=True,
@@ -148,7 +196,7 @@ DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
         task="image",
         lobby_name="Butterfly",
         lobby_default=True,
-        lobby_order=2,
+        lobby_order=5,
         execution_policy="client_locked",
         crowd_contribute=False,
         allow_server_video=False,
@@ -176,6 +224,8 @@ DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
 _ENV_VAR_OVERRIDES: tuple[tuple[str, str], ...] = (
     ("enabled", "DET_TASK_ENABLED_{task}"),
     ("crowd_contribute", "DET_CROWD_CONTRIBUTE_{task}"),
+    ("sim_phase_enabled", "DET_SIM_PHASE_{task}"),
+    ("default_auto_evolve", "DET_AUTO_EVOLVE_{task}"),
     ("allow_server_video", "DET_ALLOW_VIDEO_{task}"),
     ("execution_policy", "DET_EXECUTION_POLICY_{task}"),
     ("default_pop_size", "DET_POP_SIZE_{task}"),
@@ -247,7 +297,7 @@ def _coerce_env_value(field_name: str, raw: object, default: object) -> object:
     """Validate one per-environment override, falling back to `default` on bad input."""
     if raw is None:
         return default
-    if field_name in ("enabled", "crowd_contribute", "allow_server_video", "lobby_default"):
+    if field_name in ("enabled", "crowd_contribute", "sim_phase_enabled", "default_auto_evolve", "allow_server_video", "lobby_default"):
         return _coerce_bool(raw, bool(default))
     if field_name == "execution_policy":
         policy = str(raw).strip().lower()

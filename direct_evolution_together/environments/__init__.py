@@ -66,6 +66,18 @@ from .halfcheetah import (
     halfcheetah_rollout,
 )
 from .media import render_task_media
+from .microduck import (
+    MICRODUCK_ACTION_DIM,
+    MICRODUCK_ACTION_LABELS,
+    MICRODUCK_DT,
+    MICRODUCK_ENV_PARAMS,
+    MICRODUCK_EVAL_SEEDS,
+    MICRODUCK_LOW_RANK,
+    MICRODUCK_MAX_STEPS,
+    MICRODUCK_OBS_DIM,
+    MICRODUCK_OBS_LABELS,
+    MICRODUCK_POLICY_SPEC,
+)
 from .registry import (
     TASK_SPECS,
     clamp_pop_for_task,
@@ -77,9 +89,40 @@ from .registry import (
     normalize_task_id,
 )
 from .rng import mulberry32
+from .scene_assets import (
+    SCENES_DIR,
+    compile_mjcf_scene,
+    get_scene_manifest,
+    pack_vfs_entries,
+    unpack_vfs_entries,
+)
 from .scripts import build_control_runner_script, build_worker_script
+from .so101 import (
+    SO101_ACTION_DIM,
+    SO101_ACTION_LABELS,
+    SO101_DT,
+    SO101_ENV_PARAMS,
+    SO101_EVAL_SEEDS,
+    SO101_LOW_RANK,
+    SO101_MAX_STEPS,
+    SO101_OBS_DIM,
+    SO101_OBS_LABELS,
+    SO101_POLICY_SPEC,
+)
 from .substrate import HyperNEATSubstrate, get_substrate
 from .types import ControlTaskAdapter, TaskSpec
+from .unitree_go2 import (
+    UNITREE_GO2_ACTION_DIM,
+    UNITREE_GO2_ACTION_LABELS,
+    UNITREE_GO2_DT,
+    UNITREE_GO2_ENV_PARAMS,
+    UNITREE_GO2_EVAL_SEEDS,
+    UNITREE_GO2_LOW_RANK,
+    UNITREE_GO2_MAX_STEPS,
+    UNITREE_GO2_OBS_DIM,
+    UNITREE_GO2_OBS_LABELS,
+    UNITREE_GO2_POLICY_SPEC,
+)
 
 __all__ = [
     "ASSETS_DIR",
@@ -117,8 +160,39 @@ __all__ = [
     "HALFCHEETAH_PHASE_HARMONICS",
     "HALFCHEETAH_SUBSTRATE_DIMS",
     "HALFCHEETAH_XML_PATH",
+    "MICRODUCK_ACTION_DIM",
+    "MICRODUCK_ACTION_LABELS",
+    "MICRODUCK_DT",
+    "MICRODUCK_ENV_PARAMS",
+    "MICRODUCK_EVAL_SEEDS",
+    "MICRODUCK_LOW_RANK",
+    "MICRODUCK_MAX_STEPS",
+    "MICRODUCK_OBS_DIM",
+    "MICRODUCK_OBS_LABELS",
+    "MICRODUCK_POLICY_SPEC",
+    "SCENES_DIR",
+    "SO101_ACTION_DIM",
+    "SO101_ACTION_LABELS",
+    "SO101_DT",
+    "SO101_ENV_PARAMS",
+    "SO101_EVAL_SEEDS",
+    "SO101_LOW_RANK",
+    "SO101_MAX_STEPS",
+    "SO101_OBS_DIM",
+    "SO101_OBS_LABELS",
+    "SO101_POLICY_SPEC",
     "TASK_ADAPTERS",
     "TASK_SPECS",
+    "UNITREE_GO2_ACTION_DIM",
+    "UNITREE_GO2_ACTION_LABELS",
+    "UNITREE_GO2_DT",
+    "UNITREE_GO2_ENV_PARAMS",
+    "UNITREE_GO2_EVAL_SEEDS",
+    "UNITREE_GO2_LOW_RANK",
+    "UNITREE_GO2_MAX_STEPS",
+    "UNITREE_GO2_OBS_DIM",
+    "UNITREE_GO2_OBS_LABELS",
+    "UNITREE_GO2_POLICY_SPEC",
     "ControlTaskAdapter",
     "CartPoleAdapter",
     "HalfCheetahAdapter",
@@ -134,6 +208,7 @@ __all__ = [
     "cartpole_rollout",
     "cartpole_step",
     "clamp_pop_for_task",
+    "compile_mjcf_scene",
     "create_task_population",
     "default_elite_for_task",
     "default_pop_for_task",
@@ -141,6 +216,7 @@ __all__ = [
     "evaluate_control_genome",
     "get_halfcheetah_model",
     "get_nim_task_configs_payload",
+    "get_scene_manifest",
     "get_substrate",
     "get_task_adapter",
     "get_task_spec",
@@ -150,6 +226,8 @@ __all__ = [
     "is_gen0_founder_presolved",
     "mulberry32",
     "normalize_task_id",
+    "pack_vfs_entries",
     "render_task_media",
     "rollout_control_episode",
+    "unpack_vfs_entries",
 ]

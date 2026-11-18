@@ -566,7 +566,141 @@
     };
   }
 
+  function decodeF16Sample(b64) {
+    if (!b64 || typeof atob !== "function") return new Float32Array(0);
+    const bin = atob(b64);
+    const n = bin.length >> 1;
+    const out = new Float32Array(n);
+    const f32 = new Float32Array(1);
+    const u32 = new Uint32Array(f32.buffer);
+    for (let i = 0; i < n; i++) {
+      const h = bin.charCodeAt(i * 2) | (bin.charCodeAt(i * 2 + 1) << 8);
+      const s = (h & 0x8000) << 16;
+      const e = (h >> 10) & 0x1f;
+      const m = h & 0x03ff;
+      if (e === 0) u32[0] = s;
+      else if (e === 31) u32[0] = s | 0x7f800000 | (m << 13);
+      else u32[0] = s | ((e - 15 + 127) << 23) | (m << 13);
+      out[i] = f32[0];
+    }
+    return out;
+  }
+
+  function buildPopuloraGraph(genome, taskSpec) {
+    const r = Number(genome.lowRank || taskSpec?.policySpec?.lowRank || 8);
+    const adapters = genome.adapters || {};
+    const actLabels = Array.isArray(taskSpec?.actionLabels) ? taskSpec.actionLabels : [];
+    const obsLabels = Array.isArray(taskSpec?.obsLabels) ? taskSpec.obsLabels : [];
+
+    // Sampled slice matching createPopuLoraRunner stepActivations (16 obs -> 16 enc -> 16 gru -> 16 dec -> actionDim)
+    const nSample = 16;
+    const nAct = Math.max(1, Number(taskSpec?.actionDim || actLabels.length || 14));
+    const stageSpecs = [
+      { title: `Obs [0..${nSample - 1}]`, count: nSample, kind: "input", act: "linear", labels: obsLabels },
+      { title: `Enc LoRA (r=${r})`, count: nSample, kind: "hidden", act: "tanh", key: "net_encoder_2" },
+      { title: `GRU Cell (r=${r})`, count: nSample, kind: "hidden", act: "tanh", key: "net_cell_linear_hh" },
+      { title: `Dec LoRA (r=${r})`, count: nSample, kind: "hidden", act: "tanh", key: "net_decoder_0" },
+      { title: `Actions (${nAct})`, count: nAct, kind: "output", act: "tanh", key: "net_decoder_2", labels: actLabels },
+    ];
+
+    const layersNodes = [];
+    const nodes = [];
+    const nodeMap = new Map();
+    stageSpecs.forEach((st, lIdx) => {
+      const col = [];
+      for (let i = 0; i < st.count; i++) {
+        const id = `pl_${lIdx}_${i}`;
+        const node = {
+          id,
+          layer: lIdx,
+          index: i,
+          kind: st.kind,
+          label: (st.labels && st.labels[i]) ? String(st.labels[i]) : `${lIdx === 0 ? "obs" : lIdx === 4 ? "act" : "h"}${i}`,
+          bias: 0.0,
+          actMeta: getActMeta(st.act),
+        };
+        col.push(node);
+        nodes.push(node);
+        nodeMap.set(id, node);
+      }
+      layersNodes.push(col);
+    });
+
+    const edges = [];
+    const matrices = [];
+    let maxAbsWeight = 0.01;
+    let totalParams = 0;
+
+    for (const [k, ad] of Object.entries(adapters)) {
+      totalParams += (Number(ad.inDim || 0) + Number(ad.outDim || 0)) * r;
+    }
+
+    const stageKeys = ["net_encoder_0", "net_cell_linear_ih", "net_decoder_0", "net_decoder_2"];
+    for (let s = 0; s < stageKeys.length; s++) {
+      const srcCol = layersNodes[s];
+      const dstCol = layersNodes[s + 1];
+      const key = stageKeys[s];
+      const ad = adapters[key];
+      if (!ad || !ad.down || !ad.up) continue;
+      const down = decodeF16Sample(ad.down); // [inDim, r]
+      const up = decodeF16Sample(ad.up);     // [outDim, r]
+      const rows = srcCol.length;
+      const cols = dstCol.length;
+      const subW = new Float64Array(rows * cols);
+
+      for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) {
+          let w = 0.0;
+          for (let rk = 0; rk < r; rk++) {
+            w += (up[j * r + rk] || 0) * (down[i * r + rk] || 0);
+          }
+          subW[i * cols + j] = w;
+          const aw = Math.abs(w);
+          if (aw > maxAbsWeight) maxAbsWeight = aw;
+          edges.push({
+            id: `pe_${s}_${i}_${j}`,
+            from: srcCol[i].id,
+            to: dstCol[j].id,
+            layer: s,
+            weight: w,
+            enabled: true,
+          });
+        }
+      }
+      matrices.push({
+        title: `LoRA \u0394W ${key} (slice ${rows}\u00d7${cols}, \u2016\u0394W\u2016=${(ad.norm ?? 0).toFixed(2)})`,
+        dIn: rows,
+        dOut: cols,
+        w: subW,
+        b: new Float64Array(cols),
+        rowLabels: srcCol.map((n) => n.label),
+        colLabels: dstCol.map((n) => n.label),
+      });
+    }
+
+    const layerTitles = stageSpecs.map((s) => s.title);
+    const geom = assignCoordinates(layersNodes, layerTitles);
+    return {
+      kind: "populora",
+      title: `PopuLoRA Adapter (rank ${r})`,
+      dims: stageSpecs.map((s) => s.count),
+      layersNodes,
+      layerTitles,
+      nodes,
+      nodeMap,
+      edges,
+      matrices,
+      maxAbsWeight,
+      paramCount: totalParams,
+      width: geom.width,
+      height: geom.height,
+    };
+  }
+
   function buildGraphModel(genome, taskSpec, viewMode) {
+    if (genome && genome.kind === "populora") {
+      return buildPopuloraGraph(genome, taskSpec);
+    }
     if (genome && Array.isArray(genome.nodes)) {
       return buildNeatDagGraph(genome, taskSpec);
     }
@@ -714,20 +848,21 @@
       this.genome = genome;
       this.taskSpec = taskSpec || {};
       const isNeat = Boolean(genome && Array.isArray(genome.nodes));
-      const hasSubstrate = Boolean(readSpecDims(this.taskSpec));
+      const isPopulora = Boolean(genome && genome.kind === "populora");
+      const hasSubstrate = Boolean(readSpecDims(this.taskSpec)) || isPopulora;
 
       if (preferredMode) {
         this.viewMode = preferredMode;
       } else if (!hasSubstrate && !isNeat && this.viewMode === "substrate") {
         this.viewMode = "cppn";
-      } else if (hasSubstrate && this.viewMode !== "cppn" && this.viewMode !== "matrices") {
+      } else if (hasSubstrate && (isPopulora ? this.viewMode === "cppn" : (this.viewMode !== "cppn" && this.viewMode !== "matrices"))) {
         this.viewMode = "substrate";
       }
 
       // Toggle visible mode tabs appropriately
       this.tabBtns.substrate.hidden = !hasSubstrate && !isNeat;
-      this.tabBtns.cppn.hidden = isNeat;
-      this.tabBtns.substrate.textContent = isNeat ? "NEAT Topology" : "Substrate";
+      this.tabBtns.cppn.hidden = isNeat || isPopulora;
+      this.tabBtns.substrate.textContent = isPopulora ? "LoRA Graph" : (isNeat ? "NEAT Topology" : "Substrate");
 
       this.hoveredNodeId = null;
       this.hoveredEdgeId = null;

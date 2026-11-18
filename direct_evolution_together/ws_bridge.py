@@ -13,6 +13,7 @@ from direct_evolution_together.cppn import (
     sync_genome_counter,
 )
 from direct_evolution_together.config import get_config
+from direct_evolution_together.crowd_trust import SQLITE_SYNC_LOCK, fetch_room_eval_map
 from direct_evolution_together.environments import (
     clamp_pop_for_task,
     create_task_population,
@@ -24,6 +25,10 @@ from direct_evolution_together.environments import (
     normalize_task_id,
 )
 from direct_evolution_together.models import ChatMessage, RoomEvolutionState
+from direct_evolution_together.populora_engine import (
+    evolve_populora_population,
+    resize_populora_population,
+)
 
 HISTORY_LIMIT = 100
 DEFAULT_GOAL_SPECS: tuple[tuple[str, str, int | None], ...] = get_config().get_lobby_goal_specs()
@@ -37,18 +42,33 @@ _persist_to_db = False
 
 
 def _build_lineage_from_genomes(genomes: list[dict], gen: int = 0) -> list[dict]:
-    return [
-        {
-            "id": int(g["id"]),
-            "gen": gen,
-            "parents": [int(p) for p in g.get("parents", [])],
-            "op": str(g.get("op", "random")),
-            "weights": g["weights"],
-            "biases": g["biases"],
-            "activations": g["activations"],
-        }
-        for g in genomes
-    ]
+    nodes: list[dict] = []
+    for g in genomes:
+        if g.get("kind") == "populora":
+            nodes.append(
+                {
+                    "id": int(g["id"]),
+                    "gen": gen,
+                    "parents": [int(p) for p in g.get("parents", [])],
+                    "op": str(g.get("op", "random")),
+                    "kind": "populora",
+                    "hash": str(g.get("hash", "")),
+                    "baseHash": str(g.get("baseHash", "")),
+                }
+            )
+        else:
+            nodes.append(
+                {
+                    "id": int(g["id"]),
+                    "gen": gen,
+                    "parents": [int(p) for p in g.get("parents", [])],
+                    "op": str(g.get("op", "random")),
+                    "weights": g["weights"],
+                    "biases": g["biases"],
+                    "activations": g["activations"],
+                }
+            )
+    return nodes
 
 
 def _build_goal_entry(
@@ -96,6 +116,7 @@ def build_room_state_json(
     mut_sigma: float = 0.30,
     elite_frac: float | None = None,
     crossover_rate: float = 0.75,
+    auto_evolve: bool | None = None,
 ) -> str:
     """Serialize initial Generation-0 room state matching Mummy's RoomEvolutionState schema."""
     clean_task = normalize_task_id(task)
@@ -116,6 +137,7 @@ def build_room_state_json(
         "crossoverRate": float(crossover_rate),
     }
     lineage = _build_lineage_from_genomes(genomes, gen=0)
+    eff_auto = spec.default_auto_evolve if auto_evolve is None else bool(auto_evolve)
     return json.dumps(
         {
             "defaultParams": params,
@@ -127,6 +149,9 @@ def build_room_state_json(
                     "genomes": genomes,
                     "lineage": lineage,
                     "params": params,
+                    "phase": "simulating" if spec.sim_phase_enabled else "voting",
+                    "simCompleted": 0,
+                    "autoEvolve": eff_auto,
                 }
             ],
         }
@@ -204,8 +229,33 @@ def _ensure_lobby_default_goals(
                 if abs(float(p.get("eliteFrac", 0.0)) - exp_elite) > 1e-6:
                     p["eliteFrac"] = exp_elite
                     changed = True
-            if int(g.get("generation", 0)) == 0:
-                cur_genomes = g.get("genomes")
+            cur_genomes = g.get("genomes")
+            populora_incompatible = False
+            if (
+                task_spec.genome_kind == "populora"
+                and task_spec.policy_spec is not None
+                and isinstance(cur_genomes, list)
+                and cur_genomes
+            ):
+                try:
+                    from direct_evolution_together.populora_engine import validate_populora_genome_dict
+                    validate_populora_genome_dict(cur_genomes[0], task_spec.policy_spec)
+                except Exception:
+                    populora_incompatible = True
+
+            if populora_incompatible:
+                target_pop = clamp_pop_for_task(
+                    task_id,
+                    min(default_pop_size, task_spec.default_pop_size),
+                )
+                fresh = create_task_population(task_id, target_pop)
+                g["generation"] = 0
+                g["genomes"] = fresh
+                g["lineage"] = _build_lineage_from_genomes(fresh, gen=0)
+                g["phase"] = "simulating" if task_spec.sim_phase_enabled else "voting"
+                g["simCompleted"] = 0
+                changed = True
+            elif int(g.get("generation", 0)) == 0:
                 if isinstance(cur_genomes, list) and cur_genomes:
                     target_pop = clamp_pop_for_task(
                         task_id,
@@ -250,14 +300,31 @@ def _ensure_lobby_default_goals(
                 "genomes": genomes,
                 "lineage": _build_lineage_from_genomes(genomes, gen=0),
                 "params": params,
+                "phase": "simulating" if spec.sim_phase_enabled else "voting",
+                "simCompleted": 0,
+                "autoEvolve": bool(spec.default_auto_evolve),
             }
         )
-    if not added and not changed:
+    lobby_order_map = {
+        name: idx for idx, (name, _, _) in enumerate(get_config().get_lobby_goal_specs())
+    }
+    combined_goals = list(parsed["goals"]) + added
+    ordered_goals = sorted(
+        enumerate(combined_goals),
+        key=lambda pair: (
+            lobby_order_map.get(str(pair[1].get("name", "")), 1000 + pair[0])
+            if isinstance(pair[1], dict)
+            else 1000 + pair[0]
+        ),
+    )
+    new_goal_list = [g for _, g in ordered_goals]
+    order_changed = [g.get("name") for g in new_goal_list if isinstance(g, dict)] != [
+        g.get("name") for g in parsed["goals"] if isinstance(g, dict)
+    ]
+    if not added and not changed and not order_changed:
         return state_json, False
 
-    if added:
-        # Place newly added control defaults at the front so visitors immediately see them.
-        parsed["goals"] = added + parsed["goals"]
+    parsed["goals"] = new_goal_list
     return json.dumps(parsed), True
 
 
@@ -302,12 +369,13 @@ def flush_room_states() -> int:
     if not items:
         return 0
 
-    close_old_connections()
-    for item in items:
-        RoomEvolutionState.objects.update_or_create(
-            room=item["room"],
-            defaults={"state_json": item["stateJson"]},
-        )
+    with SQLITE_SYNC_LOCK:
+        close_old_connections()
+        for item in items:
+            RoomEvolutionState.objects.update_or_create(
+                room=item["room"],
+                defaults={"state_json": item["stateJson"]},
+            )
     return len(items)
 
 
@@ -320,17 +388,18 @@ def flush_pending_messages() -> int:
     if not items:
         return 0
 
-    close_old_connections()
-    ChatMessage.objects.bulk_create(
-        [
-            ChatMessage(
-                room=item["room"],
-                username=item["username"],
-                message=item["message"],
-            )
-            for item in items
-        ]
-    )
+    with SQLITE_SYNC_LOCK:
+        close_old_connections()
+        ChatMessage.objects.bulk_create(
+            [
+                ChatMessage(
+                    room=item["room"],
+                    username=item["username"],
+                    message=item["message"],
+                )
+                for item in items
+            ]
+        )
     return len(items)
 
 
@@ -376,26 +445,60 @@ def flush_evo_jobs() -> int:
                     room, goal_name, job["username"], json.dumps(genomes)
                 )
             elif kind == "evolve":
-                next_genomes, top_score = evolve_population(
-                    job["genomes"],
-                    job["scores"],
-                    job["upCounts"],
-                    mut_sigma=float(job.get("mutSigma", 0.30)),
-                    pop_size=pop_size,
-                    elite_frac=float(job.get("eliteFrac", 0.20)),
-                    crossover_rate=float(job.get("crossoverRate", 0.75)),
-                )
+                spec = get_task_spec(task)
+                if spec.genome_kind == "populora" and spec.policy_spec is not None:
+                    close_old_connections()
+                    gen_idx = int(job.get("generation", 0))
+                    eval_map = fetch_room_eval_map(room, goal_name, gen_idx, trusted_only=True)
+                    if not eval_map:
+                        eval_map = fetch_room_eval_map(room, goal_name, gen_idx, trusted_only=False)
+                    next_genomes, top_score = evolve_populora_population(
+                        room=room,
+                        goal=goal_name,
+                        task_id=spec.task_id,
+                        generation=gen_idx,
+                        policy_spec=spec.policy_spec,
+                        genome_dicts=job["genomes"],
+                        scores=job["scores"],
+                        up_counts=job["upCounts"],
+                        eval_by_hash=eval_map,
+                        mut_sigma=float(job.get("mutSigma", 0.30)),
+                        pop_size=pop_size,
+                        elite_frac=float(job.get("eliteFrac", 0.25)),
+                        max_horizon=max(1, spec.max_steps),
+                    )
+                else:
+                    next_genomes, top_score = evolve_population(
+                        job["genomes"],
+                        job["scores"],
+                        job["upCounts"],
+                        mut_sigma=float(job.get("mutSigma", 0.30)),
+                        pop_size=pop_size,
+                        elite_frac=float(job.get("eliteFrac", 0.20)),
+                        crossover_rate=float(job.get("crossoverRate", 0.75)),
+                    )
                 mummy_ws.apply_goal_evolve(
                     room, goal_name, json.dumps(next_genomes), int(top_score)
                 )
             elif kind == "resize":
-                resized = resize_population(
-                    job["genomes"],
-                    pop_size,
-                    job["scores"],
-                    job["upCounts"],
-                    mut_sigma=float(job.get("mutSigma", 0.30)),
-                )
+                spec = get_task_spec(task)
+                if spec.genome_kind == "populora" and spec.policy_spec is not None:
+                    resized = resize_populora_population(
+                        job["genomes"],
+                        pop_size,
+                        policy_spec=spec.policy_spec,
+                        task_id=spec.task_id,
+                        scores=job["scores"],
+                        up_counts=job["upCounts"],
+                    )
+                else:
+                    resized = resize_population(
+                        job["genomes"],
+                        pop_size,
+                        job["scores"],
+                        job["upCounts"],
+                        mut_sigma=float(job.get("mutSigma", 0.30)),
+                    )
                 mummy_ws.apply_goal_resize(
                     room, goal_name, job["username"], json.dumps(resized)
                 )

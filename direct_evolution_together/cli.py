@@ -155,11 +155,26 @@ def main() -> None:
     parser.add_argument("--no-browser", action="store_true", help="Do not automatically open the Web UI in a browser")
     parser.add_argument("--check", action="store_true", help="Check Nim/Mummy readiness and exit")
     parser.add_argument(
+        "--compile-scene",
+        nargs=2,
+        metavar=("SCENE_ID", "ENTRY_XML"),
+        help="Compile an MJCF + STL/OBJ scene directory into physics.bin + visual.bin + manifest.json and exit",
+    )
+    parser.add_argument(
         "--install-nim-deps",
         action="store_true",
         help="Automatically run `nimble install -y mummy nimpy` if missing",
     )
     args = parser.parse_args()
+
+    if args.compile_scene:
+        import json
+        from direct_evolution_together.environments.scene_assets import compile_mjcf_scene
+
+        sid, xml_p = args.compile_scene
+        manifest = compile_mjcf_scene(sid, xml_p)
+        print(json.dumps(manifest, indent=2))
+        return
 
     is_reloader_child = os.environ.get("RUN_MAIN") == "true"
     if not is_reloader_child:

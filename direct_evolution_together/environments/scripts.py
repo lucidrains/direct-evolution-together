@@ -9,8 +9,25 @@ from .registry import get_task_spec
 
 
 def build_control_runner_script(task_id: str, weights_filename: str = "weights.pt") -> str:
-    """Return a standalone uv script that evaluates an exported CPPN policy on a control task."""
+    """Return a standalone uv script that evaluates an exported policy on a control task."""
     spec = get_task_spec(task_id)
+    if spec.genome_kind == "populora":
+        return "\n".join(
+            [
+                *build_uv_script_header(extra_deps=("populora",)),
+                "import sys",
+                "import torch",
+                "from direct_evolution_together.environments import get_task_spec",
+                "from direct_evolution_together.populora_engine import build_policy_module",
+                "",
+                f'spec = get_task_spec("{spec.task_id}")',
+                "model = build_policy_module(spec.policy_spec)",
+                f'state = torch.load(sys.argv[1] if len(sys.argv) > 1 else "{weights_filename}", map_location="cpu", weights_only=True)',
+                "model.load_state_dict(state, strict=False)",
+                f'print("Loaded PopuLoRA policy for {spec.task_id}:", sum(p.numel() for p in model.parameters()), "params")',
+                "",
+            ]
+        )
     if spec.task_id not in TASK_ADAPTERS:
         return "\n".join(
             [

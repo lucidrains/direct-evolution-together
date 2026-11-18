@@ -77,6 +77,8 @@ type
 
   TaskConfig = object
     is_control: bool
+    sim_phase_enabled: bool
+    default_auto_evolve: bool
     default_pop_size: int
     max_pop_size: int
     default_min_votes: int
@@ -121,6 +123,9 @@ type
     lineage_total: int
     ## Per-candidate vote map: WebSocket -> +1 (up) or -1 (down).
     votes: seq[Table[WebSocket, int]]
+    phase: string
+    sim_completed: int
+    auto_evolve: bool
     countdown_ends_at_ms: int64
     evolving: bool
     evolving_started_at_ms: int64
@@ -140,6 +145,7 @@ type
     room: string
     goal: string
     task: string
+    generation: int
     username: string
     genomes_json: string
     scores: seq[int]
@@ -203,6 +209,18 @@ func default_task_configs(): Table[string, TaskConfig] =
     has_elite_override: true,
     default_elite_frac: 0.05,
   )
+  let populora_cfg = TaskConfig(
+    is_control: true,
+    sim_phase_enabled: true,
+    default_auto_evolve: false,
+    default_pop_size: 8,
+    max_pop_size: control_max_population_size,
+    default_min_votes: 4,
+    has_elite_override: true,
+    default_elite_frac: 0.25,
+  )
+  for tid in ["microduck", "unitree_go2", "so101"]:
+    result[tid] = populora_cfg
   result["external"] = TaskConfig(
     is_control: true,
     default_pop_size: default_control_population_size,
@@ -472,7 +490,8 @@ func remaining_countdown_ms(goal: GoalPopulation; now: int64): int64 {.inline.} 
   max(0'i64, goal.countdown_ends_at_ms - now)
 
 proc sync_goal_countdown(goal: var GoalPopulation; c: RuntimeConfig; now: int64) {.gcsafe.} =
-  if goal.evolving:
+  if goal.evolving or goal.phase == "simulating":
+    goal.countdown_ends_at_ms = 0
     return
   let counted = count_goal_votes(goal)
   let req = effective_min_votes(goal, c)
@@ -503,15 +522,26 @@ proc extract_lineage_nodes(genomes_json: string; gen: int): JsonNode {.gcsafe.} 
       if raw_parents != nil and raw_parents.kind == JArray: raw_parents
       else: newJArray()
     let op_str = item.getOrDefault("op").getStr(if gen == 0: "random" else: "mutation")
-    result.add(%*{
-      "id": gid,
-      "gen": gen,
-      "parents": parents_node,
-      "op": op_str,
-      "weights": item.getOrDefault("weights"),
-      "biases": item.getOrDefault("biases"),
-      "activations": item.getOrDefault("activations"),
-    })
+    if item.getOrDefault("kind").getStr("") == "populora":
+      result.add(%*{
+        "id": gid,
+        "gen": gen,
+        "parents": parents_node,
+        "op": op_str,
+        "kind": "populora",
+        "hash": item.getOrDefault("hash").getStr(""),
+        "baseHash": item.getOrDefault("baseHash").getStr(""),
+      })
+    else:
+      result.add(%*{
+        "id": gid,
+        "gen": gen,
+        "parents": parents_node,
+        "op": op_str,
+        "weights": item.getOrDefault("weights"),
+        "biases": item.getOrDefault("biases"),
+        "activations": item.getOrDefault("activations"),
+      })
 
 proc compute_lean_lineage(lineage_json, genomes_json: string; gen: int): tuple[lean_json: string, total: int] {.gcsafe.} =
   ## Precompute active-ancestry JSON (omitting live generation weights) once per generation change.
@@ -553,9 +583,10 @@ proc compute_lean_lineage(lineage_json, genomes_json: string; gen: int): tuple[l
       continue
     if node.getOrDefault("gen").getInt(-1) == gen:
       var lean = copy(node)
-      lean.delete("weights")
-      lean.delete("biases")
-      lean.delete("activations")
+      if "weights" in lean: lean.delete("weights")
+      if "biases" in lean: lean.delete("biases")
+      if "activations" in lean: lean.delete("activations")
+      if "adapters" in lean: lean.delete("adapters")
       arr.add(lean)
     else:
       arr.add(node)
@@ -699,6 +730,17 @@ proc attach_round_fields(
   obj["likedCandidates"] = %vinfo.liked_candidates
   obj["minVotes"] = %effective_min_votes(goal, c)
   obj["maxVotesPerUser"] = %effective_max_votes(goal, c, is_pub_image)
+  let tc = task_cfg_locked(goal.task)
+  let eff_phase =
+    if goal.evolving: "evolving"
+    elif goal.phase.len > 0: goal.phase
+    elif tc.sim_phase_enabled: "simulating"
+    else: "voting"
+  obj["phase"] = %eff_phase
+  obj["simPhaseEnabled"] = %tc.sim_phase_enabled
+  obj["simCompleted"] = %goal.sim_completed
+  obj["simTotal"] = %max(1, goal.votes.len)
+  obj["autoEvolve"] = %goal.auto_evolve
   obj["countdownMs"] = %remaining_countdown_ms(goal, now)
   obj["countdownDurationMs"] = %c.countdown_ms
   obj["evolving"] = %goal.evolving
@@ -706,7 +748,7 @@ proc attach_round_fields(
   obj["eliteFrac"] = %goal.params.elite_frac
   obj["crossoverRate"] = %goal.params.crossover_rate
   obj["populationSize"] = %goal.votes.len
-  obj["maxPopulationSize"] = %max_pop_for_task_locked(goal.task)
+  obj["maxPopulationSize"] = %tc.max_pop_size
 
 proc goal_to_json_str(
   goal: GoalPopulation;
@@ -838,6 +880,12 @@ proc serialize_room_evolution(evo: RoomEvolution): string {.gcsafe.} =
     item.add(g_lineage)
     item.add(",\"params\":")
     item.add(gp_str)
+    item.add(",\"phase\":")
+    item.add(escapeJson(if g.phase.len > 0: g.phase else: "voting"))
+    item.add(",\"simCompleted\":")
+    item.add($g.sim_completed)
+    item.add(",\"autoEvolve\":")
+    item.add(if g.auto_evolve: "true" else: "false")
     item.add("}")
     total_len += item.len + 1
     parts.add(item)
@@ -940,12 +988,18 @@ proc init_goal_population_locked(
   name, task, genomes_json: string;
   pop_len: int;
   gp: GoalParams;
+  auto_evolve_override: int = -1;
 ): GoalPopulation {.gcsafe.} =
   let clean_task = sanitize_task_name_locked(task)
+  let tc = task_cfg_locked(clean_task)
   var params = gp
   clamp_control_min_votes_locked(clean_task, params)
   let l_json = merge_lineage_json("", genomes_json, 0)
   let lean = compute_lean_lineage(l_json, genomes_json, 0)
+  let init_phase = if tc.sim_phase_enabled: "simulating" else: "voting"
+  let init_auto =
+    if auto_evolve_override >= 0: auto_evolve_override > 0
+    else: tc.default_auto_evolve
   GoalPopulation(
     name: name,
     task: clean_task,
@@ -955,6 +1009,9 @@ proc init_goal_population_locked(
     lean_lineage_json: lean.lean_json,
     lineage_total: lean.total,
     votes: empty_votes(max(1, pop_len)),
+    phase: init_phase,
+    sim_completed: 0,
+    auto_evolve: init_auto,
     countdown_ends_at_ms: 0,
     evolving: false,
     evolving_started_at_ms: 0,
@@ -989,8 +1046,12 @@ proc populate_room_goals_locked(
       gp.elite_frac = clamp(item["eliteFrac"].getFloat(gp.elite_frac), min_elite_frac, max_elite_frac)
     elif task != "image":
       gp.elite_frac = default_elite_frac_for_task_locked(task, dp.elite_frac)
+    let auto_override =
+      if item.hasKey("autoEvolve") and item["autoEvolve"].kind == JBool:
+        (if item["autoEvolve"].getBool(false): 1 else: 0)
+      else: -1
     result.goal_order.add(name)
-    result.goals[name] = init_goal_population_locked(name, task, g_json, g_arr.len, gp)
+    result.goals[name] = init_goal_population_locked(name, task, g_json, g_arr.len, gp, auto_override)
 
 proc upgrade_handler(request: Request) {.gcsafe.} =
   let room = request.pathParams["room"]
@@ -1459,7 +1520,15 @@ proc handle_cast_vote(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
       var client_info = clients[ws]
       if client_info.room in room_evolution and goal_name in room_evolution[client_info.room].goals:
         var goal = room_evolution[client_info.room].goals[goal_name]
-        if not goal.evolving and idx < goal.votes.len and (not has_req_gen or req_gen == goal.generation):
+        if goal.phase == "simulating":
+          throttle_payload = $(%*{
+            "type": "vote_throttled",
+            "goal": goal_name,
+            "index": idx,
+            "maxVotesPerUser": effective_max_votes(goal, cfg, is_public_image_room(client_info.room, goal)),
+            "message": "Simulations still running — voting unlocks once all candidates are evaluated",
+          })
+        elif not goal.evolving and idx < goal.votes.len and (not has_req_gen or req_gen == goal.generation):
           let now = now_ms()
           let prev_vote = goal.votes[idx].getOrDefault(ws, 0)
           let next_vote = if prev_vote == req_vote: 0 else: req_vote
@@ -1572,12 +1641,58 @@ proc build_evolve_job_and_broadcast(
     room: room,
     goal: goal.name,
     task: goal.task,
+    generation: goal.generation,
     genomes_json: goal.genomes_json,
     scores: scores,
     up_counts: up_counts,
     population_size: pop_len,
     params: goal.params,
   )
+
+proc handle_set_auto_evolve(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
+  let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
+  if goal_name.len == 0:
+    return
+  let enabled = payload.getOrDefault("enabled").getBool(false)
+  let now = now_ms()
+  var
+    outbox: seq[PendingBroadcast] = @[]
+    sys_msg = ""
+    targets: seq[WebSocket] = @[]
+
+  with_state_lock:
+    if ws in clients:
+      let info = clients[ws]
+      if info.room in room_evolution and goal_name in room_evolution[info.room].goals:
+        var goal = room_evolution[info.room].goals[goal_name]
+        let tc = task_cfg_locked(goal.task)
+        if tc.sim_phase_enabled and goal.auto_evolve != enabled:
+          goal.auto_evolve = enabled
+          dirty_rooms.incl(info.room)
+          targets = room_targets(info.room)
+          let r_cnt = max(1, targets.len)
+          if enabled and not goal.evolving and (goal.phase == "voting" or goal.sim_completed >= max(1, goal.votes.len)):
+            pending_evo_jobs.add(
+              build_evolve_job_and_broadcast(info.room, goal, cfg, clients, targets, now, outbox)
+            )
+            sys_msg = system_msg_payload(
+              info.username & " enabled Auto-Evolve on \"" & goal_name & "\" — advancing generation"
+            )
+          else:
+            if targets.len > 0:
+              outbox.add(PendingBroadcast(
+                targets: targets,
+                payload: build_votes_updated_payload(goal, cfg, clients, now, r_cnt, is_public = (info.room == "lobby")),
+              ))
+            sys_msg = system_msg_payload(
+              info.username & (if enabled: " enabled" else: " disabled") & " Auto-Evolve on \"" & goal_name & "\""
+            )
+          room_evolution[info.room].goals[goal_name] = goal
+
+  for item in outbox:
+    broadcast(item.targets, item.payload)
+  if sys_msg.len > 0 and targets.len > 0:
+    broadcast(targets, sys_msg)
 
 proc handle_evolve_now(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
   let goal_name = payload.getOrDefault("goal").getStr("")
@@ -1655,6 +1770,7 @@ proc websocket_handler(
     of "chat": handle_chat(ws, payload)
     of "create_goal": handle_create_goal(ws, payload)
     of "cast_vote": handle_cast_vote(ws, payload)
+    of "set_auto_evolve": handle_set_auto_evolve(ws, payload)
     of "evolve_now": handle_evolve_now(ws, payload)
     of "lineage_all": handle_lineage_all(ws, payload)
     else: discard
@@ -1813,6 +1929,12 @@ proc get_room_snapshot_json*(room: string): string {.exportpy, gcsafe.} =
           item.add(escapeJson(task_str))
           item.add(",\"generation\":")
           item.add($g.generation)
+          item.add(",\"phase\":")
+          item.add(escapeJson(if g.evolving: "evolving" elif g.phase.len > 0: g.phase else: "voting"))
+          item.add(",\"simCompleted\":")
+          item.add($g.sim_completed)
+          item.add(",\"autoEvolve\":")
+          item.add(if g.auto_evolve: "true" else: "false")
           item.add(",\"genomes\":")
           item.add(g_genomes)
           item.add("}")
@@ -1867,6 +1989,148 @@ proc internal_room_broadcast_handler(request: Request) {.gcsafe.} =
   broadcast_room_payload(room, $payload_node)
   request.respond(200, @[("Content-Type", "application/json")], """{"ok":true}""")
 
+proc get_room_peer_count*(room: string): int {.exportpy, gcsafe.} =
+  ## Return number of unique active client sessions currently connected to `room`.
+  with_state_lock:
+    if room in rooms:
+      var uniq_cids = initHashSet[string]()
+      var anon_cnt = 0
+      for ws in rooms[room]:
+        if ws in clients:
+          let c = clients[ws].cid
+          if c.len >= 8:
+            uniq_cids.incl(c)
+          else:
+            inc anon_cnt
+      result = uniq_cids.len + anon_cnt
+
+proc notify_goal_sim_progress*(
+  room, goal_name: string;
+  generation, verified_count: int;
+): string {.exportpy, gcsafe.} =
+  ## Update crowdsourced simulation progress and advance phase (`simulating` -> `voting` | `evolving`).
+  var
+    outbox: seq[PendingBroadcast] = @[]
+    sys_msg = ""
+    targets: seq[WebSocket] = @[]
+    next_phase = ""
+
+  with_state_lock:
+    if room in room_evolution and goal_name in room_evolution[room].goals:
+      let now = now_ms()
+      var goal = room_evolution[room].goals[goal_name]
+      if goal.generation == generation and not goal.evolving:
+        let pop_len = max(1, goal.votes.len)
+        let clamped_v = clamp(verified_count, 0, pop_len)
+        let prev_v = goal.sim_completed
+        if clamped_v > goal.sim_completed:
+          goal.sim_completed = clamped_v
+        targets = room_targets(room)
+        let r_cnt = max(1, targets.len)
+        if goal.phase == "simulating" and goal.sim_completed >= pop_len:
+          dirty_rooms.incl(room)
+          if goal.auto_evolve:
+            pending_evo_jobs.add(
+              build_evolve_job_and_broadcast(room, goal, cfg, clients, targets, now, outbox)
+            )
+            next_phase = "evolving"
+            sys_msg = system_msg_payload(
+              "Simulations complete (" & $pop_len & "/" & $pop_len & ") — auto-evolving \"" & goal_name & "\""
+            )
+          else:
+            goal.phase = "voting"
+            goal.sync_goal_countdown(cfg, now)
+            next_phase = "voting"
+            if targets.len > 0:
+              outbox.add(PendingBroadcast(
+                targets: targets,
+                payload: build_votes_updated_payload(goal, cfg, clients, now, r_cnt, is_public = (room == "lobby")),
+              ))
+            sys_msg = system_msg_payload(
+              "Simulations complete for \"" & goal_name & "\" gen " & $generation & " (" & $pop_len & "/" & $pop_len & ") — voting open"
+            )
+        elif goal.sim_completed != prev_v:
+          dirty_rooms.incl(room)
+          next_phase = goal.phase
+          if targets.len > 0:
+            outbox.add(PendingBroadcast(
+              targets: targets,
+              payload: build_votes_updated_payload(goal, cfg, clients, now, r_cnt, is_public = (room == "lobby")),
+            ))
+        else:
+          next_phase = goal.phase
+        room_evolution[room].goals[goal_name] = goal
+      elif goal.evolving:
+        next_phase = "evolving"
+      else:
+        next_phase = goal.phase
+
+  for item in outbox:
+    broadcast(item.targets, item.payload)
+  if sys_msg.len > 0 and targets.len > 0:
+    broadcast(targets, sys_msg)
+  next_phase
+
+proc set_goal_auto_evolve*(room, goal_name: string; enabled: bool): string {.exportpy, gcsafe.} =
+  var
+    outbox: seq[PendingBroadcast] = @[]
+    targets: seq[WebSocket] = @[]
+    res_phase = ""
+  with_state_lock:
+    if room in room_evolution and goal_name in room_evolution[room].goals:
+      let now = now_ms()
+      var goal = room_evolution[room].goals[goal_name]
+      goal.auto_evolve = enabled
+      dirty_rooms.incl(room)
+      targets = room_targets(room)
+      let r_cnt = max(1, targets.len)
+      if enabled and not goal.evolving and (goal.phase == "voting" or goal.sim_completed >= max(1, goal.votes.len)):
+        pending_evo_jobs.add(
+          build_evolve_job_and_broadcast(room, goal, cfg, clients, targets, now, outbox)
+        )
+        res_phase = "evolving"
+      else:
+        res_phase = if goal.evolving: "evolving" else: goal.phase
+        if targets.len > 0:
+          outbox.add(PendingBroadcast(
+            targets: targets,
+            payload: build_votes_updated_payload(goal, cfg, clients, now, r_cnt, is_public = (room == "lobby")),
+          ))
+      room_evolution[room].goals[goal_name] = goal
+  for item in outbox:
+    broadcast(item.targets, item.payload)
+  res_phase
+
+proc internal_room_peers_handler(request: Request) {.gcsafe.} =
+  let auth = verify_internal_admin(request)
+  if not auth.ok:
+    request.respond(auth.code, body = auth.msg)
+    return
+  let room = request.pathParams["room"]
+  if not is_valid_room(room):
+    request.respond(400, body = "Invalid room name")
+    return
+  let cnt = get_room_peer_count(room)
+  request.respond(200, @[("Content-Type", "application/json")], $(%*{"ok": true, "peers": cnt}))
+
+proc internal_sim_progress_handler(request: Request) {.gcsafe.} =
+  let auth = verify_internal_admin(request)
+  if not auth.ok:
+    request.respond(auth.code, body = auth.msg)
+    return
+  var parsed: JsonNode
+  try:
+    parsed = parseJson(request.body)
+  except CatchableError:
+    request.respond(400, body = "Invalid JSON")
+    return
+  let room = parsed.getOrDefault("room").getStr("")
+  let goal_name = parsed.getOrDefault("goal").getStr("")
+  let generation = parsed.getOrDefault("generation").getInt(0)
+  let verified_count = parsed.getOrDefault("verifiedCount").getInt(0)
+  let phase = notify_goal_sim_progress(room, goal_name, generation, verified_count)
+  request.respond(200, @[("Content-Type", "application/json")], $(%*{"ok": true, "phase": phase}))
+
 proc ws_health_handler(request: Request) {.gcsafe.} =
   request.respond(200, @[("Content-Type", "application/json")], """{"status":"ok","service":"ws"}""")
 
@@ -1881,7 +2145,9 @@ proc serve_thread_proc(args: tuple[host: string, port: int]) {.thread.} =
       router.get("/ws/chat/@room/", upgrade_handler)
       router.get("/internal/room-goals/@room", internal_room_goals_handler)
       router.get("/internal/room-snapshot/@room", internal_room_snapshot_handler)
+      router.get("/internal/room-peers/@room", internal_room_peers_handler)
       router.post("/internal/room-broadcast", internal_room_broadcast_handler)
+      router.post("/internal/sim-progress", internal_sim_progress_handler)
       router.post("/internal/goal-reset", internal_goal_reset_handler)
       router.post("/internal/room-clear", internal_room_clear_handler)
       srv = newServer(router, websocket_handler, logHandler = quiet_logger)
@@ -1989,6 +2255,8 @@ proc register_task_configs*(configs_json: string) {.exportpy.} =
       let has_elite = item.hasKey("defaultEliteFrac") and item["defaultEliteFrac"].kind in {JFloat, JInt}
       task_configs[tid] = TaskConfig(
         is_control: item.getOrDefault("isControl").getBool(false),
+        sim_phase_enabled: item.getOrDefault("simPhaseEnabled").getBool(false),
+        default_auto_evolve: item.getOrDefault("defaultAutoEvolve").getBool(false),
         default_pop_size: clamp(
           item.getOrDefault("defaultPopSize").getInt(default_control_population_size),
           min_population_size,
@@ -2030,6 +2298,7 @@ proc drain_evo_jobs*(): string {.exportpy.} =
       "room": job.room,
       "goal": job.goal,
       "task": (if job.task.len > 0: job.task else: "image"),
+      "generation": job.generation,
       "username": job.username,
       "scores": job.scores,
       "upCounts": job.up_counts,
@@ -2226,6 +2495,8 @@ proc apply_goal_reset*(room, goal_name, username, genomes_json: string) {.export
       goal.lean_lineage_json = fresh_lean.lean_json
       goal.lineage_total = fresh_lean.total
       goal.votes = empty_votes(max(1, g_arr.len))
+      goal.phase = (if task_cfg_locked(goal.task).sim_phase_enabled: "simulating" else: "voting")
+      goal.sim_completed = 0
       goal.countdown_ends_at_ms = 0
       goal.evolving = false
       goal.evolving_started_at_ms = 0
@@ -2256,6 +2527,8 @@ proc apply_goal_evolve*(room, goal_name, genomes_json: string; top_score: int) {
       goal.lineage_json = merge_lineage_json(goal.lineage_json, genomes_json, goal.generation)
       goal.refresh_goal_lineage_cache()
       goal.votes = empty_votes(max(1, g_arr.len))
+      goal.phase = (if task_cfg_locked(goal.task).sim_phase_enabled: "simulating" else: "voting")
+      goal.sim_completed = 0
       goal.countdown_ends_at_ms = 0
       goal.evolving = false
       goal.evolving_started_at_ms = 0
@@ -2437,6 +2710,12 @@ proc restore_room_state*(room, state_json: string) {.exportpy.} =
         else:
           $extract_lineage_nodes(g_json, gen)
       let lean = compute_lean_lineage(l_json, g_json, gen)
+      let tc = task_cfg_locked(task)
+      let default_phase = if tc.sim_phase_enabled: "simulating" else: "voting"
+      let raw_phase = item.getOrDefault("phase").getStr(default_phase)
+      let eff_phase = if raw_phase in ["simulating", "voting"]: raw_phase else: default_phase
+      let eff_sim_done = clamp(item.getOrDefault("simCompleted").getInt(0), 0, max(1, genomes_arr.len))
+      let eff_auto = item.getOrDefault("autoEvolve").getBool(tc.default_auto_evolve)
       evo.goal_order.add(name)
       evo.goals[name] = GoalPopulation(
         name: name,
@@ -2447,6 +2726,9 @@ proc restore_room_state*(room, state_json: string) {.exportpy.} =
         lean_lineage_json: lean.lean_json,
         lineage_total: lean.total,
         votes: empty_votes(max(1, genomes_arr.len)),
+        phase: eff_phase,
+        sim_completed: eff_sim_done,
+        auto_evolve: eff_auto,
         countdown_ends_at_ms: 0,
         evolving: false,
         evolving_started_at_ms: 0,

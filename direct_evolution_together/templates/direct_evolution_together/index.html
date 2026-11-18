@@ -2213,6 +2213,28 @@
         background: rgba(251, 113, 133, 0.12);
         color: #fda4af;
       }
+      .auto-evolve-btn {
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.63rem;
+        padding: 0.14rem 0.48rem;
+        border-radius: 999px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+      }
+      .auto-evolve-btn:hover:not(:disabled) {
+        color: var(--text);
+        border-color: var(--border-strong);
+      }
+      .auto-evolve-btn.is-active {
+        border-color: rgba(245, 196, 81, 0.5);
+        background: rgba(245, 196, 81, 0.14);
+        color: #fde68a;
+      }
+      .auto-evolve-btn[hidden] { display: none; }
 
       .worker-banner {
         display: flex;
@@ -2656,9 +2678,12 @@
             <form id="empty-goal-form" class="private-empty-form">
               <div class="private-goal-row">
                 <select id="empty-task-select" class="task-select" style="flex:0 0 215px;" aria-label="Environment">
-                  <option value="image" {% if initial_task == "image" %}selected{% endif %}>Image (Picbreeder)</option>
+                  <option value="microduck" {% if initial_task == "microduck" %}selected{% endif %}>Microduck (Biped Gait · PopuLoRA)</option>
+                  <option value="unitree_go2" {% if initial_task == "unitree_go2" %}selected{% endif %}>Unitree Go2 (3D Quadruped · PopuLoRA)</option>
+                  <option value="so101" {% if initial_task == "so101" %}selected{% endif %}>SO-101 Arm (Cube Pick &amp; Lift · PopuLoRA)</option>
                   <option value="halfcheetah" {% if initial_task == "halfcheetah" %}selected{% endif %}>HalfCheetah (MuJoCo Gait)</option>
                   <option value="cartpole" {% if initial_task == "cartpole" %}selected{% endif %}>CartPole (Control)</option>
+                  <option value="image" {% if initial_task == "image" %}selected{% endif %}>Image (Picbreeder)</option>
                   <option value="external" {% if initial_task == "external" %}selected{% endif %}>Custom Worker Script</option>
                 </select>
                 <input id="empty-goal-input" type="text" placeholder="Goal e.g. Neon Orchid, HalfCheetah..." maxlength="32" />
@@ -2752,6 +2777,7 @@
                   <button id="sim-mode-client-btn" type="button" class="sim-mode-btn active" data-mode="client">Client</button>
                   <button id="sim-mode-server-btn" type="button" class="sim-mode-btn" data-mode="server">Server</button>
                   <span id="crowd-trust-pill" class="crowd-trust-pill is-pending" hidden></span>
+                  <button id="auto-evolve-btn" type="button" class="auto-evolve-btn" hidden title="Toggle hands-free Auto-Evolve once all browser simulations verify">Auto-Evolve: Off</button>
                 </div>
                 <div id="sort-tabs" class="filter-tabs" role="tablist" aria-label="Sort candidates" hidden>
                   <button id="sort-steps-btn" type="button" class="filter-tab active" data-sort="steps">Steps &darr;</button>
@@ -2964,9 +2990,12 @@
         <label class="room-field">
           <span>Environment</span>
           <select id="new-room-task" class="task-select">
-            <option value="image">Image (Picbreeder CPPN)</option>
+            <option value="microduck">Microduck (Biped Gait · PopuLoRA)</option>
+            <option value="unitree_go2">Unitree Go2 (3D Quadruped · PopuLoRA)</option>
+            <option value="so101">SO-101 Arm (Cube Pick &amp; Lift · PopuLoRA)</option>
             <option value="halfcheetah">HalfCheetah (MuJoCo Gait · HyperNEAT)</option>
             <option value="cartpole">CartPole (Continuous Control · HyperNEAT)</option>
+            <option value="image">Image (Picbreeder CPPN)</option>
             <option value="external">Custom Researcher Script (External Worker)</option>
           </select>
         </label>
@@ -3081,13 +3110,15 @@
     {{ crowd_config|json_script:"det-crowd-config" }}
     {{ mujoco_wasm_url|default:""|json_script:"det-mujoco-wasm-url" }}
     {{ room_has_worker|default:False|json_script:"det-room-has-worker" }}
-    <script src="{{ base_path }}/assets/cppn_core.js"></script>
-    <script src="{{ base_path }}/assets/cheetah_renderer.js"></script>
+    <script src="{{ base_path }}/assets/cppn_core.js?v={{ asset_ver }}"></script>
+    <script src="{{ base_path }}/assets/cheetah_renderer.js?v={{ asset_ver }}"></script>
+    <script src="{{ base_path }}/assets/scene_cache.js?v={{ asset_ver }}"></script>
     <script>
       const basePath = JSON.parse(document.getElementById("det-base-path").textContent) || "";
+      const assetVer = "{{ asset_ver }}";
       const ASSET_URLS = {
-        mujocoGl: `${basePath}/assets/mujoco_gl.js`,
-        networkViz: `${basePath}/assets/network_viz.js`,
+        mujocoGl: `${basePath}/assets/mujoco_gl.js?v=${assetVer}`,
+        networkViz: `${basePath}/assets/network_viz.js?v=${assetVer}`,
       };
       const loadedAssetScripts = new Map();
       function ensureAssetScript(url) {
@@ -3163,9 +3194,10 @@
       }
 
       function populateTaskSelects() {
-        const order = ["image", "halfcheetah", "cartpole", "external"];
         const isTaskEnabled = (k) => taskSpecs[k] && taskSpecs[k].enabled !== false;
-        let keys = order.filter(isTaskEnabled).concat(Object.keys(taskSpecs).filter((k) => !order.includes(k) && isTaskEnabled(k)));
+        let keys = Object.keys(taskSpecs)
+          .filter(isTaskEnabled)
+          .sort((a, b) => (taskSpecs[a].lobbyOrder ?? 99) - (taskSpecs[b].lobbyOrder ?? 99));
         if (!keys.length && taskSpecs.image) keys = ["image"];
         if (!keys.length) return;
         ["empty-task-select", "new-room-task"].forEach((id) => {
@@ -3190,6 +3222,23 @@
 
       function isControlGoal(goal) {
         return getTaskSpec(goalTaskId(goal)).kind === "control";
+      }
+
+      function isSceneTask(taskId) {
+        return Boolean(getTaskSpec(taskId).sceneManifest);
+      }
+
+      function isWasmSimTask(taskId) {
+        return taskId === "halfcheetah" || isSceneTask(taskId);
+      }
+
+      function isPopuloraTask(taskId) {
+        return getTaskSpec(taskId).genomeKind === "populora";
+      }
+
+      function hasGenomePayload(genome) {
+        if (!genome || typeof genome !== "object") return false;
+        return Array.isArray(genome.weights) || (genome.kind === "populora" && Array.isArray(genome.adapters));
       }
 
       // Rendered images are content-addressed so elites and page reloads reuse them.
@@ -3219,6 +3268,15 @@
         if (!genome || typeof genome !== "object") return "0";
         const memo = genomeFingerprints.get(genome);
         if (memo) return memo;
+        if (genome.kind === "populora") {
+          const fp = genome.hash
+            ? String(genome.hash).slice(0, 16)
+            : (window.DetCppnCore && typeof window.DetCppnCore.genomeFingerprint === "function"
+                ? window.DetCppnCore.genomeFingerprint(genome)
+                : `pl_${genome.id || 0}`);
+          genomeFingerprints.set(genome, fp);
+          return fp;
+        }
         const w = Array.isArray(genome.weights) ? genome.weights : [];
         const b = Array.isArray(genome.biases) ? genome.biases : [];
         const a = Array.isArray(genome.activations) ? genome.activations : [];
@@ -3439,11 +3497,20 @@
           mean_upright: entry.primaryRollout.mean_upright,
           frames: entry.primaryRollout.frames,
           vx_trace: entry.primaryRollout.vx_trace,
+          bodyPoses: entry.primaryRollout.bodyPoses,
+          poseStride: entry.primaryRollout.poseStride,
+          stepTrace: entry.primaryRollout.stepTrace,
         } : null;
         pendingImageWrites.set(evalDbKey(taskId, seeds, entry.fp), {
           key: evalDbKey(taskId, seeds, entry.fp),
           size: 0,
-          val: { fp: entry.fp, summary: entry.summary, primaryRollout: ro, engine: entry.engine },
+          val: {
+            fp: entry.fp,
+            summary: entry.summary,
+            primaryRollout: ro,
+            trajSample: entry.trajSample || null,
+            engine: entry.engine,
+          },
           createdAt: Date.now(),
         });
         if (imageFlushTimer === null) imageFlushTimer = setTimeout(flushImageWrites, 200);
@@ -3456,7 +3523,7 @@
         const checks = [];
         const seen = new Set();
         for (const g of genomes) {
-          if (!g || !Array.isArray(g.weights)) continue;
+          if (!hasGenomePayload(g)) continue;
           const fp = genomeFingerprint(g);
           const mapKey = `${taskId}:${fp}`;
           if (seen.has(mapKey) || targetMap.has(mapKey)) continue;
@@ -3861,6 +3928,7 @@
       const simModeClientBtn = document.getElementById("sim-mode-client-btn");
       const simModeServerBtn = document.getElementById("sim-mode-server-btn");
       const crowdTrustPillEl = document.getElementById("crowd-trust-pill");
+      const autoEvolveBtn = document.getElementById("auto-evolve-btn");
       const workerBannerEl = document.getElementById("worker-banner");
       const workerStatusPillEl = document.getElementById("worker-status-pill");
       const workerCmdTextEl = document.getElementById("worker-cmd-text");
@@ -3869,10 +3937,34 @@
       const workerDlScriptBtn = document.getElementById("worker-dl-script-btn");
       const workerCopyCmdBtn = document.getElementById("worker-copy-cmd-btn");
 
-      const simResultCache = new Map(); // `${taskId}:${fp}` -> { fp, summary, primaryRollout, engine }
+      const sceneVisualPackCache = new Map(); // taskId -> parsed DETVIS1 visualPack
+      const sceneVisualLoadPromises = new Map(); // taskId -> Promise<visualPack|null>
+
+      function ensureSceneVisualResources(taskId) {
+        if (!isSceneTask(taskId)) return Promise.resolve(null);
+        if (sceneVisualPackCache.has(taskId) && window.DetMujocoGL) {
+          return Promise.resolve(sceneVisualPackCache.get(taskId));
+        }
+        if (sceneVisualLoadPromises.has(taskId)) return sceneVisualLoadPromises.get(taskId);
+        const spec = getTaskSpec(taskId);
+        const p = Promise.all([
+          ensureAssetScript(ASSET_URLS.mujocoGl).catch(() => {}),
+          window.DetSceneCache && spec.sceneManifest
+            ? window.DetSceneCache.loadSceneVisualPack(basePath, spec.sceneManifest).catch(() => null)
+            : Promise.resolve(null),
+        ]).then(([, pack]) => {
+          sceneVisualLoadPromises.delete(taskId);
+          if (pack) sceneVisualPackCache.set(taskId, pack);
+          return pack || null;
+        });
+        sceneVisualLoadPromises.set(taskId, p);
+        return p;
+      }
+
+      const simResultCache = new Map(); // `${taskId}:${fp}` -> { fp, summary, primaryRollout, trajSample, engine }
       const lineageThumbCache = new Map(); // `${taskId}:${fp}` -> { fp, summary, primaryRollout }
       const externalEvalCache = new Map(); // `${goal}:${gen}:${shaOrFp}` -> { hash, summary, posterDataUrl, topology }
-      const crowdEvalCache = new Map(); // `${goal}:${gen}:${sha}` -> { hash, summary, trust }
+      const crowdEvalCache = new Map(); // `${goal}:${gen}:${sha}` -> { hash, summary, trust, primaryRollout }
       const crowdSubmittedKeys = new Set();
       let crowdContributorState = {
         reputation: typeof crowdConfig.initialReputation === "number" ? crowdConfig.initialReputation : 0.8,
@@ -3909,6 +4001,7 @@
       }
 
       function decodePolicyForTask(genome, taskId) {
+        if (!genome || genome.kind === "populora" || isPopuloraTask(taskId)) return null;
         const spec = getTaskSpec(taskId);
         const dims = [spec.obsDim || 4, ...(spec.hiddenDims || [8]), spec.actionDim || 1];
         if (window.DetCppnCore && typeof window.DetCppnCore.decodeHyperNeatWeights === "function") {
@@ -4096,6 +4189,37 @@
         crowdTrustPillEl.title = `Crowd WASM/WebGPU consensus: ${verified}/${total} verified (quorum ${quorum}, peer trust ${repPct}%)`;
       }
 
+      function syncAutoEvolveUI(goal, specOverride = null) {
+        if (!autoEvolveBtn) return;
+        const spec = specOverride || (goal ? getTaskSpec(goalTaskId(goal)) : null);
+        const supported = Boolean((goal && goal.simPhaseEnabled) || (spec && spec.simPhaseEnabled));
+        autoEvolveBtn.hidden = !supported;
+        if (!supported) return;
+        const enabled = Boolean(goal && goal.autoEvolve);
+        autoEvolveBtn.classList.toggle("is-active", enabled);
+        autoEvolveBtn.disabled = !isConnected || !goal;
+        autoEvolveBtn.textContent = enabled ? "Auto-Evolve: On" : "Auto-Evolve: Off";
+        autoEvolveBtn.title = enabled
+          ? "Auto-Evolve ON — immediately breeds next PopuLoRA generation once all browser simulations verify (click for Two-Phase voting)"
+          : "Two-Phase mode — Phase 1 simulates in browser WASM, Phase 2 opens voting (click to enable hands-free Auto-Evolve)";
+      }
+
+      if (autoEvolveBtn) {
+        autoEvolveBtn.addEventListener("click", () => {
+          const goal = goalsByName.get(activeGoalName);
+          if (!goal || !socket || socket.readyState !== WebSocket.OPEN) return;
+          const nextEnabled = !goal.autoEvolve;
+          goal.autoEvolve = nextEnabled;
+          syncAutoEvolveUI(goal);
+          renderRoundStatus();
+          socket.send(JSON.stringify({
+            type: "set_auto_evolve",
+            goal: goal.name,
+            enabled: nextEnabled,
+          }));
+        });
+      }
+
       function syncSimModeUI(taskId) {
         const spec = getTaskSpec(taskId);
         if (!simModeBarEl) return;
@@ -4105,13 +4229,14 @@
         if (!showBar) return;
         const isClientLocked = modes.length === 1 && modes[0] === "client";
         const effMode = getEffectiveSimMode(taskId);
+        const wasmTask = isWasmSimTask(taskId);
         simModeBarEl.classList.toggle("is-locked", isClientLocked);
         if (simModeClientBtn) {
           simModeClientBtn.hidden = false;
           simModeClientBtn.classList.toggle("active", effMode === "client");
           simModeClientBtn.disabled = isClientLocked;
           simModeClientBtn.textContent = isClientLocked
-            ? (taskId === "halfcheetah" ? "Client \u00b7 WASM" : "Client")
+            ? (wasmTask ? "Client \u00b7 WASM" : "Client")
             : "Client";
         }
         if (simModeServerBtn) {
@@ -4129,10 +4254,12 @@
           if (effMode === "server") simEngineLabelEl.textContent = "Server";
           else if (simEngineStatus === "fallback") simEngineLabelEl.textContent = "Server (fallback)";
           else if (isClientLocked) simEngineLabelEl.textContent = "Locked";
-          else simEngineLabelEl.textContent = taskId === "halfcheetah" ? "Client \u00b7 WASM" : "Client \u00b7 JS";
+          else simEngineLabelEl.textContent = wasmTask ? "Client \u00b7 WASM" : "Client \u00b7 JS";
         }
         const g = goalsByName.get(activeGoalName);
-        updateCrowdTrustPill(g && goalTaskId(g) === taskId ? g : null, spec);
+        const activeG = g && goalTaskId(g) === taskId ? g : null;
+        updateCrowdTrustPill(activeG, spec);
+        syncAutoEvolveUI(activeG, spec);
       }
 
       const SIM_POOL_MAX = Math.min(4, Math.max(2, Math.floor((Number(navigator.hardwareConcurrency) || 4) / 2)));
@@ -4146,6 +4273,8 @@
           slot.worker = null;
         }
         slot.initPromise = null;
+        if (slot.mountedScenes) slot.mountedScenes.clear();
+        if (slot.loadedBaseHashes) slot.loadedBaseHashes.clear();
         for (const { reject, timer } of slot.pending.values()) {
           clearTimeout(timer);
           reject(new Error(reason || "Simulation worker reset"));
@@ -4178,11 +4307,17 @@
           return Promise.reject(new Error("Web Workers unsupported in this browser."));
         }
         while (simPool.length <= idx) {
-          simPool.push({ worker: null, initPromise: null, pending: new Map() });
+          simPool.push({
+            worker: null,
+            initPromise: null,
+            pending: new Map(),
+            mountedScenes: new Set(),
+            loadedBaseHashes: new Set(),
+          });
         }
         const slot = simPool[idx];
         if (slot.initPromise) return slot.initPromise;
-        const w = new Worker(`${basePath}/assets/sim_worker.js`, { type: "module" });
+        const w = new Worker(`${basePath}/assets/sim_worker.js?v=${assetVer}`, { type: "module" });
         slot.worker = w;
         w.addEventListener("message", (ev) => {
           const msg = ev.data || {};
@@ -4198,6 +4333,7 @@
         });
         slot.initPromise = callSimWorkerSlot(slot, "init", {
           taskSpecs,
+          basePath,
           mujocoWasmUrl,
           cheetahXmlUrl: `${basePath}/assets/half_cheetah.xml`,
           warmMujoco,
@@ -4214,16 +4350,68 @@
         return callSimWorkerSlot(simPool[slotIdx], type, payload, timeoutMs);
       }
 
-      async function callSimWorkerPoolEval(taskId, genomes, evalSeeds, timeoutMs = 45000) {
-        const maxPool = taskId === "halfcheetah"
+      async function prepareSharedSimAssets(taskId, genomes) {
+        const spec = getTaskSpec(taskId);
+        const out = { baseModel: null, baseHash: "", physicsBuffer: null, sceneId: "" };
+        if (!window.DetSceneCache) return out;
+        const tasks = [];
+        if (isPopuloraTask(taskId)) {
+          const first = Array.isArray(genomes) ? genomes.find((g) => g && g.baseHash) : null;
+          const bHash = first ? String(first.baseHash) : "";
+          tasks.push(
+            window.DetSceneCache.loadPopuloraBaseModel(basePath, taskId, bHash).then((bm) => {
+              out.baseModel = bm;
+              out.baseHash = (bm && bm.baseHash) || bHash;
+            })
+          );
+        }
+        if (spec.sceneManifest && spec.sceneManifest.sceneId) {
+          out.sceneId = String(spec.sceneManifest.sceneId);
+          tasks.push(
+            window.DetSceneCache.loadScenePhysicsBuffer(basePath, spec.sceneManifest).then((buf) => {
+              out.physicsBuffer = buf;
+            })
+          );
+        }
+        if (tasks.length) await Promise.all(tasks);
+        return out;
+      }
+
+      function slotExtraAssets(slot, shared) {
+        const extra = {};
+        if (!slot || !shared) return extra;
+        if (shared.baseModel && shared.baseHash && !slot.loadedBaseHashes.has(shared.baseHash)) {
+          extra.baseModel = shared.baseModel;
+        }
+        if (shared.physicsBuffer && shared.sceneId && !slot.mountedScenes.has(shared.sceneId)) {
+          extra.physicsBuffer = shared.physicsBuffer;
+        }
+        return extra;
+      }
+
+      function markSlotAssetsLoaded(slot, shared) {
+        if (!slot || !shared) return;
+        if (shared.baseModel && shared.baseHash) slot.loadedBaseHashes.add(shared.baseHash);
+        if (shared.physicsBuffer && shared.sceneId) slot.mountedScenes.add(shared.sceneId);
+      }
+
+      async function callSimWorkerPoolEval(taskId, genomes, evalSeeds, timeoutMs = 60000) {
+        const wasmTask = isWasmSimTask(taskId);
+        const maxPool = wasmTask
           ? (genomes.length >= 6 ? Math.min(2, SIM_POOL_MAX) : 1)
           : SIM_POOL_MAX;
         const poolCount = genomes.length >= 2 ? Math.min(maxPool, genomes.length) : 1;
+        const shared = await prepareSharedSimAssets(taskId, genomes);
         if (poolCount === 1) {
-          return callSimWorker("evalBatch", { taskId, genomes, seeds: evalSeeds }, timeoutMs, 0);
+          await ensureSimWorkerSlot(0, wasmTask);
+          const slot0 = simPool[0];
+          const extra0 = slotExtraAssets(slot0, shared);
+          const resp0 = await callSimWorkerSlot(slot0, "evalBatch", { taskId, genomes, seeds: evalSeeds, ...extra0 }, timeoutMs);
+          markSlotAssetsLoaded(slot0, shared);
+          return resp0;
         }
-        // Warm slot 0 first so mujoco.wasm + XML land in HTTP immutable cache before parallel slots spin up.
-        await ensureSimWorkerSlot(0, taskId === "halfcheetah");
+        // Warm slot 0 first so mujoco.wasm lands in HTTP immutable cache before parallel slots spin up.
+        await ensureSimWorkerSlot(0, wasmTask);
         await Promise.all(Array.from({ length: poolCount - 1 }, (_, k) => ensureSimWorkerSlot(k + 1, false)));
         const buckets = Array.from({ length: poolCount }, () => []);
         const bucketIdx = Array.from({ length: poolCount }, () => []);
@@ -4233,7 +4421,13 @@
           bucketIdx[wIdx].push(i);
         });
         const responses = await Promise.all(
-          buckets.map((sub, k) => callSimWorkerSlot(simPool[k], "evalBatch", { taskId, genomes: sub, seeds: evalSeeds }, timeoutMs))
+          buckets.map(async (sub, k) => {
+            const slot = simPool[k];
+            const extra = slotExtraAssets(slot, shared);
+            const r = await callSimWorkerSlot(slot, "evalBatch", { taskId, genomes: sub, seeds: evalSeeds, ...extra }, timeoutMs);
+            markSlotAssetsLoaded(slot, shared);
+            return r;
+          })
         );
         const merged = new Array(genomes.length);
         let engine = "";
@@ -4311,7 +4505,8 @@
         const evalSeeds = Array.isArray(seeds) && seeds.length ? seeds : (spec.evalSeeds || [0, 1]);
         const isDefault = !seeds;
 
-        if (isDefault && effMode === "client" && taskId === "halfcheetah") {
+        const wasmTask = isWasmSimTask(taskId);
+        if (isDefault && effMode === "client" && wasmTask) {
           await hydrateControlEvalsFromDb(taskId, genomes, evalSeeds, simResultCache);
         }
 
@@ -4356,10 +4551,10 @@
 
         const runPromise = (async () => {
           let items = null;
-          let engineUsed = effMode === "server" ? "server" : (taskId === "halfcheetah" ? "client-wasm" : "client-js");
+          let engineUsed = effMode === "server" ? "server" : (wasmTask ? "client-wasm" : "client-js");
           if (effMode === "client") {
             try {
-              const resp = await callSimWorkerPoolEval(taskId, missing, evalSeeds, 45000);
+              const resp = await callSimWorkerPoolEval(taskId, missing, evalSeeds, 60000);
               items = resp.items;
               engineUsed = resp.engine || engineUsed;
               simEngineStatus = engineUsed;
@@ -4385,12 +4580,13 @@
               fp: missingIdx[mIdx].fp,
               summary: norm,
               primaryRollout: it.primaryRollout || null,
+              trajSample: it.trajSample || null,
               engine: engineUsed,
             };
             if (isDefault) {
               if (simResultCache.size > 2000) simResultCache.clear();
               simResultCache.set(`${taskId}:${entry.fp}`, entry);
-              if (taskId === "halfcheetah" && engineUsed !== "server") {
+              if (wasmTask && engineUsed !== "server") {
                 queueControlEvalPersist(taskId, evalSeeds, entry);
               }
             }
@@ -4453,7 +4649,11 @@
         }
         if (effMode === "client" && taskId !== "external") {
           try {
-            const resp = await callSimWorker("rollout", {
+            const shared = await prepareSharedSimAssets(taskId, [genome]);
+            await ensureSimWorkerSlot(0, isWasmSimTask(taskId));
+            const slot0 = simPool[0];
+            const extra0 = slotExtraAssets(slot0, shared);
+            const resp = await callSimWorkerSlot(slot0, "rollout", {
               taskId,
               genome,
               seed,
@@ -4461,7 +4661,9 @@
               nudge,
               includeActivations,
               includeGeoms,
-            });
+              ...extra0,
+            }, 45000);
+            markSlotAssetsLoaded(slot0, shared);
             simEngineStatus = resp.engine || "client-wasm";
             syncSimModeUI(taskId);
             return resp.rollout;
@@ -4480,7 +4682,10 @@
         if (typeof quorumHint === "number" && quorumHint > 0) crowdConfig.quorum = quorumHint;
         for (const it of items) {
           if (!it || !it.hash) continue;
-          crowdEvalCache.set(`${goalName}:${generation}:${it.hash}`, it);
+          const stored = it.replay && !it.primaryRollout
+            ? { ...it, primaryRollout: it.replay }
+            : it;
+          crowdEvalCache.set(`${goalName}:${generation}:${it.hash}`, stored);
         }
       }
 
@@ -4900,9 +5105,107 @@
         },
       };
 
+      function renderPopuloraThumb(genome, canvas) {
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.fillStyle = "#0b0b10";
+        ctx.fillRect(0, 0, w, h);
+        const seedHex = String((genome && (genome.hash || genome.baseHash)) || "a5c3f190");
+        let seed = 0x811c9dc5;
+        for (let i = 0; i < seedHex.length; i++) {
+          seed = Math.imul(seed ^ seedHex.charCodeAt(i), 16777619) >>> 0;
+        }
+        const cols = 4;
+        const pad = Math.max(2, Math.round(w * 0.1));
+        const cell = (w - pad * 2) / cols;
+        for (let r = 0; r < cols; r++) {
+          for (let c = 0; c < cols; c++) {
+            seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+            const v = ((seed >>> 16) & 0xff) / 255;
+            ctx.fillStyle = (seed & 1)
+              ? `rgba(52, 211, 153, ${(0.18 + 0.72 * v).toFixed(2)})`
+              : `rgba(56, 189, 248, ${(0.16 + 0.68 * v).toFixed(2)})`;
+            ctx.fillRect(pad + c * cell + 0.5, pad + r * cell + 0.5, Math.max(1, cell - 1), Math.max(1, cell - 1));
+          }
+        }
+      }
+
+      const sceneTaskRenderers = new Map();
+      function getSceneTaskRenderer(taskId) {
+        if (sceneTaskRenderers.has(taskId)) return sceneTaskRenderers.get(taskId);
+        const r = {
+          preload(genomes) {
+            return Promise.all([
+              ensureSceneVisualResources(taskId),
+              evaluateControlGenomes(taskId, genomes || []).catch(() => []),
+            ]);
+          },
+          renderCard(genome, canvas, evalEntry) {
+            canvas.width = CONTROL_CARD_SIZE;
+            canvas.height = CONTROL_CARD_SIZE;
+            const pack = sceneVisualPackCache.get(taskId) || null;
+            if (window.DetMujocoGL && typeof window.DetMujocoGL.renderSceneCardStatic === "function") {
+              window.DetMujocoGL.renderSceneCardStatic(
+                canvas,
+                pack,
+                evalEntry ? evalEntry.summary : null,
+                evalEntry ? evalEntry.primaryRollout : null
+              );
+              if (!pack) {
+                ensureSceneVisualResources(taskId).then((loaded) => {
+                  if (loaded && canvas.isConnected) {
+                    window.DetMujocoGL.renderSceneCardStatic(
+                      canvas,
+                      loaded,
+                      evalEntry ? evalEntry.summary : null,
+                      evalEntry ? evalEntry.primaryRollout : null
+                    );
+                  }
+                });
+              }
+              return;
+            }
+            const ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#09090b";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#71717a";
+            ctx.font = "600 10px ui-monospace, SFMono-Regular, Menlo, monospace";
+            ctx.textAlign = "center";
+            ctx.fillText(
+              evalEntry && evalEntry.summary && evalEntry.summary.primaryDisplay
+                ? evalEntry.summary.primaryDisplay
+                : "loading 3D...",
+              canvas.width * 0.5,
+              canvas.height * 0.52
+            );
+            ensureSceneVisualResources(taskId).then(() => {
+              if (canvas.isConnected && window.DetMujocoGL) {
+                r.renderCard(genome, canvas, evalEntry);
+              }
+            });
+          },
+          renderLineageNode(node, canvas) {
+            canvas.width = LINEAGE_CANVAS_SIZE;
+            canvas.height = LINEAGE_CANVAS_SIZE;
+            const cached = getControlLineageEntry(taskId, node);
+            const pack = sceneVisualPackCache.get(taskId) || null;
+            if (cached && pack && window.DetMujocoGL && typeof window.DetMujocoGL.renderSceneCardStatic === "function") {
+              window.DetMujocoGL.renderSceneCardStatic(canvas, pack, cached.summary, cached.primaryRollout);
+              return;
+            }
+            renderPopuloraThumb(node, canvas);
+          },
+        };
+        sceneTaskRenderers.set(taskId, r);
+        return r;
+      }
+
       function getTaskRenderer(goalOrTask) {
         const tid = typeof goalOrTask === "string" ? goalOrTask : goalTaskId(goalOrTask);
-        return TaskRenderers[tid] || TaskRenderers.image;
+        if (TaskRenderers[tid]) return TaskRenderers[tid];
+        if (isSceneTask(tid)) return getSceneTaskRenderer(tid);
+        return TaskRenderers.image;
       }
 
       let preferredUsername = localStorage.getItem("det_username") || "";
@@ -5369,9 +5672,12 @@
           evolveNowBtn.hidden = !showEvolveNow;
           evolveNowBtn.disabled = !showEvolveNow;
         }
+        syncAutoEvolveUI(goal);
 
-        if (goal.evolving) {
-          roundVoteText.textContent = progressLabel;
+        if (goal.evolving || goal.phase === "evolving") {
+          roundVoteText.textContent = goal.autoEvolve
+            ? `PopuLoRA evolving Gen ${goal.generation + 1}...`
+            : progressLabel;
           roundTimerEl.textContent = "Evolving next generation...";
           roundTimerEl.className = "round-timer";
           roundProgressEl.style.width = "100%";
@@ -5380,10 +5686,31 @@
           return false;
         }
 
+        if (goal.simPhaseEnabled && goal.phase === "simulating") {
+          const simTotal = Math.max(1, Number(goal.simTotal || popLen || 1));
+          let localVerified = 0;
+          for (const g of (goal.genomes || [])) {
+            const ce = getCrowdTrustEntry(goal.name, goal.generation, g);
+            if (ce && ce.trust && ce.trust.status === "verified") localVerified += 1;
+          }
+          const simDone = Math.min(simTotal, Math.max(Number(goal.simCompleted || 0), localVerified));
+          const simPct = Math.max(4, Math.min(100, (simDone / simTotal) * 100));
+          roundVoteText.textContent = `Phase 1 \u00b7 Simulating (${simDone}/${simTotal} verified)`;
+          roundTimerEl.textContent = goal.autoEvolve
+            ? "Auto-evolving once verified..."
+            : "Browser WASM crowd simulation \u2014 voting unlocks next";
+          roundTimerEl.className = "round-timer waiting";
+          roundProgressEl.style.width = `${simPct}%`;
+          roundProgressEl.classList.remove("counting");
+          stopRoundStatusTimer();
+          return false;
+        }
+
+        const phasePrefix = goal.simPhaseEnabled ? "Phase 2 \u00b7 " : "";
         if (countdownActive) {
           const remMs = Math.max(0, goal._deadlinePerfMs - performance.now());
           const pct = Math.max(0, Math.min(100, (remMs / durMs) * 100));
-          roundVoteText.textContent = `Countdown active (${votedCandidates} cards, ${totalVotes} votes)`;
+          roundVoteText.textContent = `${phasePrefix}Countdown active (${votedCandidates} cards, ${totalVotes} votes)`;
           roundTimerEl.textContent = remMs <= 50
             ? "Evolving next generation..."
             : `Advancing in ${(remMs / 1000).toFixed(1)}s`;
@@ -5399,7 +5726,7 @@
         } else {
           const remaining = Math.max(0, minVotes - progressCount);
           const pct = Math.max(0, Math.min(100, (progressCount / minVotes) * 100));
-          roundVoteText.textContent = progressLabel;
+          roundVoteText.textContent = `${phasePrefix}${progressLabel}`;
           if (remaining === 0 && likedCandidates < 1) {
             roundTimerEl.textContent = "Need at least 1 positive vote";
           } else if (countByTotalVotes) {
@@ -5563,14 +5890,20 @@
           const downBtn = card.querySelector(".down-btn");
           const upUsers = Array.isArray(v.upUsers) ? v.upUsers : [];
           const downUsers = Array.isArray(v.downUsers) ? v.downUsers : [];
+          const simPhaseLocked = Boolean(goal.simPhaseEnabled && goal.phase === "simulating");
+          const simLockNote = "Phase 1 simulating in browser WASM \u2014 voting opens once verified";
           const capBlocked = !voted && atLimit;
           const capNote = `Max ${maxVotesPerUser} active votes per round — unvote one to switch`;
-          const upTooltip = capBlocked
-            ? capNote
-            : (upUsers.length > 0 ? `Likes: ${upUsers.join(", ")}` : "Like (+1)");
-          const downTooltip = capBlocked
-            ? capNote
-            : (downUsers.length > 0 ? `Dislikes: ${downUsers.join(", ")}` : "Dislike (-1)");
+          const upTooltip = simPhaseLocked
+            ? simLockNote
+            : capBlocked
+              ? capNote
+              : (upUsers.length > 0 ? `Likes: ${upUsers.join(", ")}` : "Like (+1)");
+          const downTooltip = simPhaseLocked
+            ? simLockNote
+            : capBlocked
+              ? capNote
+              : (downUsers.length > 0 ? `Dislikes: ${downUsers.join(", ")}` : "Dislike (-1)");
           upBtn.setAttribute("title", upTooltip);
           upBtn.setAttribute("data-tooltip", upTooltip);
           downBtn.setAttribute("title", downTooltip);
@@ -5579,8 +5912,8 @@
           downBtn.querySelector(".cnt").textContent = String(v.down);
           upBtn.classList.toggle("active-up", mine === 1);
           downBtn.classList.toggle("active-down", mine === -1);
-          upBtn.disabled = !isConnected || goal.evolving || capBlocked;
-          downBtn.disabled = !isConnected || goal.evolving || capBlocked;
+          upBtn.disabled = !isConnected || goal.evolving || simPhaseLocked || capBlocked;
+          downBtn.disabled = !isConnected || goal.evolving || simPhaseLocked || capBlocked;
         });
 
         tabAllCountEl.textContent = String(cards.length);
@@ -5593,6 +5926,10 @@
 
       function sendVote(goal, idx, val) {
         if (!socket || socket.readyState !== WebSocket.OPEN || goal.evolving) return;
+        if (goal.simPhaseEnabled && goal.phase === "simulating") {
+          showThrottleNotice("Client simulation phase in progress — voting unlocks once candidates are verified.");
+          return;
+        }
         const k = voteKey(goal.name, goal.generation, idx);
         const prev = myVotes.get(k) || 0;
         const maxVotesPerUser = goal.maxVotesPerUser || initialMaxVotes || 5;
@@ -5743,9 +6080,16 @@
         const stateObj = { raf: 0, genome, canvas, taskId, rollout: null };
         activeHoverAnim = stateObj;
 
-        const cached = getCachedControlEntry(taskId, genome);
+        const sceneTask = isSceneTask(taskId);
+        if (sceneTask) ensureSceneVisualResources(taskId).catch(() => {});
+        const activeGoal = goalsByName.get(activeGoalName);
+        const crowdFallback = activeGoal && goalTaskId(activeGoal) === taskId
+          ? getCrowdTrustEntry(activeGoal.name, activeGoal.generation, genome)
+          : null;
+        const cached = getCachedControlEntry(taskId, genome) || crowdFallback;
         if (cached && cached.primaryRollout) {
           stateObj.rollout = cached.primaryRollout;
+          stateObj.summary = cached.summary || null;
         } else {
           const seed = Array.isArray(spec.evalSeeds) && spec.evalSeeds.length ? spec.evalSeeds[0] : 0;
           fetchTaskRollout(taskId, genome, seed, maxSteps, null, false)
@@ -5765,7 +6109,25 @@
             stateObj.raf = requestAnimationFrame(tick);
             return;
           }
-          if (taskId === "halfcheetah" && ro.frames && ro.frames.length > 0 && window.DetCheetahRenderer) {
+          if (sceneTask && Array.isArray(ro.bodyPoses) && ro.bodyPoses.length > 0 && window.DetMujocoGL) {
+            const pack = sceneVisualPackCache.get(taskId);
+            if (pack) {
+              const frameDt = dt * Math.max(1, Number(ro.poseStride || 1));
+              const elapsedFrames = Math.max(0, Math.floor(((now - startPerf) / 1000) / frameDt));
+              const frameIdx = elapsedFrames % ro.bodyPoses.length;
+              if (frameIdx !== lastFrameIdx) {
+                lastFrameIdx = frameIdx;
+                window.DetMujocoGL.renderSceneCardLiveFrame(
+                  canvas,
+                  pack,
+                  ro,
+                  frameIdx,
+                  maxSteps,
+                  stateObj.summary || null
+                );
+              }
+            }
+          } else if (taskId === "halfcheetah" && ro.frames && ro.frames.length > 0 && window.DetCheetahRenderer) {
             const elapsedSteps = Math.max(0, Math.floor(((now - startPerf) / 1000) / dt));
             const frameIdx = elapsedSteps % ro.frames.length;
             if (frameIdx !== lastFrameIdx) {
@@ -5842,6 +6204,8 @@
         const maxSteps = spec.maxSteps || CARTPOLE_MAX_STEPS;
         if (!spec.crowdContribute) return;
         updateCrowdTrustPill(goal, spec);
+        renderRoundStatus();
+        const renderer = getTaskRenderer(taskId);
         const cards = genomeGridEl.querySelectorAll(".genome-card[data-idx]");
         cards.forEach((card) => {
           const idx = Number(card.dataset.idx);
@@ -5855,6 +6219,13 @@
           if (!eff && badge.dataset.queued === "1") return;
           delete badge.dataset.queued;
           applySummaryToCardBadge(badge, eff ? eff.summary : null, taskId, maxSteps, spec, crowdEnt ? crowdEnt.trust : null);
+          if (!localEnt && crowdEnt && crowdEnt.primaryRollout) {
+            const cvs = card.querySelector("canvas");
+            if (cvs && card.dataset.peerRendered !== "1") {
+              card.dataset.peerRendered = "1";
+              renderer.renderCard(g, cvs, crowdEnt);
+            }
+          }
         });
       }
 
@@ -5866,7 +6237,7 @@
       function refreshControlLineageNodes(goal) {
         if (!goal || goal.name !== activeGoalName || !lineageColumnsEl) return;
         const taskId = goalTaskId(goal);
-        if (taskId !== "halfcheetah") return;
+        if (!isWasmSimTask(taskId)) return;
         const spec = getTaskSpec(taskId);
         const renderer = getTaskRenderer(taskId);
         lineageColumnsEl.querySelectorAll(".lineage-node[data-fp]").forEach((el) => {
@@ -5904,6 +6275,17 @@
         }
       }
 
+      function buildCompactCrowdReplay(entry) {
+        if (!entry || !entry.primaryRollout) return null;
+        const ro = entry.primaryRollout;
+        if (!Array.isArray(ro.bodyPoses) || !ro.bodyPoses.length) return null;
+        return {
+          bodyPoses: ro.bodyPoses,
+          poseStride: ro.poseStride || 1,
+          vx_trace: ro.vx_trace || [],
+        };
+      }
+
       async function hydrateCrowdControlGoal(goalSnap, cardRefs, renderer, maxSteps, spec, renderTokenSnap) {
         const taskId = goalTaskId(goalSnap);
         const isStale = () => renderTokenSnap !== activeGoalRenderToken || goalsByName.get(activeGoalName) !== goalSnap;
@@ -5914,11 +6296,13 @@
           Promise.all(goalSnap.genomes.map(ensureGenomeSha256)),
           hydrateControlEvalsFromDb(taskId, goalSnap.genomes, evalSeeds, simResultCache),
           crowdConfig.enabled ? fetchCrowdRoomEvals(goalSnap) : Promise.resolve([]),
+          isSceneTask(taskId) ? ensureSceneVisualResources(taskId) : Promise.resolve(null),
         ]);
         if (isStale()) return;
 
         const pendingCrowdPosts = [];
-        const maybeQueueCrowdPost = (genome, summary, crowdEnt) => {
+        const maybeQueueCrowdPost = (genome, localEnt, crowdEnt) => {
+          const summary = localEnt && localEnt.summary;
           if (!summary || !crowdConfig.enabled || crowdContributorState.quarantined) return;
           const sha = getKnownGenomeSha(genome);
           if (!sha) return;
@@ -5928,7 +6312,13 @@
           const rate = Number(crowdConfig.spotCheckRate ?? 0.15);
           if (!isVerified || Math.random() < rate) {
             crowdSubmittedKeys.add(subKey);
-            pendingCrowdPosts.push({ hash: sha, summary });
+            const item = { hash: sha, summary };
+            if (Array.isArray(localEnt.trajSample) && localEnt.trajSample.length) {
+              item.trajSample = localEnt.trajSample;
+            }
+            const replay = buildCompactCrowdReplay(localEnt);
+            if (replay) item.replay = replay;
+            pendingCrowdPosts.push(item);
           }
         };
 
@@ -5946,10 +6336,11 @@
             r.simBadge.title = "Evaluating policy locally...";
           }
           if (localEnt) {
-            maybeQueueCrowdPost(r.genome, localEnt.summary, crowdEnt);
+            maybeQueueCrowdPost(r.genome, localEnt, crowdEnt);
           }
         });
         updateCrowdTrustPill(goalSnap, spec);
+        renderRoundStatus();
         refreshControlLineageNodes(goalSnap);
 
         const sortAndFinalize = () => {
@@ -5976,7 +6367,16 @@
             .catch(() => {});
         };
 
-        const missingRefs = cardRefs.filter((r) => !getCachedControlEntry(taskId, r.genome));
+        const missingRefs = cardRefs.filter((r) => {
+          if (getCachedControlEntry(taskId, r.genome)) return false;
+          // If another peer already verified this candidate during Phase 1, only spot-check at spotCheckRate
+          const ce = getCrowdTrustEntry(goalSnap.name, goalSnap.generation, r.genome);
+          if (ce && ce.trust && ce.trust.status === "verified" && ce.primaryRollout) {
+            const rate = Number(crowdConfig.spotCheckRate ?? 0.15);
+            return Math.random() < rate;
+          }
+          return true;
+        });
         if (!missingRefs.length) {
           sortAndFinalize();
           flushCrowdPostsAsync();
@@ -5984,7 +6384,7 @@
         }
 
         // Prioritize cards currently in or near the viewport first, then immediately evaluate
-        // any remaining cards so Distance sorting completes promptly without requiring scroll.
+        // any remaining cards so sorting and Phase 1 crowd consensus complete promptly.
         const viewH = window.innerHeight || document.documentElement.clientHeight || 900;
         const nearViewport = [];
         const offViewport = [];
@@ -6005,7 +6405,7 @@
         };
         const ordered = orderGroup(nearViewport).concat(orderGroup(offViewport));
 
-        const CHUNK = 6;
+        const CHUNK = isSceneTask(taskId) ? 4 : 6;
         for (let offset = 0; offset < ordered.length; offset += CHUNK) {
           if (isStale()) return;
           const chunk = ordered.slice(offset, offset + CHUNK);
@@ -6028,9 +6428,11 @@
               renderer.renderCard(r.genome, r.canvas, eff);
             }
             if (ent) {
-              maybeQueueCrowdPost(r.genome, ent.summary, crowdEnt);
+              maybeQueueCrowdPost(r.genome, ent, crowdEnt);
             }
           });
+          // Flush each chunk's attestations promptly so live peer progress updates in real time!
+          flushCrowdPostsAsync();
           refreshControlLineageNodes(goalSnap);
           if (offset + CHUNK < ordered.length) {
             await new Promise((resolve) => setTimeout(resolve, 0));
@@ -6474,7 +6876,7 @@
       function scheduleLazyLineageThumbs(goal, candidates) {
         clearLineageThumbObserver();
         const taskId = goalTaskId(goal);
-        if (taskId !== "halfcheetah" || !candidates.length) return;
+        if (!isWasmSimTask(taskId) || !candidates.length) return;
         const spec = getTaskSpec(taskId);
         const evalSeeds = spec.evalSeeds || [0, 1];
         const thumbSeed = evalSeeds.length ? evalSeeds[0] : 0;
@@ -6632,13 +7034,14 @@
           for (const node of colNodes) {
             const op = LINEAGE_OP_META[node.op] ? node.op : "random";
             const opMeta = LINEAGE_OP_META[op];
-            const hasWeights = Array.isArray(node.weights);
+            const hasPayload = hasGenomePayload(node);
+            const isPopNode = node.kind === "populora";
             let nodeTooltipExtra = "";
-            if (hasWeights && taskId === "cartpole") {
+            if (hasPayload && taskId === "cartpole") {
               const cpSum = evaluateCartpoleSummary(node);
               nodeTooltipExtra = ` · ${cpSum.meanSteps}/${CARTPOLE_MAX_STEPS} steps`;
-            } else if (hasWeights && taskId === "halfcheetah") {
-              const cachedEnt = getControlLineageEntry("halfcheetah", node);
+            } else if ((hasPayload || isPopNode) && isWasmSimTask(taskId)) {
+              const cachedEnt = getControlLineageEntry(taskId, node);
               if (cachedEnt && cachedEnt.summary && cachedEnt.summary.primaryDisplay) {
                 nodeTooltipExtra = ` · ${cachedEnt.summary.primaryDisplay}`;
               }
@@ -6655,16 +7058,18 @@
             const cvs = document.createElement("canvas");
             cvs.width = LINEAGE_CANVAS_SIZE;
             cvs.height = LINEAGE_CANVAS_SIZE;
-            if (hasWeights) {
+            if (hasPayload) {
               lineageRenderer.renderLineageNode(node, cvs);
-              if (taskId === "halfcheetah") {
+              if (isWasmSimTask(taskId)) {
                 el.dataset.fp = genomeFingerprint(node);
                 el._detNode = node;
                 el._detCanvas = cvs;
-                const existingEnt = getControlLineageEntry("halfcheetah", node);
+                const existingEnt = getControlLineageEntry(taskId, node);
                 if (existingEnt) el.dataset.thumbDone = "1";
                 else lazyThumbEls.push({ el, node, cvs });
               }
+            } else if (isPopNode) {
+              renderPopuloraThumb(node, cvs);
             } else {
               const lctx = cvs.getContext("2d");
               lctx.fillStyle = "#141418";
@@ -7005,12 +7410,19 @@
         const live = new Map();
         for (const genome of goal.genomes) live.set(genome.id, genome);
         for (const node of goal.lineage) {
-          if (Array.isArray(node.weights)) continue;
+          if (hasGenomePayload(node)) continue;
           const src = live.get(node.id);
-          if (src && Array.isArray(src.weights)) {
+          if (!src) continue;
+          if (Array.isArray(src.weights)) {
             node.weights = src.weights;
             node.biases = src.biases;
             node.activations = src.activations;
+          } else if (src.kind === "populora" && Array.isArray(src.adapters)) {
+            node.kind = "populora";
+            node.adapters = src.adapters;
+            node.hash = src.hash;
+            node.baseHash = src.baseHash;
+            node.rank = src.rank;
           }
         }
       }
@@ -7166,6 +7578,11 @@
             g.countdownMs = data.countdownMs || 0;
             g.countdownDurationMs = data.countdownDurationMs || 8000;
             g.evolving = Boolean(data.evolving);
+            if (typeof data.phase === "string") g.phase = data.phase;
+            if (typeof data.simPhaseEnabled === "boolean") g.simPhaseEnabled = data.simPhaseEnabled;
+            if (typeof data.simCompleted === "number") g.simCompleted = data.simCompleted;
+            if (typeof data.simTotal === "number") g.simTotal = data.simTotal;
+            if (typeof data.autoEvolve === "boolean") g.autoEvolve = data.autoEvolve;
             g.mutationSigma = data.mutationSigma;
             if (typeof data.populationSize === "number") {
               g.populationSize = data.populationSize;
@@ -7406,6 +7823,7 @@
       const seedRecentWrapEl = document.getElementById("seed-recent-wrap");
       const seedRecentListEl = document.getElementById("seed-recent-list");
       const MAX_CLIENT_PT_BYTES = 128 * 1024;
+      const MAX_CLIENT_POPULORA_PT_BYTES = 16 * 1024 * 1024;
       const MAX_CLIENT_ZIP_BYTES = 2 * 1024 * 1024;
       const MAX_CLIENT_TOTAL_BYTES = 4 * 1024 * 1024;
 
@@ -7423,22 +7841,23 @@
           btn.type = "button";
           btn.className = "seed-recent-pill";
           const alreadyAdded = stagedFps.has(item.fp);
-          const itemTask = item.task || (
-            /^halfcheetah_/i.test(item.label)
-              ? "halfcheetah"
-              : /^external_/i.test(item.label)
-                ? "external"
-                : /^cartpole_/i.test(item.label)
-                  ? "cartpole"
-                  : "image"
-          );
+          const lowerLabel = String(item.label || "").toLowerCase();
+          const matchedPrefix = Object.keys(taskSpecs)
+            .sort((a, b) => b.length - a.length)
+            .find((tid) => lowerLabel.startsWith(`${tid.toLowerCase()}_`));
+          const itemTask =
+            item.task ||
+            (item.genome && item.genome.task) ||
+            matchedPrefix ||
+            (item.genome && item.genome.kind === "populora" ? "microduck" : "image");
           btn.disabled = alreadyAdded || isValidatingStrains || isSubmittingRoom;
           btn.title = alreadyAdded ? `${item.label} already staged` : `Stage ${item.label}.pt (${itemTask})`;
 
           const cvs = document.createElement("canvas");
           cvs.width = 20;
           cvs.height = 20;
-          renderCppnToCanvas(item.genome, cvs, 20);
+          if (item.genome && item.genome.kind === "populora") renderPopuloraThumb(item.genome, cvs);
+          else renderCppnToCanvas(item.genome, cvs, 20);
           btn.appendChild(cvs);
 
           const nameSpan = document.createElement("span");
@@ -7505,7 +7924,8 @@
           const cvs = document.createElement("canvas");
           cvs.width = 34;
           cvs.height = 34;
-          renderCppnToCanvas(item.genome, cvs, 34);
+          if (item.genome && item.genome.kind === "populora") renderPopuloraThumb(item.genome, cvs);
+          else renderCppnToCanvas(item.genome, cvs, 34);
           chip.appendChild(cvs);
 
           const meta = document.createElement("div");
@@ -7543,11 +7963,16 @@
         const files = Array.from(fileList || []).filter(Boolean);
         if (files.length === 0 || isValidatingStrains) return;
 
+        const activeNewTask = newRoomTaskSelect ? newRoomTaskSelect.value : "image";
+        const isPopUpload = isPopuloraTask(activeNewTask);
         let batchBytes = 0;
         for (const f of files) {
           const lower = (f.name || "").toLowerCase();
-          const cap = lower.endsWith(".zip") ? MAX_CLIENT_ZIP_BYTES : MAX_CLIENT_PT_BYTES;
-          const capLabel = lower.endsWith(".zip") ? "2 MB" : "128 KB";
+          const isZip = lower.endsWith(".zip");
+          const cap = isPopUpload
+            ? MAX_CLIENT_POPULORA_PT_BYTES
+            : (isZip ? MAX_CLIENT_ZIP_BYTES : MAX_CLIENT_PT_BYTES);
+          const capLabel = isPopUpload ? "16 MB" : (isZip ? "2 MB" : "128 KB");
           if (typeof f.size === "number" && f.size > cap) {
             newRoomErrorEl.textContent = `${f.name}: File exceeds the ${capLabel} size limit.`;
             newRoomErrorEl.hidden = false;
@@ -7568,6 +7993,7 @@
         renderRecentDownloads();
 
         const formData = new FormData();
+        formData.append("task", activeNewTask);
         formData.append("existing_count", String(stagedStrains.length));
         for (const f of files) {
           formData.append("weights", f, f.name);
@@ -7651,6 +8077,15 @@
       });
       newRoomPopInput.addEventListener("input", () => {
         newRoomFormCtrls.popTouched = true;
+        if (newRoomMinVotesInput && !newRoomFormCtrls.minVotesTouched && newRoomTaskSelect) {
+          const spec = getTaskSpec(newRoomTaskSelect.value);
+          if (spec.simPhaseEnabled) {
+            const pVal = parseInt(newRoomPopInput.value, 10);
+            if (!Number.isNaN(pVal) && pVal >= 2) {
+              newRoomMinVotesInput.value = String(Math.max(1, Math.round(pVal / 2)));
+            }
+          }
+        }
         syncSeedCapacityState();
       });
       if (newRoomMinVotesInput) {
@@ -7842,6 +8277,15 @@
       if (emptyPopInput) {
         emptyPopInput.addEventListener("input", () => {
           emptyFormCtrls.popTouched = true;
+          if (emptyMinVotesInput && !emptyFormCtrls.minVotesTouched && emptyTaskSelect) {
+            const spec = getTaskSpec(emptyTaskSelect.value);
+            if (spec.simPhaseEnabled) {
+              const pVal = parseInt(emptyPopInput.value, 10);
+              if (!Number.isNaN(pVal) && pVal >= 2) {
+                emptyMinVotesInput.value = String(Math.max(1, Math.round(pVal / 2)));
+              }
+            }
+          }
         });
       }
       if (emptyMinVotesInput) {
@@ -8224,6 +8668,47 @@
         const parts = ensureFullscreenTelemetryParts(fsSimState.taskId);
         if (!parts) return;
 
+        if (isSceneTask(fsSimState.taskId)) {
+          const poseLen = Array.isArray(fsSimState.bodyPoses) ? fsSimState.bodyPoses.length : 0;
+          const idx = Math.min(fsSimState.step || 0, Math.max(0, poseLen - 1));
+          const stride = Math.max(1, Number(fsSimState.poseStride || 1));
+          const envStep = Math.min(fsSimState.maxSteps, idx * stride);
+          const trace = Array.isArray(fsSimState.stepTrace) && fsSimState.stepTrace.length
+            ? (fsSimState.stepTrace[Math.min(idx, fsSimState.stepTrace.length - 1)] || null)
+            : null;
+          let dxVal = trace ? Number(trace[0] || 0) : 0;
+          if (!trace && poseLen > 0 && fsSimState.bodyPoses[idx] && fsSimState.bodyPoses[0]) {
+            dxVal = Number(fsSimState.bodyPoses[idx][0] || 0) - Number(fsSimState.bodyPoses[0][0] || 0);
+          }
+          const retVal = trace ? Number(trace[1] || 0) : Number(fsSimState.rolloutReturn || 0);
+          const clearMmVal = trace ? Number(trace[2] || 0) : 0;
+          const vxVal = trace ? Number(trace[3] || 0) : 0;
+          const gaitVal = trace ? Number(trace[4] || 0) : 0;
+          const status = fsSimState.loading
+            ? "simulating..."
+            : fsSimState.nudgeTag
+              ? `nudge: ${fsSimState.nudgeTag}`
+              : (fsSimState.terminated && envStep < fsSimState.maxSteps)
+                ? "fell"
+                : (poseLen > 0 && idx >= poseLen - 1)
+                  ? "done"
+                  : fsSimState.playing
+                    ? "live"
+                    : "paused";
+          if (parts.step) parts.step.textContent = `${envStep}/${fsSimState.maxSteps}`;
+          if (parts.ret) parts.ret.textContent = `${retVal >= 0 ? "+" : ""}${retVal.toFixed(1)}`;
+          if (parts.dx) parts.dx.textContent = `${dxVal >= 0 ? "+" : ""}${dxVal.toFixed(2)}m`;
+          if (parts.dist) parts.dist.textContent = `${dxVal.toFixed(1)}cm`;
+          if (parts.vx) parts.vx.textContent = `${vxVal >= 0 ? "+" : ""}${vxVal.toFixed(2)}m/s`;
+          if (parts.clear) parts.clear.textContent = `${clearMmVal.toFixed(1)}mm`;
+          if (parts.lift) parts.lift.textContent = `${clearMmVal.toFixed(1)}mm`;
+          if (parts.ssup) parts.ssup.textContent = `${Math.round(gaitVal)}%`;
+          if (parts.feet) parts.feet.textContent = `${Math.round(gaitVal)}/4`;
+          if (parts.grip) parts.grip.textContent = gaitVal >= 1.5 ? "pinched" : (gaitVal >= 0.5 ? "touch" : "open");
+          if (parts.status) parts.status.textContent = status;
+          return;
+        }
+
         if (fsSimState.taskId === "halfcheetah") {
           const idx = fsSimState.step || 0;
           const frames = fsSimState.frames || [];
@@ -8273,6 +8758,13 @@
           ];
           const tr = forwardPolicyWithTrace(stateObj.decoded, obs);
           fsNetInspector.updateActivations(tr.activations);
+          return;
+        }
+        if (isSceneTask(stateObj.taskId) && Array.isArray(stateObj.stepActivations) && stateObj.stepActivations.length) {
+          const idx = Math.min(stateObj.step || 0, stateObj.stepActivations.length - 1);
+          if (stateObj.stepActivations[idx]) {
+            fsNetInspector.updateActivations(stateObj.stepActivations[idx]);
+          }
           return;
         }
         if (stateObj.taskId === "halfcheetah" && stateObj.frames && stateObj.frames.length) {
@@ -8357,10 +8849,84 @@
           });
       }
 
+      function paintFsSceneFrame(stateObj) {
+        if (!stateObj || !Array.isArray(stateObj.bodyPoses) || !stateObj.bodyPoses.length) return;
+        const idx = Math.min(stateObj.step || 0, stateObj.bodyPoses.length - 1);
+        const pack = sceneVisualPackCache.get(stateObj.taskId) || null;
+        if (pack && isFsGlReady()) {
+          const viewer = ensureFsMujocoViewer();
+          if (viewer && setFsCanvasMode(true)) {
+            viewer.renderSceneBodies(pack, stateObj.bodyPoses[idx]);
+            return;
+          }
+        }
+        setFsCanvasMode(false);
+        if (window.DetMujocoGL && typeof window.DetMujocoGL.renderSceneCardLiveFrame === "function") {
+          window.DetMujocoGL.renderSceneCardLiveFrame(
+            fsCanvasEl,
+            pack,
+            { bodyPoses: stateObj.bodyPoses, poseStride: stateObj.poseStride || 1 },
+            idx,
+            stateObj.maxSteps,
+            stateObj.summary || null
+          );
+        }
+      }
+
+      function loadSceneFullscreenRollout(stateObj, seed, nudgeId = null) {
+        const taskId = stateObj.taskId;
+        stateObj.loading = true;
+        stateObj.nudgeTag = nudgeId || "";
+        stateObj.bodyPoses = [];
+        stateObj.poseStride = 1;
+        stateObj.stepTrace = null;
+        stateObj.stepActivations = null;
+        stateObj.terminated = false;
+        stateObj.step = 0;
+        stateObj.doneAtPerf = 0;
+        renderFullscreenTelemetry(true);
+
+        Promise.all([
+          fetchTaskRollout(taskId, stateObj.genome, seed, stateObj.maxSteps, nudgeId, true, true),
+          ensureSceneVisualResources(taskId),
+        ])
+          .then(([ro]) => {
+            if (fsSimState !== stateObj || !ro) return;
+            stateObj.loading = false;
+            stateObj.seed = seed;
+            stateObj.bodyPoses = ro.bodyPoses || [];
+            stateObj.poseStride = ro.poseStride || 1;
+            stateObj.stepTrace = ro.stepTrace || null;
+            stateObj.vxTrace = ro.vx_trace || [];
+            stateObj.stepActivations = ro.stepActivations || null;
+            stateObj.rolloutReturn = ro.return || 0;
+            stateObj.terminated = Boolean(ro.terminated);
+            stateObj.step = 0;
+            stateObj.lastStepPerf = performance.now();
+            paintFsSceneFrame(stateObj);
+            paintFsLiveNetworkStep(stateObj);
+            renderFullscreenTelemetry(true);
+          })
+          .catch((err) => {
+            if (fsSimState !== stateObj) return;
+            stateObj.loading = false;
+            if (fsHeldoutStatusEl) {
+              fsHeldoutStatusEl.style.color = "var(--err)";
+              fsHeldoutStatusEl.textContent = err.message || "Browser WASM rollout failed.";
+              fsHeldoutStatusEl.hidden = false;
+            }
+            renderFullscreenTelemetry(true);
+          });
+      }
+
       function resetFullscreenEpisode(newSeed) {
         if (!fsSimState) return;
         const s = typeof newSeed === "number" ? newSeed : fsSimState.seed;
         fsSimState.seed = s;
+        if (isSceneTask(fsSimState.taskId)) {
+          loadSceneFullscreenRollout(fsSimState, s, null);
+          return;
+        }
         if (fsSimState.taskId === "halfcheetah") {
           loadCheetahFullscreenRollout(fsSimState, s, null);
           return;
@@ -8416,7 +8982,55 @@
         };
         fsSimState = stateObj;
 
-        if (taskId === "halfcheetah") {
+        if (isSceneTask(taskId)) {
+          const activeGoal = goalsByName.get(activeGoalName);
+          const crowdFallback = activeGoal && goalTaskId(activeGoal) === taskId
+            ? getCrowdTrustEntry(activeGoal.name, activeGoal.generation, genome)
+            : null;
+          const cached = getCachedControlEntry(taskId, genome) || crowdFallback;
+          stateObj.summary = cached ? cached.summary : null;
+          if (cached && cached.primaryRollout && Array.isArray(cached.primaryRollout.bodyPoses) && seed === (spec.evalSeeds?.[0] ?? 0)) {
+            const ro0 = cached.primaryRollout;
+            stateObj.bodyPoses = ro0.bodyPoses;
+            stateObj.poseStride = ro0.poseStride || 1;
+            stateObj.stepTrace = ro0.stepTrace || null;
+            stateObj.vxTrace = ro0.vx_trace || [];
+            stateObj.stepActivations = ro0.stepActivations || null;
+            stateObj.rolloutReturn = ro0.return || (stateObj.summary ? stateObj.summary.primaryValue : 0) || 0;
+            stateObj.terminated = Boolean(ro0.terminated);
+            ensureSceneVisualResources(taskId).then(() => {
+              if (fsSimState === stateObj) paintFsSceneFrame(stateObj);
+            });
+            paintFsSceneFrame(stateObj);
+            paintFsLiveNetworkStep(stateObj);
+            renderFullscreenTelemetry(true);
+            // Upgrade strided card preview rollout to full 50Hz rollout + neural activations seamlessly
+            if ((stateObj.poseStride > 1 || !stateObj.stepActivations) && getEffectiveSimMode(taskId) === "client") {
+              Promise.all([
+                fetchTaskRollout(taskId, genome, seed, maxSteps, null, true, true),
+                ensureSceneVisualResources(taskId),
+              ])
+                .then(([ro]) => {
+                  if (fsSimState === stateObj && ro && Array.isArray(ro.bodyPoses)) {
+                    const prevFrac = stateObj.bodyPoses.length > 1 ? stateObj.step / (stateObj.bodyPoses.length - 1) : 0;
+                    stateObj.bodyPoses = ro.bodyPoses;
+                    stateObj.poseStride = ro.poseStride || 1;
+                    stateObj.stepTrace = ro.stepTrace || null;
+                    stateObj.stepActivations = ro.stepActivations || null;
+                    stateObj.rolloutReturn = ro.return || stateObj.rolloutReturn;
+                    stateObj.terminated = Boolean(ro.terminated);
+                    stateObj.step = Math.min(ro.bodyPoses.length - 1, Math.round(prevFrac * Math.max(0, ro.bodyPoses.length - 1)));
+                    paintFsSceneFrame(stateObj);
+                    paintFsLiveNetworkStep(stateObj);
+                    renderFullscreenTelemetry(true);
+                  }
+                })
+                .catch(() => {});
+            }
+          } else {
+            loadSceneFullscreenRollout(stateObj, seed, null);
+          }
+        } else if (taskId === "halfcheetah") {
           const cached = getCachedControlEntry("halfcheetah", genome);
           if (cached && cached.primaryRollout && cached.primaryRollout.frames && seed === (spec.evalSeeds?.[0] ?? 0)) {
             stateObj.frames = cached.primaryRollout.frames;
@@ -8464,6 +9078,37 @@
 
         function loop(now) {
           if (fsSimState !== stateObj || fullscreenModalEl.hidden) return;
+          if (isSceneTask(stateObj.taskId)) {
+            const poses = stateObj.bodyPoses || [];
+            if (stateObj.playing && !stateObj.loading && poses.length > 0) {
+              const lastIdx = poses.length - 1;
+              if (stateObj.step >= lastIdx) {
+                if (!stateObj.doneAtPerf) stateObj.doneAtPerf = now;
+                else if (now - stateObj.doneAtPerf >= 1100) {
+                  stateObj.doneAtPerf = 0;
+                  stateObj.step = 0;
+                  stateObj.lastStepPerf = now;
+                  if (fsSimSeedSelect && fsSimSeedSelect.value === "random") {
+                    loadSceneFullscreenRollout(stateObj, selectedFullscreenSeed(), null);
+                  }
+                }
+              } else {
+                const frameMs = stateObj.dt * Math.max(1, Number(stateObj.poseStride || 1)) * 1000;
+                const delta = Math.min(3, Math.floor((now - stateObj.lastStepPerf) / frameMs));
+                if (delta > 0) {
+                  stateObj.lastStepPerf += delta * frameMs;
+                  stateObj.step = Math.min(lastIdx, stateObj.step + delta);
+                  paintFsSceneFrame(stateObj);
+                  paintFsLiveNetworkStep(stateObj);
+                  renderFullscreenTelemetry();
+                }
+              }
+            } else {
+              stateObj.lastStepPerf = now;
+            }
+            stateObj.raf = requestAnimationFrame(loop);
+            return;
+          }
           if (stateObj.taskId === "halfcheetah") {
             if (stateObj.playing && !stateObj.loading && stateObj.frames.length > 0) {
               const lastFrameIdx = stateObj.frames.length - 1;
@@ -8557,6 +9202,7 @@
         const v = goal.votes[fullscreenIdx] || { up: 0, down: 0, score: 0 };
         const mine = myVotes.get(voteKey(goal.name, goal.generation, fullscreenIdx)) || 0;
         const maxVotesPerUser = goal.maxVotesPerUser || initialMaxVotes || 5;
+        const simPhaseLocked = Boolean(goal.simPhaseEnabled && goal.phase === "simulating");
         const capBlocked = mine === 0 && countMyActiveVotes(goal) >= maxVotesPerUser;
         fsScoreEl.textContent = v.score > 0 ? `+${v.score}` : String(v.score);
         fsScoreEl.className = "score-badge" + (v.score > 0 ? " pos" : v.score < 0 ? " neg" : "");
@@ -8564,8 +9210,8 @@
         fsDownBtn.querySelector(".cnt").textContent = String(v.down);
         fsUpBtn.classList.toggle("active-up", mine === 1);
         fsDownBtn.classList.toggle("active-down", mine === -1);
-        fsUpBtn.disabled = !isConnected || goal.evolving || capBlocked;
-        fsDownBtn.disabled = !isConnected || goal.evolving || capBlocked;
+        fsUpBtn.disabled = !isConnected || goal.evolving || simPhaseLocked || capBlocked;
+        fsDownBtn.disabled = !isConnected || goal.evolving || simPhaseLocked || capBlocked;
       }
 
       function renderFullscreen() {
@@ -8579,16 +9225,21 @@
           fsCurrentTarget = { genome: node, taskId, topology: null };
           syncFsViewLayout();
           if (spec.kind === "control" && taskId !== "external") {
-            if (!Array.isArray(node.weights)) {
+            if (!hasGenomePayload(node)) {
               stopFullscreenSim();
               clearFullscreenMediaUI();
+              setFsCanvasMode(false);
               if (fsSimBarEl) fsSimBarEl.hidden = true;
               fsCanvasEl.width = FULLSCREEN_SIM_WIDTH;
               fsCanvasEl.height = FULLSCREEN_SIM_HEIGHT;
               fsCanvasEl.style.aspectRatio = `${FULLSCREEN_SIM_WIDTH} / ${FULLSCREEN_SIM_HEIGHT}`;
-              const ctx = fsCanvasEl.getContext("2d");
-              ctx.fillStyle = "#09090b";
-              ctx.fillRect(0, 0, fsCanvasEl.width, fsCanvasEl.height);
+              if (node.kind === "populora") {
+                renderPopuloraThumb(node, fsCanvasEl);
+              } else {
+                const ctx = fsCanvasEl.getContext("2d");
+                ctx.fillStyle = "#09090b";
+                ctx.fillRect(0, 0, fsCanvasEl.width, fsCanvasEl.height);
+              }
             } else if (!fsSimState || fsSimState.genome !== node || fsSimState.taskId !== taskId) {
               startFullscreenSim(node, taskId);
             }
@@ -8635,7 +9286,7 @@
 
         fsTitleEl.textContent = `${goal.name} #${fullscreenIdx + 1}`;
         if (isCtrl && taskId !== "external") {
-          const cached = getCachedControlEntry(taskId, genome);
+          const cached = getCachedControlEntry(taskId, genome) || getCrowdTrustEntry(goal.name, goal.generation, genome);
           const metricLabel = cached && cached.summary ? cached.summary.primaryDisplay : "evaluating...";
           fsSubEl.textContent = `gen ${goal.generation} (${fullscreenIdx + 1}/${goal.genomes.length}) \u00b7 ${metricLabel}`;
           if (!fsSimState || fsSimState.genome !== genome || fsSimState.taskId !== taskId) {
@@ -8724,6 +9375,10 @@
       }
       function applyFullscreenNudge(nudgeId) {
         if (!fsSimState) return;
+        if (isSceneTask(fsSimState.taskId)) {
+          loadSceneFullscreenRollout(fsSimState, fsSimState.seed, nudgeId);
+          return;
+        }
         if (fsSimState.taskId === "halfcheetah") {
           loadCheetahFullscreenRollout(fsSimState, fsSimState.seed, nudgeId);
           return;
@@ -8761,7 +9416,12 @@
             fsHeldoutStatusEl.style.color = res.solved
               ? "var(--ok)"
               : (res.tier === "mid" ? "var(--gold)" : "var(--err)");
-            if (targetTask === "halfcheetah") {
+            if (isSceneTask(targetTask)) {
+              const dists = res.distancesPerSeed || [];
+              const status = res.solved ? "SOLVED" : (res.tier === "mid" ? "Walking gait" : "Unconverged");
+              fsHeldoutStatusEl.textContent =
+                `10 held-out seeds: mean ${res.primaryDisplay} · dist ${Number(res.meanDistance || 0).toFixed(2)}m · steps ${Number(res.meanSteps || 0).toFixed(0)}/${maxSteps} · ${status}${dists.length ? ` · [${dists.join(", ")}]` : ""}`;
+            } else if (targetTask === "halfcheetah") {
               const dists = res.distancesPerSeed || [];
               const status = res.solved ? "SOLVED (mean >= 8.0m upright)" : (res.tier === "mid" ? "Partial gait" : "Unconverged");
               fsHeldoutStatusEl.textContent =

@@ -455,6 +455,9 @@ def validate_genome_dict(raw: object) -> dict:
     """Validate an untrusted genome dict for topology, finiteness, and activation range."""
     if not isinstance(raw, dict):
         raise ValueError("Invalid genome payload.")
+    if raw.get("kind") == "populora":
+        from direct_evolution_together.populora_engine import validate_populora_genome_dict
+        return validate_populora_genome_dict(raw)
     weights_raw = raw.get("weights")
     biases_raw = raw.get("biases")
     acts_raw = raw.get("activations")
@@ -492,7 +495,10 @@ def validate_genome_dict(raw: object) -> dict:
 
 
 def genome_content_hash(genome: dict, length: int = 16) -> str:
-    """Deterministic content hash of a CPPN genome's weights, biases, and activations."""
+    """Deterministic content hash of a CPPN or PopuLoRA genome."""
+    if isinstance(genome, dict) and genome.get("kind") == "populora":
+        from direct_evolution_together.populora_engine import populora_genome_hash
+        return populora_genome_hash(genome, length=length)
     w = ",".join(f"{float(v):.4f}" for v in genome["weights"])
     b = ",".join(f"{float(v):.4f}" for v in genome["biases"])
     a = ",".join(str(int(v)) for v in genome["activations"])
