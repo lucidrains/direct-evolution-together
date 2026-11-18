@@ -80,6 +80,9 @@ def sanitize_traj_sample(raw_traj: object) -> list[list[float]] | None:
     return out
 
 
+MAX_REPLAY_KEYFRAMES = 32
+
+
 def sanitize_replay(raw_replay: object) -> dict[str, object] | None:
     """Validate optional compact subsampled pose replay for peer 3D card/fullscreen playback."""
     if not isinstance(raw_replay, dict):
@@ -90,27 +93,44 @@ def sanitize_replay(raw_replay: object) -> dict[str, object] | None:
     row_len = len(body_poses[0]) if isinstance(body_poses[0], list) else 0
     if not (7 <= row_len <= 160):
         return None
+    orig_len = len(body_poses)
+    if orig_len > MAX_REPLAY_KEYFRAMES:
+        indices = [
+            round(k * (orig_len - 1) / (MAX_REPLAY_KEYFRAMES - 1))
+            for k in range(MAX_REPLAY_KEYFRAMES)
+        ]
+        sampled_rows = [body_poses[i] for i in indices]
+    else:
+        sampled_rows = body_poses
+
     clean_poses: list[list[float]] = []
-    for row in body_poses:
+    for row in sampled_rows:
         if not isinstance(row, list) or len(row) != row_len:
             return None
         clean_row: list[float] = []
         for v in row:
             if not isinstance(v, (int, float)) or not math.isfinite(float(v)) or abs(float(v)) > 1e4:
                 return None
-            clean_row.append(round(float(v), 4))
+            clean_row.append(round(float(v), 3))
         clean_poses.append(clean_row)
     out: dict[str, object] = {"bodyPoses": clean_poses}
-    stride = raw_replay.get("poseStride")
-    if isinstance(stride, int) and 1 <= stride <= 16:
-        out["poseStride"] = stride
+    raw_stride = raw_replay.get("poseStride")
+    base_stride = int(raw_stride) if isinstance(raw_stride, int) and 1 <= raw_stride <= 64 else 1
+    if orig_len > len(clean_poses) and len(clean_poses) > 1:
+        eff_stride = max(1, min(64, round(base_stride * (orig_len - 1) / (len(clean_poses) - 1))))
+    else:
+        eff_stride = base_stride
+    out["poseStride"] = eff_stride
     vxt = raw_replay.get("vx_trace")
-    if isinstance(vxt, list) and len(vxt) <= 450:
-        out["vx_trace"] = [
+    if isinstance(vxt, list) and vxt and len(vxt) <= 450:
+        clean_vxt = [
             round(float(x), 3)
             for x in vxt
             if isinstance(x, (int, float)) and math.isfinite(float(x))
         ]
+        if len(clean_vxt) > 48:
+            clean_vxt = [clean_vxt[round(k * (len(clean_vxt) - 1) / 47)] for k in range(48)]
+        out["vx_trace"] = clean_vxt
     return out
 
 
@@ -550,7 +570,14 @@ def fetch_room_eval_map(room: str, goal: str, generation: int, *, trusted_only: 
     return {str(it["hash"]): it for it in items if isinstance(it, dict) and it.get("hash")}
 
 
-def fetch_room_evals(room: str, goal: str, generation: int, *, trusted_only: bool = False) -> list[dict]:
+def fetch_room_evals(
+    room: str,
+    goal: str,
+    generation: int,
+    *,
+    trusted_only: bool = False,
+    include_traj: bool = True,
+) -> list[dict]:
     with SQLITE_SYNC_LOCK:
         qs = ExternalEvalResult.objects.filter(room=room, goal=goal, generation=generation)
         if trusted_only:
@@ -560,6 +587,8 @@ def fetch_room_evals(room: str, goal: str, generation: int, *, trusted_only: boo
     for row in rows:
         payload = _loads_safe(row.payload_json, dict)
         if payload:
+            if not include_traj and "trajSample" in payload:
+                payload = {k: v for k, v in payload.items() if k != "trajSample"}
             payload.setdefault("trust", {"status": row.status})
             items.append(payload)
     return items

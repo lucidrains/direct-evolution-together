@@ -11,6 +11,7 @@ import base64
 from dataclasses import dataclass, field
 import hashlib
 import io
+import json
 import math
 from pathlib import Path
 import threading
@@ -226,6 +227,27 @@ def _custom_base_dir() -> Path | None:
     return None
 
 
+def _persist_base_model_static_json(base_hash: str, payload: dict[str, object]) -> None:
+    """Write `<MEDIA_ROOT>/base_models/<base_hash>.json(.gz)` so Nginx/media can serve it statically."""
+    b_dir = _custom_base_dir()
+    if b_dir is None or not base_hash:
+        return
+    json_path = b_dir / f"{base_hash}.json"
+    if json_path.is_file():
+        return
+    try:
+        from direct_evolution_together.public_assets import write_gzip_sidecar
+
+        doc = {"ok": True, **payload}
+        raw = json.dumps(doc, separators=(",", ":")).encode("utf-8")
+        tmp = json_path.with_name(json_path.name + ".tmp")
+        tmp.write_bytes(raw)
+        tmp.replace(json_path)
+        write_gzip_sidecar(json_path, compresslevel=6)
+    except Exception:
+        pass
+
+
 def get_or_create_base_model(
     policy_spec: dict[str, object],
     *,
@@ -247,6 +269,7 @@ def get_or_create_base_model(
             pt_path = b_dir / f"{b_hash}.pt"
             if not pt_path.exists():
                 torch.save(_BASE_MODEL_STATES[b_hash], pt_path)
+        _persist_base_model_static_json(b_hash, payload)
         return model, b_hash, payload
 
     if base_hash:
@@ -255,6 +278,7 @@ def get_or_create_base_model(
             cached_payload = _BASE_MODEL_PAYLOADS.get(base_hash)
         if cached_state is not None and cached_payload is not None:
             model.load_state_dict(cached_state, strict=True)
+            _persist_base_model_static_json(base_hash, cached_payload)
             return model, base_hash, cached_payload
         b_dir = _custom_base_dir()
         if b_dir is not None:
@@ -266,6 +290,7 @@ def get_or_create_base_model(
                 with _BASE_MODEL_LOCK:
                     _BASE_MODEL_STATES[base_hash] = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
                     _BASE_MODEL_PAYLOADS[base_hash] = payload
+                _persist_base_model_static_json(base_hash, payload)
                 return model, base_hash, payload
 
     b_hash = compute_base_model_hash(model)
@@ -274,6 +299,7 @@ def get_or_create_base_model(
             _BASE_MODEL_STATES[b_hash] = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             _BASE_MODEL_PAYLOADS[b_hash] = serialize_base_model_payload(model, policy_spec, b_hash)
         payload = _BASE_MODEL_PAYLOADS[b_hash]
+    _persist_base_model_static_json(b_hash, payload)
     return model, b_hash, payload
 
 

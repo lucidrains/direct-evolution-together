@@ -221,11 +221,15 @@ class CPPN(nn.Module):
         return (rgb * 255.0).round().clamp(0, 255).to(torch.uint8)
 
     def to_dict(self) -> dict:
-        weights: list[float] = []
-        biases: list[float] = []
+        weights: list[float | int] = []
+        biases: list[float | int] = []
         for layer in self.layers:
-            weights.extend(round(v, 4) for v in layer.weight.detach().flatten().tolist())
-            biases.extend(round(v, 4) for v in layer.bias.detach().flatten().tolist())
+            for v in layer.weight.detach().flatten().tolist():
+                rv = round(v, 4)
+                weights.append(0 if rv == 0.0 else rv)
+            for v in layer.bias.detach().flatten().tolist():
+                rv = round(v, 4)
+                biases.append(0 if rv == 0.0 else rv)
         return {
             "id": self.genome_id,
             "parents": list(self.parents),

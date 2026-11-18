@@ -198,13 +198,6 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
     ws_via_proxy = bool(getattr(settings, "WS_VIA_PROXY", False) or base_path)
     can_evolve_now = _resolve_evolve_now_access(request)
     cfg = get_config()
-    mujoco_wasm_url = cfg.mujoco_wasm_url or settings.MUJOCO_WASM_URL
-    if not mujoco_wasm_url:
-        vendor_mujoco = Path(__file__).resolve().parent / "assets" / "vendor" / "mujoco" / "mujoco.js"
-        if vendor_mujoco.is_file():
-            mujoco_wasm_url = f"{base_path}/assets/vendor/mujoco/mujoco.js"
-        else:
-            mujoco_wasm_url = "https://cdn.jsdelivr.net/npm/@mujoco/mujoco@4.0.1/mujoco.js"
     contributor_id, cid_is_new = _resolve_contributor_id(request)
     fe_dir = Path(__file__).resolve().parent / "frontend"
     fe_sig = hashlib.sha256()
@@ -212,6 +205,13 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
         st = js_p.stat()
         fe_sig.update(f"{js_p.name}:{st.st_size}:{st.st_mtime_ns}|".encode("ascii"))
     asset_ver = fe_sig.hexdigest()[:10]
+    mujoco_wasm_url = cfg.mujoco_wasm_url or settings.MUJOCO_WASM_URL
+    if not mujoco_wasm_url:
+        vendor_mujoco = Path(__file__).resolve().parent / "assets" / "vendor" / "mujoco" / "mujoco.js"
+        if vendor_mujoco.is_file():
+            mujoco_wasm_url = f"{base_path}/assets/vendor/mujoco/mujoco.js?v={asset_ver}"
+        else:
+            mujoco_wasm_url = "https://cdn.jsdelivr.net/npm/@mujoco/mujoco@4.0.1/mujoco.js"
     resp = render(
         request,
         "direct_evolution_together/index.html",
@@ -280,16 +280,28 @@ def _get_cached_asset(candidate: Path) -> tuple[bytes, bytes | None, str, str]:
         return hit
 
     raw = candidate.read_bytes()
-    gz = gzip.compress(raw, compresslevel=6) if len(raw) >= 1024 else None
+    gz_sidecar = candidate.with_name(candidate.name + ".gz")
+    gz: bytes | None = None
+    if gz_sidecar.is_file() and gz_sidecar.stat().st_mtime_ns == st.st_mtime_ns:
+        gz = gz_sidecar.read_bytes()
+    elif len(raw) >= 1024 and candidate.suffix.lower() != ".png":
+        gz = gzip.compress(raw, compresslevel=6)
     if gz is not None and len(gz) >= len(raw):
         gz = None
     base_tag = f"{st.st_mtime_ns:x}-{st.st_size:x}"
     entry = (raw, gz, f'"{base_tag}"', f'"{base_tag}-gz"')
     with _ASSET_CACHE_LOCK:
-        if len(_ASSET_CACHE) > 32:
+        if len(_ASSET_CACHE) > 48:
             _ASSET_CACHE.clear()
         _ASSET_CACHE[key] = entry
     return entry
+
+
+def _asset_search_dirs() -> tuple[Path, ...]:
+    staged = os.getenv("DET_ASSETS_DIR", "").strip()
+    if staged:
+        return (Path(staged), _PKG_DIR / "frontend", _PKG_DIR / "assets")
+    return (_PKG_DIR / "frontend", _PKG_DIR / "assets")
 
 
 @require_GET
@@ -304,7 +316,9 @@ def serve_asset(request: HttpRequest, asset_name: str) -> HttpResponse:
     ):
         raise Http404("Asset not found")
 
-    for base_dir in (_PKG_DIR / "frontend", _PKG_DIR / "assets"):
+    for base_dir in _asset_search_dirs():
+        if not base_dir.is_dir():
+            continue
         root = base_dir.resolve()
         candidate = (root / Path(*clean.parts)).resolve()
         try:
@@ -323,7 +337,7 @@ def serve_asset(request: HttpRequest, asset_name: str) -> HttpResponse:
                 if (
                     "vendor/" in asset_name
                     or suffix == ".wasm"
-                    or ("scenes/" in asset_name and bool(request.GET.get("v")))
+                    or bool(request.GET.get("v"))
                 )
                 else "public, max-age=3600"
             )
@@ -833,7 +847,7 @@ def export_bundle(request: HttpRequest) -> HttpResponse:
     return resp
 
 
-_ALLOWED_MEDIA_SUFFIXES = {".mp4", ".webm", ".png", ".webp", ".jpg", ".jpeg"}
+_ALLOWED_MEDIA_SUFFIXES = {".mp4", ".webm", ".png", ".webp", ".jpg", ".jpeg", ".json"}
 
 
 @require_POST
@@ -1014,15 +1028,21 @@ def _verify_worker_token(request: HttpRequest, room_obj: Room | None) -> bool:
     return hmac.compare_digest(digest, room_obj.worker_token_hash)
 
 
-def _fetch_room_snapshot(room: str) -> dict | None:
+def _fetch_room_snapshot(room: str, goal: str = "") -> dict | None:
+    clean_goal = (goal or "").strip()
     if ws_bridge.is_running():
-        raw = mummy_ws.get_room_snapshot_json(room)
+        raw = (
+            mummy_ws.get_room_goal_snapshot_json(room, clean_goal)
+            if clean_goal
+            else mummy_ws.get_room_snapshot_json(room)
+        )
         return json.loads(raw)
     configured = _configured_admin_password()
     if configured:
+        qs = f"?goal={urllib.parse.quote(clean_goal, safe='')}" if clean_goal else ""
         status, text = _ws_internal_request(
             "GET",
-            f"/internal/room-snapshot/{urllib.parse.quote(room, safe='')}",
+            f"/internal/room-snapshot/{urllib.parse.quote(room, safe='')}{qs}",
             configured,
         )
         if status == 200 and text:
@@ -1087,7 +1107,7 @@ def _notify_goal_sim_progress(room: str, goal_name: str, generation: int, verifi
 
 def _sync_goal_sim_phase(room: str, goal_name: str, generation: int) -> tuple[int, str]:
     """Count verified genomes belonging to the active goal population and advance phase if ready."""
-    snapshot = _fetch_room_snapshot(room)
+    snapshot = _fetch_room_snapshot(room, goal_name)
     goals = (snapshot or {}).get("goals") or []
     target = next((g for g in goals if g.get("name") == goal_name), None)
     if not isinstance(target, dict) or int(target.get("generation", -1)) != int(generation):
@@ -1095,7 +1115,11 @@ def _sync_goal_sim_phase(room: str, goal_name: str, generation: int) -> tuple[in
     genomes = target.get("genomes") or []
     if not genomes:
         return 0, ""
-    pop_hashes = [genome_content_hash(g, length=20) for g in genomes if isinstance(g, dict)]
+    pop_hashes = [
+        str(g["hash"]) if (isinstance(g, dict) and g.get("hash")) else genome_content_hash(g, length=20)
+        for g in genomes
+        if isinstance(g, dict)
+    ]
     if not pop_hashes:
         return 0, ""
     with SQLITE_SYNC_LOCK:
@@ -1113,17 +1137,25 @@ def _sync_goal_sim_phase(room: str, goal_name: str, generation: int) -> tuple[in
     return verified_in_pop, phase
 
 
-def _broadcast_room_event(room: str, payload: dict) -> None:
+def _broadcast_room_event(room: str, payload: dict, *, goal: str = "") -> None:
+    clean_goal = (goal or "").strip()
     if ws_bridge.is_running():
-        mummy_ws.broadcast_room_payload(room, json.dumps(payload))
+        raw_payload = json.dumps(payload, separators=(",", ":"))
+        if clean_goal:
+            mummy_ws.broadcast_goal_payload(room, clean_goal, raw_payload)
+        else:
+            mummy_ws.broadcast_room_payload(room, raw_payload)
         return
     configured = _configured_admin_password()
     if configured:
+        body: dict[str, object] = {"room": room, "payload": payload}
+        if clean_goal:
+            body["goal"] = clean_goal
         _ws_internal_request(
             "POST",
             "/internal/room-broadcast",
             configured,
-            {"room": room, "payload": payload},
+            body,
             timeout=1.5,
         )
 
@@ -1135,12 +1167,14 @@ def api_worker_jobs(request: HttpRequest, room: str) -> JsonResponse:
     if not _verify_worker_token(request, room_obj):
         return JsonResponse({"ok": False, "error": "Invalid or missing worker token."}, status=403)
 
-    snapshot = _fetch_room_snapshot(room)
+    req_goal = request.GET.get("goal", "").strip()
+    snapshot = _fetch_room_snapshot(room, req_goal)
     goals = (snapshot or {}).get("goals") or []
     if not goals:
+        if req_goal:
+            return JsonResponse({"ok": False, "error": f"Goal '{req_goal}' not found."}, status=404)
         return JsonResponse({"ok": True, "room": room, "goal": None, "generation": 0, "pending": [], "totalCount": 0})
 
-    req_goal = request.GET.get("goal", "").strip()
     target = next((g for g in goals if g.get("name") == req_goal), None) if req_goal else goals[0]
     if target is None:
         return JsonResponse({"ok": False, "error": f"Goal '{req_goal}' not found."}, status=404)
@@ -1212,14 +1246,16 @@ def api_worker_results(request: HttpRequest, room: str) -> JsonResponse:
     )
     stored_items = outcome["items"]
     if stored_items:
+        ws_items = [{k: v for k, v in it.items() if k != "trajSample"} for it in stored_items]
         _broadcast_room_event(
             room,
             {
                 "type": "worker_eval_updated",
                 "goal": goal_name,
                 "generation": generation,
-                "items": stored_items,
+                "items": ws_items,
             },
+            goal=goal_name,
         )
         _sync_goal_sim_phase(room, goal_name, generation)
     return JsonResponse({"ok": True, "accepted": len(stored_items)})
@@ -1241,7 +1277,7 @@ def api_worker_evals(request: HttpRequest, room: str) -> JsonResponse:
         generation = 0
     if not goal_name:
         return JsonResponse({"ok": True, "room": room, "goal": "", "generation": generation, "items": []})
-    items = fetch_room_evals(room, goal_name, generation, trusted_only=False)
+    items = fetch_room_evals(room, goal_name, generation, trusted_only=False, include_traj=False)
     return JsonResponse({"ok": True, "room": room, "goal": goal_name, "generation": generation, "items": items})
 
 
@@ -1256,7 +1292,11 @@ def api_crowd_evals(request: HttpRequest, room: str) -> JsonResponse:
     except ValueError:
         generation = 0
     trusted_only = request.GET.get("trusted_only", "").strip().lower() in ("1", "true", "yes")
-    items = fetch_room_evals(room, goal_name, generation, trusted_only=trusted_only) if goal_name else []
+    items = (
+        fetch_room_evals(room, goal_name, generation, trusted_only=trusted_only, include_traj=False)
+        if goal_name
+        else []
+    )
     live_peers = _get_live_room_peer_count(room)
     eff_quorum = (
         1
@@ -1313,26 +1353,36 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
     items = outcome["items"]
     changed_items = outcome.get("changedItems") or []
     if changed_items:
+        ws_items = [{k: v for k, v in it.items() if k != "trajSample"} for it in changed_items]
         _broadcast_room_event(
             room,
             {
                 "type": "worker_eval_updated",
                 "goal": goal_name,
                 "generation": generation,
-                "items": changed_items,
+                "items": ws_items,
             },
+            goal=goal_name,
         )
     pop_verified, phase = _sync_goal_sim_phase(room, goal_name, generation)
+    ack_items = [
+        {
+            "hash": it["hash"],
+            "summary": it["summary"],
+            "trust": it["trust"],
+        }
+        for it in items
+    ]
     resp = JsonResponse({
         "ok": True,
-        "accepted": len(items),
+        "accepted": len(ack_items),
         "verifiedCount": outcome["verifiedCount"],
         "goalVerifiedCount": pop_verified,
         "phase": phase,
         "quorum": outcome.get("quorum", trust_cfg.quorum),
         "contributorReputation": outcome["contributorReputation"],
         "quarantined": outcome["quarantined"],
-        "items": items,
+        "items": ack_items,
     })
     return _attach_contributor_cookie(resp, cid, cid_is_new)
 
@@ -1405,16 +1455,38 @@ def serve_media(request: HttpRequest, rel_path: str) -> HttpResponse:
 
     stat = target.stat()
     size = stat.st_size
-    etag = f'W/"{size:x}-{stat.st_mtime_ns:x}"'
+    suffix_lower = target.suffix.lower()
+    gz_sidecar = target.with_name(target.name + ".gz") if suffix_lower == ".json" else None
+    accept_enc = (request.META.get("HTTP_ACCEPT_ENCODING") or "").lower()
+    use_gz_sidecar = (
+        gz_sidecar is not None
+        and "gzip" in accept_enc
+        and gz_sidecar.is_file()
+        and gz_sidecar.stat().st_mtime_ns == stat.st_mtime_ns
+    )
+    etag = f'W/"{size:x}-{stat.st_mtime_ns:x}{"-gz" if use_gz_sidecar else ""}"'
     if request.headers.get("If-None-Match") == etag:
-        return _attach_media_cache_headers(HttpResponse(status=304), etag)
+        not_mod = _attach_media_cache_headers(HttpResponse(status=304), etag)
+        if suffix_lower == ".json":
+            not_mod["Vary"] = "Accept-Encoding"
+        return not_mod
 
     content_type, _ = mimetypes.guess_type(target.name)
-    if target.suffix.lower() == ".mp4":
+    if suffix_lower == ".mp4":
         content_type = "video/mp4"
-    elif target.suffix.lower() == ".webm":
+    elif suffix_lower == ".webm":
         content_type = "video/webm"
+    elif suffix_lower == ".json":
+        content_type = "application/json; charset=utf-8"
     content_type = content_type or "application/octet-stream"
+
+    if use_gz_sidecar and gz_sidecar is not None:
+        gz_bytes = gz_sidecar.read_bytes()
+        resp = HttpResponse(gz_bytes, content_type=content_type)
+        resp["Content-Encoding"] = "gzip"
+        resp["Content-Length"] = str(len(gz_bytes))
+        resp["Vary"] = "Accept-Encoding"
+        return _attach_media_cache_headers(resp, etag)
 
     range_header = request.headers.get("Range", "").strip()
     if range_header and size > 0:

@@ -139,6 +139,10 @@ class DeployConfig:
         return f"{self.data_dir}/media"
 
     @property
+    def assets_dir(self) -> str:
+        return f"{self.deploy_dir}/assets"
+
+    @property
     def run_dir(self) -> str:
         return f"{self.deploy_dir}/run"
 
@@ -178,6 +182,7 @@ def _render_runtime_env_dict(cfg: DeployConfig) -> dict[str, str]:
         "DJANGO_CSRF_TRUSTED_ORIGINS": cfg.csrf_trusted_origins,
         "DET_DB_PATH": f"{cfg.data_dir}/db.sqlite3",
         "DET_MEDIA_DIR": cfg.media_dir,
+        "DET_ASSETS_DIR": cfg.assets_dir,
         "DET_SUBPATH": cfg.subpath,
         "DET_WS_PROXY": "1" if cfg.subpath else "0",
         "MUMMY_WS_HOST": "127.0.0.1",
@@ -295,6 +300,7 @@ def _render_nginx_conf(cfg: DeployConfig) -> str:
         ("{{SUBPATH}}", subpath),
         ("{{HTTP_PORT}}", str(cfg.http_port)),
         ("{{WS_PORT}}", str(cfg.ws_port)),
+        ("{{ASSETS_DIR}}", cfg.assets_dir),
         ("{{MEDIA_DIR}}", cfg.media_dir),
         ("{{HTTP_LOC_MOD}}", http_loc_mod),
         ("{{FORWARDED_PREFIX_LINE}}", forwarded_prefix_line),
@@ -599,8 +605,8 @@ def _sync_source(cfg: DeployConfig) -> None:
 
 def _ensure_media_dir_cmd(cfg: DeployConfig) -> str:
     return (
-        f"mkdir -p {shlex.quote(cfg.media_dir)} && "
-        f"chmod 755 {shlex.quote(cfg.deploy_dir)} {shlex.quote(cfg.data_dir)} {shlex.quote(cfg.media_dir)}"
+        f"mkdir -p {shlex.quote(cfg.media_dir)} {shlex.quote(cfg.assets_dir)} && "
+        f"chmod 755 {shlex.quote(cfg.deploy_dir)} {shlex.quote(cfg.data_dir)} {shlex.quote(cfg.media_dir)} {shlex.quote(cfg.assets_dir)}"
     )
 
 
@@ -674,6 +680,7 @@ def deploy(c, force_deps: bool = False):
         "else",
         '  echo "migrations: cached"',
         "fi",
+        f".venv/bin/python -m direct_evolution_together.public_assets {shlex.quote(cfg.assets_dir)}",
         _bash_supervisor_setup_snippet(cfg),
         _bash_nginx_snippet(cfg),
         _bash_supervisor_restart_snippet(cfg, write_config=False),

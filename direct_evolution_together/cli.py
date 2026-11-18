@@ -161,11 +161,26 @@ def main() -> None:
         help="Compile an MJCF + STL/OBJ scene directory into physics.bin + visual.bin + manifest.json and exit",
     )
     parser.add_argument(
+        "--stage-assets",
+        metavar="DEST_DIR",
+        help="Stage frontend & simulation assets (+ .gz sidecars) into DEST_DIR for Nginx and exit",
+    )
+    parser.add_argument(
         "--install-nim-deps",
         action="store_true",
         help="Automatically run `nimble install -y mummy nimpy` if missing",
     )
     args = parser.parse_args()
+
+    if args.stage_assets:
+        from direct_evolution_together.public_assets import stage_public_assets
+
+        stats = stage_public_assets(args.stage_assets, precompress=True)
+        print(
+            f"Staged {stats['total']} public assets -> {args.stage_assets} "
+            f"({stats['copied']} updated, {stats['gzipped']} precompressed, {stats['removed']} pruned)"
+        )
+        return
 
     if args.compile_scene:
         import json

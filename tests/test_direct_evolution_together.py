@@ -3264,6 +3264,190 @@ console.log(JSON.stringify({{
     assert all(g["task"] == "so101" for g in next_genomes)
 
 
+@pytest.mark.django_db(transaction=True)
+def test_lazy_active_tab_ws_loading_and_compact_crowd_wire(client):
+    import time
+    from direct_evolution_together.crowd_trust import fetch_room_eval_map
+
+    def _recv_raw_type(ws, target_type: str, timeout: float = 5.0) -> tuple[str, dict]:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            raw = ws.recv(timeout=max(0.05, deadline - time.monotonic()))
+            text = gzip.decompress(raw).decode("utf-8") if isinstance(raw, bytes) else raw
+            msg = json.loads(text)
+            if msg.get("type") == target_type:
+                return text, msg
+        raise AssertionError(f"Timed out waiting for {target_type}")
+
+    with _ws_server(seed=True) as port:
+        mummy_ws.set_round_config(2, 80)
+        with (
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=eager") as ws_eager,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=lazy_def&lazy=1") as ws_lazy,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=lazy_bfly&lazy=1&focus=Butterfly") as ws_bfly,
+        ):
+            raw_eager, evo_eager = _recv_raw_type(ws_eager, "evolution_state")
+            raw_lazy, evo_lazy = _recv_raw_type(ws_lazy, "evolution_state")
+            raw_bfly, evo_bfly = _recv_raw_type(ws_bfly, "evolution_state")
+
+            assert all(g["genomesLoaded"] is True and len(g["genomes"]) > 0 for g in evo_eager["goals"])
+            assert len(raw_eager) > 950_000
+
+            # Default lazy client loads ONLY active first tab ("Microduck")
+            assert evo_lazy["goals"][0]["name"] == "Microduck"
+            assert evo_lazy["goals"][0]["genomesLoaded"] is True
+            assert len(evo_lazy["goals"][0]["genomes"]) == 8
+            for stub in evo_lazy["goals"][1:]:
+                assert stub["genomesLoaded"] is False
+                assert stub["genomes"] == []
+                assert stub["lineage"] == []
+                assert stub["populationSize"] >= 8
+            assert len(raw_lazy) < 360_000
+
+            # Focused lazy client loads ONLY "Butterfly" (< 75 KB raw vs > 950 KB eager)
+            loaded_bfly = [g["name"] for g in evo_bfly["goals"] if g["genomesLoaded"]]
+            assert loaded_bfly == ["Butterfly"]
+            assert len(raw_bfly) < 75_000
+
+            # Switching tab via select_goal hydrates "SO-101 Arm" on demand
+            ws_lazy.send(json.dumps({"type": "select_goal", "goal": "SO-101 Arm", "needGenomes": True}))
+            _, so_upd = _recv_raw_type(ws_lazy, "goal_updated")
+            assert so_upd["goal"]["name"] == "SO-101 Arm"
+            assert so_upd["goal"]["genomesLoaded"] is True
+            assert len(so_upd["goal"]["genomes"]) == 8
+
+            # Evolving "Butterfly" sends full Gen 1 to ws_bfly, but a tiny stub (< 650 B) to ws_lazy on "SO-101 Arm"
+            ws_bfly.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 0, "index": 0, "vote": 1}))
+            ws_eager.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 0, "index": 1, "vote": 1}))
+
+            raw_stub_upd, msg_stub_upd = _recv_raw_type(ws_lazy, "goal_updated", timeout=6.0)
+            raw_full_upd, msg_full_upd = _recv_raw_type(ws_bfly, "goal_updated", timeout=6.0)
+            assert msg_stub_upd["goal"]["name"] == "Butterfly"
+            assert msg_stub_upd["goal"]["generation"] == 1
+            assert msg_stub_upd["goal"]["genomesLoaded"] is False
+            assert msg_stub_upd["goal"]["genomes"] == []
+            assert len(raw_stub_upd) < 650
+
+            assert msg_full_upd["goal"]["name"] == "Butterfly"
+            assert msg_full_upd["goal"]["generation"] == 1
+            assert msg_full_upd["goal"]["genomesLoaded"] is True
+            assert len(msg_full_upd["goal"]["genomes"]) == 30
+            assert len(raw_full_upd) > 15_000
+
+            # Compact crowd wire: 201-frame replay subsampled <= 32 keyframes, ACK omits replay/trajSample,
+            # GET /crowd/evals omits server-only trajSample while server fetch_room_eval_map retains it.
+            md_hash = evo_lazy["goals"][0]["genomes"][0]["hash"]
+            dense_poses = [[float(k * 0.01 + j * 0.001) for j in range(105)] for k in range(201)]
+            traj_sample = [[float(r * 0.1 + c * 0.01) for c in range(18)] for r in range(16)]
+            post_resp = client.post(
+                "/api/rooms/lobby/crowd/results/",
+                data=json.dumps({
+                    "goal": "Microduck",
+                    "generation": 0,
+                    "results": [{
+                        "hash": md_hash,
+                        "summary": {"primaryValue": 124.5, "return": 124.5, "meanDistance": 1.42},
+                        "trajSample": traj_sample,
+                        "replay": {"bodyPoses": dense_poses, "poseStride": 2, "vx_trace": [0.4] * 200},
+                    }],
+                }),
+                content_type="application/json",
+            )
+            assert post_resp.status_code == 200
+            assert len(post_resp.content) < 2500
+            ack_item = post_resp.json()["items"][0]
+            assert "replay" not in ack_item and "trajSample" not in ack_item
+
+            get_resp = client.get("/api/rooms/lobby/crowd/evals/?goal=Microduck&generation=0")
+            assert get_resp.status_code == 200
+            fetched_item = next(x for x in get_resp.json()["items"] if x["hash"] == md_hash)
+            assert "trajSample" not in fetched_item
+            assert len(fetched_item["replay"]["bodyPoses"]) <= 32
+            assert fetched_item["replay"]["poseStride"] >= 12
+            assert len(fetched_item["replay"]["vx_trace"]) <= 48
+
+            srv_map = fetch_room_eval_map("lobby", "Microduck", 0, trusted_only=False)
+            assert len(srv_map[md_hash]["trajSample"]) == 16
+
+
+@pytest.mark.django_db
+def test_public_assets_staging_nginx_template_and_static_base_model(client, settings, tmp_path):
+    from direct_evolution_together.environments import SO101_POLICY_SPEC
+    from direct_evolution_together.populora_engine import get_or_create_base_model
+    from direct_evolution_together.public_assets import stage_public_assets
+    import fabfile
+
+    settings.MEDIA_ROOT = tmp_path / "media"
+
+    staged_dir = tmp_path / "staged_assets"
+    stats1 = stage_public_assets(staged_dir, precompress=True)
+    assert stats1["total"] >= 12
+    assert stats1["copied"] == stats1["total"]
+    assert stats1["gzipped"] >= 8
+
+    for rel in (
+        "sim_worker.js",
+        "mujoco_gl.js",
+        "scene_cache.js",
+        "scenes/microduck/physics.bin",
+        "scenes/unitree_go2/visual.bin",
+        "scenes/so101/visual.bin",
+        "vendor/mujoco/mujoco.wasm",
+    ):
+        raw_p = staged_dir / rel
+        gz_p = staged_dir / f"{rel}.gz"
+        assert raw_p.is_file() and gz_p.is_file()
+        assert gz_p.stat().st_size < raw_p.stat().st_size
+        assert gz_p.stat().st_mtime_ns == raw_p.stat().st_mtime_ns
+        assert gzip.decompress(gz_p.read_bytes()) == raw_p.read_bytes()
+
+    stats2 = stage_public_assets(staged_dir, precompress=True)
+    assert stats2["copied"] == 0 and stats2["gzipped"] == 0
+
+    # Verify Nginx config renders /assets/ + /media/ static locations with gzip_static & immutable headers
+    cfg = fabfile.DeployConfig(
+        host="example.com",
+        user="ubuntu",
+        app_name="det",
+        deploy_dir="/var/www/det",
+        domain="example.com",
+        subpath="/det",
+        http_port=8000,
+        ws_port=8001,
+        uvicorn_workers=2,
+        python_version="3.11",
+        cuda_visible_devices="",
+        nginx_vhost_file="",
+        secret_key="s",
+        admin_password="a",
+        allowed_hosts="example.com",
+        csrf_trusted_origins="https://example.com",
+        pop_size=30,
+        min_votes="20",
+        max_votes=20,
+        mut_sigma="0.30",
+        elite_frac="0.20",
+        crossover_rate="0.75",
+    )
+    nginx_conf = fabfile._render_nginx_conf(cfg)
+    assert "location ^~ /det/assets/ {" in nginx_conf
+    assert "alias /var/www/det/assets/;" in nginx_conf
+    assert "gzip_static on;" in nginx_conf
+    assert "application/wasm" in nginx_conf
+    assert "application/octet-stream" in nginx_conf
+    assert 'Cache-Control "public, max-age=31536000, immutable"' in nginx_conf
+
+    # Verify PopuLoRA base model static JSON + .gz sidecar served via /media/base_models/<hash>.json
+    _, b_hash, _ = get_or_create_base_model(SO101_POLICY_SPEC, base_seed=1)
+    media_resp = client.get(f"/media/base_models/{b_hash}.json", HTTP_ACCEPT_ENCODING="gzip")
+    assert media_resp.status_code == 200
+    assert media_resp["Content-Encoding"] == "gzip"
+    assert "immutable" in media_resp["Cache-Control"]
+    decoded = json.loads(gzip.decompress(media_resp.content).decode("utf-8"))
+    assert decoded["baseHash"] == b_hash and "tensors" in decoded
+
+
+
 
 
 

@@ -699,6 +699,7 @@
         justify-content: space-between;
         gap: 0.5rem;
         flex-wrap: wrap;
+        min-height: 30px;
       }
       .filter-tabs {
         display: inline-flex;
@@ -969,12 +970,40 @@
       .genome-card[hidden] {
         display: none;
       }
+      .genome-card::before {
+        content: "";
+        position: absolute;
+        top: 4px;
+        left: 4px;
+        right: 4px;
+        aspect-ratio: 1 / 1;
+        border-radius: 5px;
+        pointer-events: none;
+        z-index: 1;
+        opacity: 0;
+        background: linear-gradient(
+          110deg,
+          #111116 0%,
+          #191a23 26%,
+          #2b2d3b 50%,
+          #191a23 74%,
+          #111116 100%
+        );
+        background-size: 220% 100%;
+        transition: opacity 0.2s ease;
+      }
+      .genome-card.is-awaiting-eval::before {
+        opacity: 1;
+        animation: skeleton-shimmer 1.45s ease-in-out infinite;
+      }
       .genome-card.is-skeleton-card {
         pointer-events: none;
       }
+      .genome-card.is-skeleton-card::before {
+        display: none;
+      }
       .genome-card.is-skeleton-card .skel-bar {
-        animation: none;
-        background: rgba(255, 255, 255, 0.07);
+        animation: skeleton-shimmer 1.45s ease-in-out infinite;
       }
       .skel-thumb {
         width: 100%;
@@ -982,15 +1011,15 @@
         border-radius: 5px;
         display: block;
         background: linear-gradient(
-          90deg,
-          rgba(255, 255, 255, 0.035) 0%,
-          rgba(255, 255, 255, 0.06) 22%,
-          rgba(255, 255, 255, 0.12) 50%,
-          rgba(255, 255, 255, 0.06) 78%,
-          rgba(255, 255, 255, 0.035) 100%
+          110deg,
+          #111116 0%,
+          #191a23 26%,
+          #2b2d3b 50%,
+          #191a23 74%,
+          #111116 100%
         );
         background-size: 220% 100%;
-        animation: skeleton-shimmer 1.6s ease-in-out infinite;
+        animation: skeleton-shimmer 1.45s ease-in-out infinite;
       }
       .genome-card.voted-done {
         opacity: 0.45;
@@ -1021,6 +1050,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        min-height: 22px;
         padding: 1px 2px 2px;
         font-size: 0.72rem;
       }
@@ -1538,6 +1568,7 @@
       @media (prefers-reduced-motion: reduce) {
         .skel-bar,
         .skel-thumb,
+        .genome-card.is-awaiting-eval::before,
         .panel-loading-sheen {
           animation: none;
         }
@@ -3238,7 +3269,11 @@
 
       function hasGenomePayload(genome) {
         if (!genome || typeof genome !== "object") return false;
-        return Array.isArray(genome.weights) || (genome.kind === "populora" && Array.isArray(genome.adapters));
+        if (Array.isArray(genome.weights)) return true;
+        if (genome.kind === "populora" && genome.adapters && typeof genome.adapters === "object") {
+          return Array.isArray(genome.adapters) ? genome.adapters.length > 0 : Object.keys(genome.adapters).length > 0;
+        }
+        return false;
       }
 
       // Rendered images are content-addressed so elites and page reloads reuse them.
@@ -4302,7 +4337,7 @@
         });
       }
 
-      function ensureSimWorkerSlot(idx = 0, warmMujoco = false) {
+      function ensureSimWorkerSlot(idx = 0, warmMujoco = false, warmTaskId = "") {
         if (typeof Worker !== "function") {
           return Promise.reject(new Error("Web Workers unsupported in this browser."));
         }
@@ -4335,8 +4370,9 @@
           taskSpecs,
           basePath,
           mujocoWasmUrl,
-          cheetahXmlUrl: `${basePath}/assets/half_cheetah.xml`,
+          cheetahXmlUrl: `${basePath}/assets/half_cheetah.xml?v=${assetVer}`,
           warmMujoco,
+          warmTaskId: warmTaskId || "",
         }, warmMujoco ? 45000 : 25000);
         return slot.initPromise;
       }
@@ -4397,22 +4433,20 @@
 
       async function callSimWorkerPoolEval(taskId, genomes, evalSeeds, timeoutMs = 60000) {
         const wasmTask = isWasmSimTask(taskId);
-        const maxPool = wasmTask
-          ? (genomes.length >= 6 ? Math.min(2, SIM_POOL_MAX) : 1)
-          : SIM_POOL_MAX;
-        const poolCount = genomes.length >= 2 ? Math.min(maxPool, genomes.length) : 1;
-        const shared = await prepareSharedSimAssets(taskId, genomes);
+        const poolCount = genomes.length >= 2 ? Math.min(SIM_POOL_MAX, genomes.length) : 1;
+        const [shared] = await Promise.all([
+          prepareSharedSimAssets(taskId, genomes),
+          ensureSimWorkerSlot(0, wasmTask, taskId),
+        ]);
         if (poolCount === 1) {
-          await ensureSimWorkerSlot(0, wasmTask);
           const slot0 = simPool[0];
           const extra0 = slotExtraAssets(slot0, shared);
           const resp0 = await callSimWorkerSlot(slot0, "evalBatch", { taskId, genomes, seeds: evalSeeds, ...extra0 }, timeoutMs);
           markSlotAssetsLoaded(slot0, shared);
           return resp0;
         }
-        // Warm slot 0 first so mujoco.wasm lands in HTTP immutable cache before parallel slots spin up.
-        await ensureSimWorkerSlot(0, wasmTask);
-        await Promise.all(Array.from({ length: poolCount - 1 }, (_, k) => ensureSimWorkerSlot(k + 1, false)));
+        // Slot 0 already warmed mujoco.wasm into HTTP immutable cache; spin up parallel worker slots concurrently.
+        await Promise.all(Array.from({ length: poolCount - 1 }, (_, k) => ensureSimWorkerSlot(k + 1, wasmTask, taskId)));
         const buckets = Array.from({ length: poolCount }, () => []);
         const bucketIdx = Array.from({ length: poolCount }, () => []);
         genomes.forEach((g, i) => {
@@ -4649,8 +4683,10 @@
         }
         if (effMode === "client" && taskId !== "external") {
           try {
-            const shared = await prepareSharedSimAssets(taskId, [genome]);
-            await ensureSimWorkerSlot(0, isWasmSimTask(taskId));
+            const [shared] = await Promise.all([
+              prepareSharedSimAssets(taskId, [genome]),
+              ensureSimWorkerSlot(0, isWasmSimTask(taskId), taskId),
+            ]);
             const slot0 = simPool[0];
             const extra0 = slotExtraAssets(slot0, shared);
             const resp = await callSimWorkerSlot(slot0, "rollout", {
@@ -5131,6 +5167,117 @@
         }
       }
 
+      function isCardVisualReady(taskId, evalEntry) {
+        if (taskId === "image" || taskId === "cartpole") return true;
+        if (taskId === "external") return Boolean(evalEntry);
+        if (taskId === "halfcheetah") return Boolean(evalEntry && evalEntry.primaryRollout);
+        if (isSceneTask(taskId)) {
+          return Boolean(evalEntry && evalEntry.primaryRollout && sceneVisualPackCache.has(taskId));
+        }
+        return Boolean(evalEntry);
+      }
+
+      function syncCardLoadingState(card, taskId, evalEntry) {
+        if (!card) return;
+        card.classList.toggle("is-awaiting-eval", !isCardVisualReady(taskId, evalEntry));
+      }
+
+      function buildSkeletonGridFragment(count, isCtrl = false) {
+        const safeCount = Math.max(1, Math.min(64, Number(count) || 8));
+        const frag = document.createDocumentFragment();
+        for (let i = 0; i < safeCount; i++) {
+          const card = document.createElement("div");
+          card.className = "genome-card is-skeleton-card";
+          card.setAttribute("aria-hidden", "true");
+
+          if (isCtrl) {
+            const slotBadge = document.createElement("span");
+            slotBadge.className = "sim-slot-badge";
+            slotBadge.textContent = `#${i + 1}`;
+            card.appendChild(slotBadge);
+
+            const simBadge = document.createElement("span");
+            simBadge.className = "sim-badge";
+            const pillSkel = document.createElement("span");
+            pillSkel.className = "skel-bar";
+            pillSkel.style.setProperty("--skel-w", "52px");
+            pillSkel.style.setProperty("--skel-h", "7px");
+            simBadge.appendChild(pillSkel);
+            card.appendChild(simBadge);
+          }
+
+          const thumb = document.createElement("span");
+          thumb.className = "skel-thumb";
+          card.appendChild(thumb);
+
+          const footer = document.createElement("div");
+          footer.className = "genome-footer";
+          const score = document.createElement("span");
+          score.className = "skel-bar";
+          score.style.setProperty("--skel-w", "22px");
+          score.style.setProperty("--skel-h", "8px");
+          footer.appendChild(score);
+
+          const btns = document.createElement("span");
+          btns.className = "vote-btns";
+          for (let b = 0; b < 4; b++) {
+            const chip = document.createElement("span");
+            chip.className = "skel-bar";
+            chip.style.setProperty("--skel-w", b < 2 ? "20px" : "15px");
+            chip.style.setProperty("--skel-h", "8px");
+            btns.appendChild(chip);
+          }
+          footer.appendChild(btns);
+          card.appendChild(footer);
+          frag.appendChild(card);
+        }
+        return frag;
+      }
+
+      function renderLineageSkeleton(goal) {
+        if (!lineagePanelEl) return;
+        clearLineageThumbObserver();
+        const total = Math.max(Number(goal && goal.lineageTotal) || 0, Number(goal && goal.populationSize) || 0);
+        if (!goal || total <= 0) {
+          lineagePanelEl.hidden = true;
+          return;
+        }
+        lineagePanelEl.hidden = false;
+        lineageViewportEl.hidden = lineageCollapsed;
+        lineageToggleBtn.textContent = lineageCollapsed ? "Show" : "Hide";
+        const genNum = Number(goal.generation || 0);
+        lineageStatsEl.textContent = `${genNum + 1} gen${genNum === 0 ? "" : "s"} \u00b7 ${total} nodes`;
+        if (lineageCollapsed) return;
+
+        lineageSvgEl.replaceChildren();
+        const col = document.createElement("div");
+        col.className = "lineage-col current-gen";
+        const hdr = document.createElement("div");
+        hdr.className = "lineage-col-header";
+        hdr.textContent = `Gen ${genNum} \u00b7 live`;
+        col.appendChild(hdr);
+        const nodeCount = Math.min(12, Math.max(3, Number(goal.populationSize) || 8));
+        for (let i = 0; i < nodeCount; i++) {
+          const el = document.createElement("div");
+          el.className = "lineage-node is-live";
+          el.setAttribute("aria-hidden", "true");
+          const th = document.createElement("span");
+          th.className = "skel-thumb";
+          th.style.borderRadius = "3px";
+          el.appendChild(th);
+          const meta = document.createElement("div");
+          meta.className = "lineage-node-meta";
+          const bar = document.createElement("span");
+          bar.className = "skel-bar";
+          bar.style.setProperty("--skel-w", "28px");
+          bar.style.setProperty("--skel-h", "6px");
+          meta.appendChild(bar);
+          el.appendChild(meta);
+          col.appendChild(el);
+        }
+        lineageColumnsEl.replaceChildren(col);
+      }
+
       const sceneTaskRenderers = new Map();
       function getSceneTaskRenderer(taskId) {
         if (sceneTaskRenderers.has(taskId)) return sceneTaskRenderers.get(taskId);
@@ -5145,6 +5292,7 @@
             canvas.width = CONTROL_CARD_SIZE;
             canvas.height = CONTROL_CARD_SIZE;
             const pack = sceneVisualPackCache.get(taskId) || null;
+            const parentCard = canvas.closest ? canvas.closest(".genome-card") : null;
             if (window.DetMujocoGL && typeof window.DetMujocoGL.renderSceneCardStatic === "function") {
               window.DetMujocoGL.renderSceneCardStatic(
                 canvas,
@@ -5152,6 +5300,7 @@
                 evalEntry ? evalEntry.summary : null,
                 evalEntry ? evalEntry.primaryRollout : null
               );
+              syncCardLoadingState(parentCard, taskId, evalEntry);
               if (!pack) {
                 ensureSceneVisualResources(taskId).then((loaded) => {
                   if (loaded && canvas.isConnected) {
@@ -5161,24 +5310,16 @@
                       evalEntry ? evalEntry.summary : null,
                       evalEntry ? evalEntry.primaryRollout : null
                     );
+                    syncCardLoadingState(canvas.closest(".genome-card"), taskId, evalEntry);
                   }
                 });
               }
               return;
             }
             const ctx = canvas.getContext("2d");
-            ctx.fillStyle = "#09090b";
+            ctx.fillStyle = "#111116";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = "#71717a";
-            ctx.font = "600 10px ui-monospace, SFMono-Regular, Menlo, monospace";
-            ctx.textAlign = "center";
-            ctx.fillText(
-              evalEntry && evalEntry.summary && evalEntry.summary.primaryDisplay
-                ? evalEntry.summary.primaryDisplay
-                : "loading 3D...",
-              canvas.width * 0.5,
-              canvas.height * 0.52
-            );
+            syncCardLoadingState(parentCard, taskId, evalEntry);
             ensureSceneVisualResources(taskId).then(() => {
               if (canvas.isConnected && window.DetMujocoGL) {
                 r.renderCard(genome, canvas, evalEntry);
@@ -5594,6 +5735,42 @@
         syncTextInputAccess();
       }
 
+      function requestGoalSelection(goalName, needGenomes = false) {
+        if (!goalName || !socket || socket.readyState !== WebSocket.OPEN) return false;
+        socket.send(JSON.stringify({
+          type: "select_goal",
+          goal: goalName,
+          needGenomes: Boolean(needGenomes),
+        }));
+        return true;
+      }
+
+      function activateGoalTab(name) {
+        addingExtraGoal = false;
+        if (emptyCancelBtn) emptyCancelBtn.hidden = true;
+        activeGoalName = name;
+        renderGoalTabs();
+        refreshAllCursorsVisibility();
+        if (lastLocalCursor) {
+          sendCursor(lastLocalCursor.x, lastLocalCursor.y, true);
+        }
+        const target = goalsByName.get(name);
+        if (!target) return;
+        const tid = goalTaskId(target);
+        if (isSceneTask(tid)) {
+          ensureSceneVisualResources(tid).catch(() => {});
+          ensureSimWorkerSlot(0, true, tid).catch(() => {});
+        }
+        if (target.genomesLoaded === false) {
+          activeGoalRenderToken += 1;
+          renderActiveGoal(true);
+          requestGoalSelection(name, true);
+        } else {
+          requestGoalSelection(name, false);
+          renderActiveGoalCached();
+        }
+      }
+
       function renderGoalTabs() {
         goalTabsEl.replaceChildren();
         for (const name of goalOrder) {
@@ -5619,17 +5796,7 @@
           gen.textContent = `g${goal.generation}`;
           btn.appendChild(gen);
 
-          btn.addEventListener("click", () => {
-            addingExtraGoal = false;
-            if (emptyCancelBtn) emptyCancelBtn.hidden = true;
-            activeGoalName = name;
-            renderGoalTabs();
-            renderActiveGoalCached();
-            refreshAllCursorsVisibility();
-            if (lastLocalCursor) {
-              sendCursor(lastLocalCursor.x, lastLocalCursor.y, true);
-            }
-          });
+          btn.addEventListener("click", () => activateGoalTab(name));
           goalTabsEl.appendChild(btn);
         }
       }
@@ -5655,7 +5822,9 @@
         }
 
         const minVotes = goal.minVotes || 20;
-        const popLen = goal.genomes ? goal.genomes.length : 0;
+        const popLen = typeof goal.populationSize === "number"
+          ? goal.populationSize
+          : (goal.genomes ? goal.genomes.length : 0);
         const countByTotalVotes = isControlGoal(goal) || minVotes > popLen;
         const totalVotes = goal.totalVotes || 0;
         const votedCandidates = typeof goal.votedCandidates === "number" ? goal.votedCandidates : totalVotes;
@@ -5789,8 +5958,8 @@
 
       function applyCardFilter(refilter) {
         const goal = goalsByName.get(activeGoalName);
-        if (!goal) return;
-        const cards = genomeGridEl.querySelectorAll(".genome-card");
+        if (!goal || goal.genomesLoaded === false) return;
+        const cards = genomeGridEl.querySelectorAll(".genome-card[data-idx]");
         cards.forEach((card, domPos) => {
           const idx = cardGoalIndex(card, domPos);
           const voted = hasMyVote(goal, idx);
@@ -5810,8 +5979,8 @@
 
       function scrollToNextUnvoted() {
         const goal = goalsByName.get(activeGoalName);
-        if (!goal) return;
-        const cards = Array.from(genomeGridEl.querySelectorAll(".genome-card"));
+        if (!goal || goal.genomesLoaded === false) return;
+        const cards = Array.from(genomeGridEl.querySelectorAll(".genome-card[data-idx]"));
         if (gridFilter === "unvoted") {
           applyCardFilter(true);
         }
@@ -5864,8 +6033,13 @@
           userVoteBudgetEl.textContent = `Your votes: ${activeMine} / ${maxVotesPerUser}`;
           userVoteBudgetEl.classList.toggle("at-cap", atLimit);
         }
+        if (goal.genomesLoaded === false) {
+          if (nextUnvotedBtn) nextUnvotedBtn.disabled = true;
+          renderRoundStatus();
+          return;
+        }
 
-        const cards = genomeGridEl.querySelectorAll(".genome-card");
+        const cards = genomeGridEl.querySelectorAll(".genome-card[data-idx]");
         let unvotedCount = 0;
         cards.forEach((card, domPos) => {
           const idx = cardGoalIndex(card, domPos);
@@ -6226,6 +6400,7 @@
               renderer.renderCard(g, cvs, crowdEnt);
             }
           }
+          syncCardLoadingState(card, taskId, eff);
         });
       }
 
@@ -6275,14 +6450,38 @@
         }
       }
 
+      const CROWD_REPLAY_MAX_FRAMES = 24;
+
       function buildCompactCrowdReplay(entry) {
         if (!entry || !entry.primaryRollout) return null;
         const ro = entry.primaryRollout;
         if (!Array.isArray(ro.bodyPoses) || !ro.bodyPoses.length) return null;
+        const origLen = ro.bodyPoses.length;
+        let sampledPoses = ro.bodyPoses;
+        let effStride = ro.poseStride || 1;
+        if (origLen > CROWD_REPLAY_MAX_FRAMES) {
+          sampledPoses = [];
+          for (let k = 0; k < CROWD_REPLAY_MAX_FRAMES; k++) {
+            const idx = Math.round((k * (origLen - 1)) / (CROWD_REPLAY_MAX_FRAMES - 1));
+            sampledPoses.push(ro.bodyPoses[idx]);
+          }
+          effStride = Math.max(1, Math.round(effStride * ((origLen - 1) / (CROWD_REPLAY_MAX_FRAMES - 1))));
+        }
+        const compactPoses = sampledPoses.map((row) =>
+          Array.isArray(row) ? row.map((v) => Math.round(Number(v) * 1000) / 1000) : row
+        );
+        const rawVx = Array.isArray(ro.vx_trace) ? ro.vx_trace : [];
+        let compactVx = rawVx;
+        if (rawVx.length > 48) {
+          compactVx = [];
+          for (let k = 0; k < 48; k++) {
+            compactVx.push(Math.round(Number(rawVx[Math.round((k * (rawVx.length - 1)) / 47)]) * 1000) / 1000);
+          }
+        }
         return {
-          bodyPoses: ro.bodyPoses,
-          poseStride: ro.poseStride || 1,
-          vx_trace: ro.vx_trace || [],
+          bodyPoses: compactPoses,
+          poseStride: effStride,
+          vx_trace: compactVx,
         };
       }
 
@@ -6297,6 +6496,8 @@
           hydrateControlEvalsFromDb(taskId, goalSnap.genomes, evalSeeds, simResultCache),
           crowdConfig.enabled ? fetchCrowdRoomEvals(goalSnap) : Promise.resolve([]),
           isSceneTask(taskId) ? ensureSceneVisualResources(taskId) : Promise.resolve(null),
+          prepareSharedSimAssets(taskId, goalSnap.genomes).catch(() => null),
+          isWasmSimTask(taskId) ? ensureSimWorkerSlot(0, true, taskId).catch(() => null) : Promise.resolve(null),
         ]);
         if (isStale()) return;
 
@@ -6335,6 +6536,7 @@
             r.simBadge.textContent = "evaluating...";
             r.simBadge.title = "Evaluating policy locally...";
           }
+          syncCardLoadingState(r.card, taskId, eff);
           if (localEnt) {
             maybeQueueCrowdPost(r.genome, localEnt, crowdEnt);
           }
@@ -6405,7 +6607,7 @@
         };
         const ordered = orderGroup(nearViewport).concat(orderGroup(offViewport));
 
-        const CHUNK = isSceneTask(taskId) ? 4 : 6;
+        const CHUNK = isSceneTask(taskId) ? 8 : 12;
         for (let offset = 0; offset < ordered.length; offset += CHUNK) {
           if (isStale()) return;
           const chunk = ordered.slice(offset, offset + CHUNK);
@@ -6427,6 +6629,7 @@
               applySummaryToCardBadge(r.simBadge, eff.summary, taskId, maxSteps, spec, crowdEnt ? crowdEnt.trust : null);
               renderer.renderCard(r.genome, r.canvas, eff);
             }
+            syncCardLoadingState(r.card, taskId, eff);
             if (ent) {
               maybeQueueCrowdPost(r.genome, ent, crowdEnt);
             }
@@ -6521,6 +6724,22 @@
           if (sortSlotBtn) sortSlotBtn.classList.toggle("active", controlSortMode === "slot");
         }
 
+        if (goal.genomesLoaded === false) {
+          stopCardHoverAnim();
+          if (panelLoadingSheenEl) panelLoadingSheenEl.hidden = false;
+          genomeGridEl.replaceChildren(buildSkeletonGridFragment(popSize || spec.defaultPopSize || 8, isCtrl));
+          renderLineageSkeleton(goal);
+          tabAllCountEl.textContent = String(popSize || 0);
+          tabUnvotedCountEl.textContent = String(popSize || 0);
+          if (nextUnvotedBtn) nextUnvotedBtn.disabled = true;
+          renderRoundStatus();
+          roundTimerEl.textContent = "Loading tab population...";
+          return;
+        }
+        if (populationReady && panelLoadingSheenEl) {
+          panelLoadingSheenEl.hidden = true;
+        }
+
         if (rerenderCanvases) {
           stopCardHoverAnim();
           const cardFrag = document.createDocumentFragment();
@@ -6599,6 +6818,7 @@
               ? (taskId === "external" ? "Click for network structure & telemetry" : "Hover for live rollout \u00b7 click for interactive player + network")
               : "Click to open full screen & CPPN network";
             renderer.renderCard(genome, canvas, entry);
+            syncCardLoadingState(card, taskId, entry);
             canvas.addEventListener("click", () => openFullscreen(idx));
             if (isCtrl && taskId !== "external") {
               card.addEventListener("mouseenter", () => startCardHoverAnim(genome, canvas, maxSteps, taskId));
@@ -6690,6 +6910,7 @@
                   summariesByIdx[r.idx] = ext ? normalizeControlSummary(ext.summary, "external") : null;
                   applySummaryToCardBadge(r.simBadge, summariesByIdx[r.idx], "external", maxSteps, spec);
                   renderer.renderCard(r.genome, r.canvas, ext);
+                  syncCardLoadingState(r.card, "external", ext);
                 });
                 updateWorkerBanner(goalSnap);
                 if (controlSortMode === "steps") {
@@ -6709,6 +6930,7 @@
                   summariesByIdx[r.idx] = ent ? ent.summary : null;
                   applySummaryToCardBadge(r.simBadge, summariesByIdx[r.idx], taskId, maxSteps, spec);
                   renderer.renderCard(r.genome, r.canvas, ent);
+                  syncCardLoadingState(r.card, taskId, ent);
                 });
                 if (controlSortMode === "steps") {
                   sortControlCardRefs(cardRefs, summariesByIdx);
@@ -6727,7 +6949,18 @@
 
       function renderActiveGoalCached() {
         const token = ++activeGoalRenderToken;
-        preloadGoalImages(goalsByName.get(activeGoalName)).then(() => {
+        const goal = goalsByName.get(activeGoalName);
+        if (goal && !isControlGoal(goal) && Array.isArray(goal.genomes) && goal.genomes.length > 0) {
+          const needsWarmup = goal.genomes.some(
+            (g) => g && Array.isArray(g.weights) && !getRememberedImage(`${CANVAS_SIZE}:${genomeFingerprint(g)}`, false)
+          );
+          if (needsWarmup) {
+            stopCardHoverAnim();
+            if (panelLoadingSheenEl) panelLoadingSheenEl.hidden = false;
+            genomeGridEl.replaceChildren(buildSkeletonGridFragment(goal.genomes.length, false));
+          }
+        }
+        preloadGoalImages(goal).then(() => {
           if (token === activeGoalRenderToken) renderActiveGoal(true);
         });
       }
@@ -7417,12 +7650,14 @@
             node.weights = src.weights;
             node.biases = src.biases;
             node.activations = src.activations;
-          } else if (src.kind === "populora" && Array.isArray(src.adapters)) {
+          } else if (src.kind === "populora" && src.adapters && typeof src.adapters === "object") {
             node.kind = "populora";
+            node.task = src.task;
             node.adapters = src.adapters;
             node.hash = src.hash;
             node.baseHash = src.baseHash;
-            node.rank = src.rank;
+            node.baseSeed = src.baseSeed;
+            node.lowRank = src.lowRank || src.rank;
           }
         }
       }
@@ -7434,21 +7669,6 @@
         await Promise.all([
           preloadImages(goal.genomes || [], CANVAS_SIZE),
           preloadImages(goal.lineage || [], LINEAGE_CANVAS_SIZE),
-        ]);
-      }
-
-      async function preloadStateImages(goals) {
-        const genomes = [];
-        const lineage = [];
-        for (const goal of goals) {
-          mergeLiveLineage(goal);
-          if (isControlGoal(goal)) continue;
-          if (Array.isArray(goal.genomes)) genomes.push(...goal.genomes);
-          if (Array.isArray(goal.lineage)) lineage.push(...goal.lineage);
-        }
-        await Promise.all([
-          preloadImages(genomes, CANVAS_SIZE),
-          preloadImages(lineage, LINEAGE_CANVAS_SIZE),
         ]);
       }
 
@@ -7488,43 +7708,53 @@
             appendChat(msg.username, msg.message, msg.timestamp);
           }
         } else if (data.type === "evolution_state") {
-          // Keep skeletons visible while the render cache warms up.
           const goals = data.goals || [];
-          for (const g of goals) {
-            g._lineageFull = false;
-            g._lineageRequested = false;
-          }
-          try {
-            await preloadStateImages(goals);
-          } catch (err) {
-            console.error("Population image preload failed", err);
-          }
           goalsByName = new Map();
           goalOrder = [];
           for (const g of goals) {
+            g.genomesLoaded = g.genomesLoaded !== false;
+            g._lineageFull = false;
+            g._lineageRequested = false;
+            if (g.genomesLoaded) mergeLiveLineage(g);
             syncGoalDeadline(g);
             syncMyVotesFromGoal(g);
             goalsByName.set(g.name, g);
             goalOrder.push(g.name);
           }
           if (!activeGoalName || !goalsByName.has(activeGoalName)) {
-            activeGoalName = goalOrder[0] || null;
+            activeGoalName = (initialGoal && goalsByName.has(initialGoal))
+              ? initialGoal
+              : (goalOrder[0] || null);
+          }
+          const activeGoal = activeGoalName ? goalsByName.get(activeGoalName) : null;
+          if (activeGoal && activeGoal.genomesLoaded) {
+            try {
+              await preloadGoalImages(activeGoal);
+            } catch (err) {
+              console.error("Active goal image preload failed", err);
+            }
           }
           activeGoalRenderToken += 1;
           renderGoalTabs();
           try {
             renderActiveGoal(true);
+            if (activeGoal && !activeGoal.genomesLoaded) {
+              requestGoalSelection(activeGoal.name, true);
+            }
           } finally {
             setPopulationLoading(false);
           }
         } else if (data.type === "goal_updated") {
           const g = data.goal;
           if (g) {
+            g.genomesLoaded = g.genomesLoaded !== false;
             g._lineageFull = false;
             g._lineageRequested = false;
-            mergeLiveLineage(g);
-            if (g.name === activeGoalName) {
-              await preloadGoalImages(g);
+            if (g.genomesLoaded) {
+              mergeLiveLineage(g);
+              if (g.name === activeGoalName) {
+                await preloadGoalImages(g);
+              }
             }
             syncGoalDeadline(g);
             syncMyVotesFromGoal(g);
@@ -7532,8 +7762,15 @@
             if (!goalOrder.includes(g.name)) goalOrder.push(g.name);
             renderGoalTabs();
             if (g.name === activeGoalName) {
-              activeGoalRenderToken += 1;
-              renderActiveGoal(true);
+              if (!g.genomesLoaded) {
+                activeGoalRenderToken += 1;
+                renderActiveGoal(true);
+                requestGoalSelection(g.name, true);
+              } else {
+                activeGoalRenderToken += 1;
+                renderActiveGoal(true);
+                setPopulationLoading(false);
+              }
             }
           }
         } else if (data.type === "lineage_all") {
@@ -7658,6 +7895,9 @@
         if (desiredName) params.set("username", desiredName);
         if (clientCid) params.set("cid", clientCid);
         if (isReconnect || reusedReloadCid) params.set("reconnect", "1");
+        params.set("lazy", "1");
+        const focusTarget = activeGoalName || initialGoal || "";
+        if (focusTarget) params.set("focus", focusTarget);
         if (isPrivateRoom && initialGoal) params.set("goal", initialGoal);
         if (isPrivateRoom && initialTask && initialTask !== "image") params.set("task", initialTask);
         if (isPrivateRoom && initialPop) params.set("pop", String(initialPop));
@@ -7668,6 +7908,20 @@
         if (isPrivateRoom) params.set("crossover", initialCrossoverRate.toFixed(2));
         if (evolveToken) params.set("evolve_token", evolveToken);
         if (supportsGzip) params.set("gzip", "1");
+
+        if (!isReconnect && goalsByName.size === 0) {
+          let bootTask = isPrivateRoom ? initialTask : (initialGoal ? "" : "microduck");
+          if (!bootTask && initialGoal) {
+            const matchedKey = Object.keys(taskSpecs).find(
+              (k) => k === initialGoal.toLowerCase() || (taskSpecs[k].label || "").toLowerCase().startsWith(initialGoal.toLowerCase())
+            );
+            if (matchedKey) bootTask = matchedKey;
+          }
+          if (bootTask && isSceneTask(bootTask)) {
+            ensureSceneVisualResources(bootTask).catch(() => {});
+            ensureSimWorkerSlot(0, true, bootTask).catch(() => {});
+          }
+        }
         const qs = params.toString() ? `?${params.toString()}` : "";
         const wsUrl = wsViaProxy
           ? `${proto}//${window.location.host}${basePath}/ws/chat/${roomName}/${qs}`
@@ -9547,39 +9801,11 @@
       });
 
       function renderLoadingSkeletons() {
-        const count = Math.max(3, Math.min(12, initialPop || 12));
-        const frag = document.createDocumentFragment();
-        for (let i = 0; i < count; i++) {
-          const card = document.createElement("div");
-          card.className = "genome-card is-skeleton-card";
-          card.setAttribute("aria-hidden", "true");
-
-          const thumb = document.createElement("span");
-          thumb.className = "skel-thumb";
-          card.appendChild(thumb);
-
-          const footer = document.createElement("div");
-          footer.className = "genome-footer";
-          const score = document.createElement("span");
-          score.className = "skel-bar";
-          score.style.setProperty("--skel-w", "34px");
-          score.style.setProperty("--skel-h", "8px");
-          footer.appendChild(score);
-
-          const btns = document.createElement("span");
-          btns.className = "vote-btns";
-          for (let b = 0; b < 3; b++) {
-            const chip = document.createElement("span");
-            chip.className = "skel-bar";
-            chip.style.setProperty("--skel-w", b === 0 ? "20px" : "16px");
-            chip.style.setProperty("--skel-h", "8px");
-            btns.appendChild(chip);
-          }
-          footer.appendChild(btns);
-          card.appendChild(footer);
-          frag.appendChild(card);
-        }
-        genomeGridEl.replaceChildren(frag);
+        const defaultCtrl = !isPrivateRoom && !initialGoal;
+        const count = defaultCtrl
+          ? ((taskSpecs.microduck && taskSpecs.microduck.defaultPopSize) || 8)
+          : Math.max(3, Math.min(12, initialPop || 8));
+        genomeGridEl.replaceChildren(buildSkeletonGridFragment(count, defaultCtrl || getTaskSpec(initialTask).kind === "control"));
       }
 
       renderLoadingSkeletons();

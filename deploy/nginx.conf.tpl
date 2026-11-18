@@ -12,12 +12,51 @@
     proxy_send_timeout 86400;
 }
 
+location ^~ {{SUBPATH}}/assets/ {
+    alias {{ASSETS_DIR}}/;
+    types {
+        application/javascript   js mjs;
+        text/css                 css;
+        application/wasm         wasm;
+        application/json         json;
+        application/xml          xml;
+        application/octet-stream bin;
+        model/stl                stl;
+        text/plain               obj;
+        image/png                png;
+    }
+    default_type application/octet-stream;
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    gzip_static on;
+    gzip on;
+    gzip_vary on;
+    gzip_comp_level 6;
+    gzip_min_length 256;
+    gzip_types
+        text/plain
+        text/css
+        application/javascript
+        application/json
+        application/xml
+        application/wasm
+        application/octet-stream
+        model/stl;
+    expires 365d;
+    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    access_log off;
+}
+
 location ^~ {{SUBPATH}}/media/ {
     alias {{MEDIA_DIR}}/;
     sendfile on;
     tcp_nopush on;
     tcp_nodelay on;
     gzip off;
+    gzip_static on;
+    gzip_vary on;
     expires 365d;
     add_header Cache-Control "public, max-age=31536000, immutable" always;
     add_header X-Content-Type-Options "nosniff" always;
@@ -51,6 +90,7 @@ location {{HTTP_LOC_MOD}}{{SUBPATH}}/ {
         application/manifest+json
         application/xml
         application/wasm
+        application/octet-stream
         image/svg+xml
         image/x-icon;
 

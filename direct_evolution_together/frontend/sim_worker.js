@@ -2382,10 +2382,16 @@ self.addEventListener("message", async (event) => {
       if (msg.warmMujoco && mujocoWasmUrl) {
         const warmSpec = msg.warmTaskId ? taskSpecs[msg.warmTaskId] : null;
         if (warmSpec && warmSpec.sceneManifest) {
-          const sId = warmSpec.sceneId || msg.warmTaskId;
-          await ensureMujocoScene(sId, warmSpec.sceneManifest, msg.physicsBuffer || null);
-        } else if (cheetahXmlUrl) {
+          if (msg.physicsBuffer) {
+            const sId = warmSpec.sceneId || msg.warmTaskId;
+            await ensureMujocoScene(sId, warmSpec.sceneManifest, msg.physicsBuffer);
+          } else {
+            await ensureMujocoWasm();
+          }
+        } else if ((!msg.warmTaskId || msg.warmTaskId === "halfcheetah") && cheetahXmlUrl) {
           await ensureMujocoCheetah();
+        } else {
+          await ensureMujocoWasm();
         }
       }
       self.postMessage({ reqId, ok: true, type: "init" });

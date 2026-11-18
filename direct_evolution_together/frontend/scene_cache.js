@@ -197,11 +197,48 @@
   }
 
   async function loadPopuloraBaseModel(basePath, taskId, baseHash = "", baseSeed = 1) {
-    const key = `populora_base:${taskId}:${baseHash || baseSeed}`;
-    const qs = new URLSearchParams({ task: taskId, seed: String(baseSeed || 1) });
-    if (baseHash) qs.set("hash", baseHash);
-    const url = `${basePath}/api/sim/base-model/?${qs.toString()}`;
-    return fetchJsonAsset(url, key);
+    const cleanHash = /^[0-9a-f]{8,64}$/i.test(String(baseHash || "")) ? String(baseHash) : "";
+    const key = `populora_base:${taskId}:${cleanHash || baseSeed}`;
+    if (memCache.has(key)) return memCache.get(key);
+    if (inFlight.has(key)) return inFlight.get(key);
+
+    const p = (async () => {
+      const hit = await idbGet(key);
+      if (hit && typeof hit === "object" && hit.tensors) {
+        memCache.set(key, hit);
+        return hit;
+      }
+      if (cleanHash) {
+        try {
+          const staticResp = await fetch(`${basePath}/media/base_models/${cleanHash}.json`, {
+            cache: "force-cache",
+          });
+          if (staticResp.ok) {
+            const parsed = await staticResp.json();
+            if (parsed && parsed.tensors) {
+              memCache.set(key, parsed);
+              idbSet(key, parsed).catch(() => {});
+              return parsed;
+            }
+          }
+        } catch {}
+      }
+      const qs = new URLSearchParams({ task: taskId, seed: String(baseSeed || 1) });
+      if (cleanHash) qs.set("hash", cleanHash);
+      const resp = await fetch(`${basePath}/api/sim/base-model/?${qs.toString()}`, {
+        cache: "force-cache",
+      });
+      if (!resp.ok) {
+        throw new Error(`Failed to fetch PopuLoRA base model (${resp.status})`);
+      }
+      const parsed = await resp.json();
+      memCache.set(key, parsed);
+      idbSet(key, parsed).catch(() => {});
+      return parsed;
+    })();
+
+    inFlight.set(key, p);
+    return p.finally(() => inFlight.delete(key));
   }
 
   global.DetSceneCache = {

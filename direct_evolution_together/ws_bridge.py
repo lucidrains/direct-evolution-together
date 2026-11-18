@@ -103,7 +103,7 @@ def _build_goals_payload(
             name, task = str(item), "image"
             target_pop = pop_size
         entries.append(_build_goal_entry(name, task, target_pop))
-    return json.dumps(entries)
+    return json.dumps(entries, separators=(",", ":"))
 
 
 def build_room_state_json(
@@ -154,7 +154,8 @@ def build_room_state_json(
                     "autoEvolve": eff_auto,
                 }
             ],
-        }
+        },
+        separators=(",", ":"),
     )
 
 
@@ -325,7 +326,7 @@ def _ensure_lobby_default_goals(
         return state_json, False
 
     parsed["goals"] = new_goal_list
-    return json.dumps(parsed), True
+    return json.dumps(parsed, separators=(",", ":")), True
 
 
 def seed_from_db(default_pop_size: int = 30, default_max_votes: int | None = None) -> None:
@@ -442,7 +443,7 @@ def flush_evo_jobs() -> int:
             elif kind == "create":
                 genomes = create_task_population(task, pop_size)
                 mummy_ws.apply_goal_create(
-                    room, goal_name, job["username"], json.dumps(genomes)
+                    room, goal_name, job["username"], json.dumps(genomes, separators=(",", ":"))
                 )
             elif kind == "evolve":
                 spec = get_task_spec(task)
@@ -478,7 +479,7 @@ def flush_evo_jobs() -> int:
                         crossover_rate=float(job.get("crossoverRate", 0.75)),
                     )
                 mummy_ws.apply_goal_evolve(
-                    room, goal_name, json.dumps(next_genomes), int(top_score)
+                    room, goal_name, json.dumps(next_genomes, separators=(",", ":")), int(top_score)
                 )
             elif kind == "resize":
                 spec = get_task_spec(task)
@@ -500,7 +501,7 @@ def flush_evo_jobs() -> int:
                         mut_sigma=float(job.get("mutSigma", 0.30)),
                     )
                 mummy_ws.apply_goal_resize(
-                    room, goal_name, job["username"], json.dumps(resized)
+                    room, goal_name, job["username"], json.dumps(resized, separators=(",", ":"))
                 )
             processed += 1
         except Exception as exc:
