@@ -22,6 +22,7 @@ _IMAGE_LOBBY_GOALS = ("Butterfly", "Galaxy", "Creature")
 class TrustPolicyConfig:
     enabled: bool = True
     quorum: int = 2
+    shard_quorum: int = 1
     tolerance_abs: float = 0.35
     tolerance_rel: float = 0.12
     initial_reputation: float = 0.80
@@ -37,6 +38,7 @@ class TrustPolicyConfig:
         return {
             "enabled": bool(self.enabled),
             "quorum": int(self.quorum),
+            "shardQuorum": int(self.shard_quorum),
             "spotCheckRate": float(self.spot_check_rate),
             "shardShuffle": bool(self.shard_shuffle),
             "aggregation": self.aggregation,
@@ -55,10 +57,14 @@ class EnvPolicyConfig:
     sim_phase_enabled: bool = False
     default_auto_evolve: bool = False
     allow_server_video: bool = True
+    min_pop_size: int = 3
     default_pop_size: int = 30
-    max_pop_size: int = 64
+    max_pop_size: int = 128
     default_min_votes: int = 20
     default_elite_frac: float | None = None
+    crowd_shard_threshold: int = 16
+    crowd_shard_size: int = 4
+    env_hyperparams: dict[str, object] = field(default_factory=dict)
 
     @property
     def sim_modes(self) -> tuple[str, ...]:
@@ -80,6 +86,40 @@ class EnvPolicyConfig:
     @property
     def client_sim(self) -> bool:
         return self.execution_policy in ("client_locked", "client_preferred")
+
+    @property
+    def can_shard_population(self) -> bool:
+        return (self.crowd_contribute and self.sim_phase_enabled) or self.execution_policy == "external_worker"
+
+    @property
+    def effective_max_pop_size(self) -> int:
+        if self.task == "image" or self.can_shard_population:
+            return max(self.min_pop_size, self.max_pop_size)
+        return max(self.min_pop_size, min(self.max_pop_size, self.crowd_shard_threshold * 2))
+
+    def constrain_room_scale(
+        self,
+        pop_size: int,
+        min_votes: int,
+        max_votes_per_user: int,
+        *,
+        is_control: bool = False,
+    ) -> dict[str, int | bool]:
+        """Enforce centralized population and voting constraints before scaling a room."""
+        eff_pop = max(self.min_pop_size, min(self.effective_max_pop_size, int(pop_size)))
+        eff_max_votes = max(1, min(128, int(max_votes_per_user)))
+        eff_min_votes = max(1, min(256, int(min_votes)))
+        if is_control:
+            eff_min_votes = min(eff_min_votes, eff_max_votes)
+        sharded = bool(self.sim_phase_enabled and eff_pop > self.crowd_shard_threshold)
+        return {
+            "population_size": eff_pop,
+            "min_votes": eff_min_votes,
+            "max_votes_per_user": eff_max_votes,
+            "sharded": sharded,
+            "crowd_shard_threshold": self.crowd_shard_threshold,
+            "crowd_shard_size": self.crowd_shard_size,
+        }
 
 
 @dataclass(frozen=True)
@@ -132,9 +172,10 @@ DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
         default_auto_evolve=False,
         allow_server_video=False,
         default_pop_size=8,
-        max_pop_size=32,
+        max_pop_size=128,
         default_min_votes=4,
         default_elite_frac=0.25,
+        crowd_shard_threshold=16,
     ),
     "unitree_go2": EnvPolicyConfig(
         task="unitree_go2",
@@ -147,13 +188,14 @@ DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
         default_auto_evolve=False,
         allow_server_video=False,
         default_pop_size=8,
-        max_pop_size=32,
+        max_pop_size=128,
         default_min_votes=4,
         default_elite_frac=0.25,
+        crowd_shard_threshold=16,
     ),
     "so101": EnvPolicyConfig(
         task="so101",
-        lobby_name="SO-101 Arm",
+        lobby_name="SO-102 Arm",
         lobby_default=True,
         lobby_order=2,
         execution_policy="client_locked",
@@ -162,9 +204,11 @@ DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
         default_auto_evolve=False,
         allow_server_video=False,
         default_pop_size=8,
-        max_pop_size=32,
+        max_pop_size=128,
         default_min_votes=4,
         default_elite_frac=0.25,
+        crowd_shard_threshold=16,
+        env_hyperparams={"arm_model": "so102"},
     ),
     "halfcheetah": EnvPolicyConfig(
         task="halfcheetah",
@@ -229,9 +273,13 @@ _ENV_VAR_OVERRIDES: tuple[tuple[str, str], ...] = (
     ("allow_server_video", "DET_ALLOW_VIDEO_{task}"),
     ("execution_policy", "DET_EXECUTION_POLICY_{task}"),
     ("default_pop_size", "DET_POP_SIZE_{task}"),
+    ("min_pop_size", "DET_MIN_POP_SIZE_{task}"),
     ("max_pop_size", "DET_MAX_POP_SIZE_{task}"),
     ("default_min_votes", "DET_MIN_VOTES_{task}"),
     ("default_elite_frac", "DET_ELITE_FRAC_{task}"),
+    ("crowd_shard_threshold", "DET_CROWD_SHARD_THRESHOLD_{task}"),
+    ("crowd_shard_size", "DET_CROWD_SHARD_SIZE_{task}"),
+    ("env_hyperparams", "DET_HYPERPARAMS_{task}"),
 )
 
 _ENV_POLICY_FIELDS = frozenset(EnvPolicyConfig.__dataclass_fields__) - {"task"}
@@ -240,6 +288,7 @@ _ENV_POLICY_FIELDS = frozenset(EnvPolicyConfig.__dataclass_fields__) - {"task"}
 _TRUST_FIELDS: tuple[tuple[str, str, float | None, float | None], ...] = (
     ("enabled", "DET_CROWD_TRUST_ENABLED", None, None),
     ("quorum", "DET_CROWD_QUORUM", 1, 10),
+    ("shard_quorum", "DET_CROWD_SHARD_QUORUM", 1, 10),
     ("tolerance_abs", "DET_CROWD_TOLERANCE_ABS", 0.01, 100.0),
     ("tolerance_rel", "DET_CROWD_TOLERANCE_REL", 0.0, 1.0),
     ("initial_reputation", "DET_CROWD_INIT_REPUTATION", 0.1, 1.0),
@@ -302,10 +351,23 @@ def _coerce_env_value(field_name: str, raw: object, default: object) -> object:
     if field_name == "execution_policy":
         policy = str(raw).strip().lower()
         return policy if policy in _VALID_POLICIES else default
-    if field_name == "default_pop_size":
-        return _coerce_int(raw, int(default), 3, 64)
-    if field_name == "max_pop_size":
-        return _coerce_int(raw, int(default), 3, 64)
+    if field_name in ("min_pop_size", "default_pop_size", "max_pop_size"):
+        return _coerce_int(raw, int(default), 3, 128)
+    if field_name == "crowd_shard_threshold":
+        return _coerce_int(raw, int(default), 3, 256)
+    if field_name == "crowd_shard_size":
+        return _coerce_int(raw, int(default), 1, 32)
+    if field_name == "env_hyperparams":
+        if isinstance(raw, dict):
+            return {str(k): v for k, v in raw.items()}
+        if isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    return {str(k): v for k, v in parsed.items()}
+            except ValueError:
+                pass
+        return default
     if field_name == "default_min_votes":
         return _coerce_int(raw, int(default), 0, 256)
     if field_name == "default_elite_frac":
@@ -367,6 +429,13 @@ def build_config() -> CentralConfig:
             raw = os.getenv(template.format(task=tid.upper()))
             if raw is not None and raw.strip():
                 values[field_name] = _coerce_env_value(field_name, raw, values[field_name])
+        hp_prefix = f"DET_HP_{tid.upper()}_"
+        hp = dict(values.get("env_hyperparams") or {})
+        for env_k, env_v in os.environ.items():
+            if env_k.startswith(hp_prefix) and env_v.strip():
+                param_key = env_k[len(hp_prefix) :].lower()
+                hp[param_key] = env_v.strip()
+        values["env_hyperparams"] = hp
         values["max_pop_size"] = max(int(values["default_pop_size"]), int(values["max_pop_size"]))
         envs[tid] = EnvPolicyConfig(**values)
 

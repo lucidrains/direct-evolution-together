@@ -87,3 +87,16 @@ MICRODUCK_ENV_PARAMS: dict[str, object] = {
     "minUprightness": 0.35,
     "legJoints": [0, 1, 2, 3, 4, 9, 10, 11, 12, 13],
 }
+
+MICRODUCK_HYPERPARAM_SPECS: tuple[dict[str, object], ...] = (
+    {
+        "key": "actionScale",
+        "label": "Joint Action Scale",
+        "type": "float",
+        "default": 0.50,
+        "min": 0.20,
+        "max": 0.85,
+        "step": 0.05,
+        "description": "Per-step joint target amplitude (rad) around standing pose.",
+    },
+)

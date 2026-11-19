@@ -1,6 +1,8 @@
-"""SO-101 6-DOF robotic arm tabletop cube pick-and-lift constants & PopuLoRA policy spec."""
+"""SO-101 / SO-ARM102 6-DOF robotic arm tabletop cube pick-and-lift constants & PopuLoRA policy spec."""
 
 from __future__ import annotations
+
+from typing import Any, Mapping
 
 SO101_CONTROL_HZ = 50
 SO101_N_SUBSTEPS = 5
@@ -58,8 +60,25 @@ SO101_POLICY_SPEC: dict[str, object] = {
     "initStdUp": 0.35,
 }
 
-SO101_ENV_PARAMS: dict[str, object] = {
+SO102_STL_ASSETS: tuple[str, ...] = (
+    "scenes/so102/meshes/base_link.stl",
+    "scenes/so102/meshes/link1_1.stl",
+    "scenes/so102/meshes/link2_1.stl",
+    "scenes/so102/meshes/link3_1.stl",
+    "scenes/so102/meshes/link4_1.stl",
+    "scenes/so102/meshes/link5_1.stl",
+    "scenes/so102/meshes/clamp1_1.stl",
+    "scenes/so102/meshes/clamp2_1.stl",
+)
+SO102_URDF_ASSET = "scenes/so102/so_arm_102.urdf"
+
+SO101_ANGULAR_ENV_PARAMS: dict[str, object] = {
+    "arm_model": "so101",
     "sceneId": "so101",
+    "shortLabel": "SO-101",
+    "gripperKind": "angular",
+    "urdfAsset": None,
+    "stlAssets": [],
     "physicsDt": SO101_PHYSICS_DT,
     "nSubsteps": SO101_N_SUBSTEPS,
     "ctrlDt": SO101_DT,
@@ -78,3 +97,72 @@ SO101_ENV_PARAMS: dict[str, object] = {
     "floorScrapeWeight": 8.0,
     "actionRateWeight": 0.04,
 }
+
+SO102_ENV_PARAMS: dict[str, object] = {
+    **SO101_ANGULAR_ENV_PARAMS,
+    "arm_model": "so102",
+    "sceneId": "so102",
+    "shortLabel": "SO-ARM102",
+    "gripperKind": "parallel",
+    "urdfAsset": SO102_URDF_ASSET,
+    "stlAssets": list(SO102_STL_ASSETS),
+    "actionScales": [0.65, 0.65, 0.65, 0.65, 0.55, 0.028],
+    "goalPos": [0.238, 0.0, 0.14],
+}
+
+# Default arm environment hyperparameters point at SO-ARM102 (parallel 2-jaw gripper)
+SO101_ENV_PARAMS: dict[str, object] = dict(SO102_ENV_PARAMS)
+
+SO_ARM_VARIANTS: dict[str, dict[str, Any]] = {
+    "so102": dict(SO102_ENV_PARAMS),
+    "so101": dict(SO101_ANGULAR_ENV_PARAMS),
+}
+
+SO101_ALIASES = ("so101", "so_101", "so_arm_101", "soarm101")
+SO102_ALIASES = ("so102", "so_102", "so_arm_102", "soarm102")
+
+SO101_HYPERPARAM_SPECS: tuple[dict[str, Any], ...] = (
+    {
+        "key": "arm_model",
+        "aliases": ["armModel", "sceneId"],
+        "label": "Arm Hardware Model",
+        "type": "select",
+        "default": "so102",
+        "description": "Defaults to SO-ARM102 (parallel 2-jaw prismatic gripper backed by so_arm_102.urdf + STL meshes), with SO-101 angular jaw available as an option.",
+        "options": [
+            {
+                "value": "so102",
+                "aliases": list(SO102_ALIASES),
+                "label": "SO-ARM102 (Parallel Gripper · URDF/STL)",
+                "sceneId": "so102",
+                "urdfAsset": SO102_URDF_ASSET,
+            },
+            {
+                "value": "so101",
+                "aliases": list(SO101_ALIASES),
+                "label": "SO-101 (Angular Jaw)",
+                "sceneId": "so101",
+                "urdfAsset": None,
+            },
+        ],
+    },
+)
+
+
+def normalize_so_arm_model(raw: object) -> str:
+    """Normalize an arm model identifier to ``'so102'`` (default) or ``'so101'``."""
+    text = str(raw or "").strip().lower().replace("-", "_")
+    return "so101" if text in SO101_ALIASES else "so102"
+
+
+def resolve_so_arm_env_params(overrides: Mapping[str, object] | None = None) -> dict[str, Any]:
+    """Return canonical arm environment hyperparameters pointing at SO-101 or SO-102 scene/URDF/STL files."""
+    ov = overrides or {}
+    arm_model = normalize_so_arm_model(ov.get("arm_model") or ov.get("armModel") or ov.get("sceneId"))
+    resolved = dict(SO_ARM_VARIANTS[arm_model])
+    return {
+        **resolved,
+        "actionScales": list(resolved["actionScales"]),
+        "goalPos": list(resolved["goalPos"]),
+        "stlAssets": list(resolved["stlAssets"]),
+    }

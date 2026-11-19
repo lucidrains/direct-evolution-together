@@ -32,7 +32,7 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 
-from direct_evolution_together.cppn import _alloc_genome_id
+from direct_evolution_together.cppn import _alloc_genome_id, alloc_short_uuid, normalize_short_uuid
 
 MAX_POPULORA_CHECKPOINT_BYTES = 4 * 1024 * 1024  # 4 MB cap for merged GRU/MLP .pt files
 
@@ -380,6 +380,7 @@ def _individual_to_genome_dict(
     base_hash: str,
     base_seed: int,
     genome_id: int | None = None,
+    uuid: str | None = None,
     parents: list[int] | None = None,
     op: str = "random",
 ) -> dict[str, object]:
@@ -399,6 +400,7 @@ def _individual_to_genome_dict(
         }
     out: dict[str, object] = {
         "id": int(genome_id if genome_id is not None else _alloc_genome_id()),
+        "uuid": normalize_short_uuid(uuid) or alloc_short_uuid(),
         "kind": "populora",
         "task": task_id,
         "parents": [int(p) for p in (parents or [])],
@@ -492,6 +494,7 @@ def validate_populora_genome_dict(raw: object, policy_spec: dict[str, object] | 
 
     out: dict[str, object] = {
         "id": int(raw.get("id", 0) or 0),
+        "uuid": normalize_short_uuid(raw.get("uuid")) or alloc_short_uuid(),
         "kind": "populora",
         "task": str(raw.get("task") or "microduck"),
         "parents": [int(p) for p in raw.get("parents", []) if isinstance(p, int)],

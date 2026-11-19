@@ -655,6 +655,68 @@ function ensureMicroduckSceneMeta(mujoco, entry, envParams) {
   return entry.meta;
 }
 
+function matchWorkerHyperparamOption(hSpec, rawVal) {
+  const norm = String(rawVal ?? "").trim().toLowerCase().replace(/-/g, "_");
+  if (!norm || !Array.isArray(hSpec.options)) return "";
+  for (const opt of hSpec.options) {
+    const val = String(opt.value || "").trim().toLowerCase();
+    const aliases = Array.isArray(opt.aliases) ? opt.aliases.map((a) => String(a).trim().toLowerCase()) : [];
+    if (norm === val || aliases.includes(norm)) return val;
+  }
+  return "";
+}
+
+function resolveSceneTaskConfig(taskId, envParamsOverride = null) {
+  const spec = taskSpecs[taskId] || {};
+  let merged = spec.envParams ? { ...spec.envParams } : {};
+  const ov = envParamsOverride && typeof envParamsOverride === "object" ? envParamsOverride : {};
+  const hSpecs = Array.isArray(spec.hyperparamSpecs) ? spec.hyperparamSpecs : [];
+  let selectedVariant = "";
+  let variantManifest = null;
+
+  if (spec.variants && typeof spec.variants === "object") {
+    for (const h of hSpecs) {
+      const keys = [h.key, ...(Array.isArray(h.aliases) ? h.aliases : [])].filter(Boolean);
+      const raw = keys.map((k) => ov[k]).find((v) => v !== undefined && v !== null && v !== "")
+        ?? merged[h.key]
+        ?? h.default;
+      const matched = matchWorkerHyperparamOption(h, raw);
+      if (matched && spec.variants[matched]) {
+        selectedVariant = matched;
+        const vObj = { ...spec.variants[matched] };
+        variantManifest = vObj.sceneManifest || null;
+        delete vObj.sceneManifest;
+        merged = { ...merged, ...vObj };
+        break;
+      }
+    }
+  }
+
+  for (const h of hSpecs) {
+    const keys = [h.key, ...(Array.isArray(h.aliases) ? h.aliases : [])].filter(Boolean);
+    const raw = keys.map((k) => ov[k]).find((v) => v !== undefined && v !== null && v !== "");
+    if (raw === undefined) continue;
+    const hType = String(h.type || "select").toLowerCase();
+    if (hType === "select") {
+      const matched = matchWorkerHyperparamOption(h, raw);
+      if (matched) merged[h.key] = matched;
+    } else if (hType === "float" || hType === "number" || hType === "int") {
+      let num = Number(raw);
+      if (Number.isFinite(num)) {
+        if (typeof h.min === "number") num = Math.max(h.min, num);
+        if (typeof h.max === "number") num = Math.min(h.max, num);
+        merged[h.key] = hType === "int" ? Math.round(num) : Math.round(num * 10000) / 10000;
+      }
+    } else if (hType === "bool") {
+      merged[h.key] = raw === true || raw === "true" || raw === "1";
+    }
+  }
+
+  const sceneId = String(merged.sceneId || spec.sceneId || taskId);
+  const manifest = variantManifest || spec.sceneManifest || null;
+  return { variant: selectedVariant, sceneId, manifest, envParams: merged };
+}
+
 async function microduckRollout(
   genome,
   seed = 0,
@@ -664,17 +726,16 @@ async function microduckRollout(
   capturePoses = true,
   poseStride = 2,
   suppliedBaseModel = null,
-  suppliedPhysicsBuf = null
+  suppliedPhysicsBuf = null,
+  envParamsOverride = null
 ) {
-  const spec = taskSpecs.microduck || {};
-  const manifest = spec.sceneManifest;
-  const envParams = spec.envParams || {};
+  const { sceneId, manifest, envParams } = resolveSceneTaskConfig("microduck", envParamsOverride);
 
   const [{ mujoco, model, data }, baseModel] = await Promise.all([
-    ensureMujocoScene("microduck", manifest, suppliedPhysicsBuf),
+    ensureMujocoScene(sceneId, manifest, suppliedPhysicsBuf),
     ensurePopuLoraBaseModel("microduck", genome, suppliedBaseModel),
   ]);
-  const sceneEntry = mountedScenes.get("microduck");
+  const sceneEntry = mountedScenes.get(sceneId);
   const meta = ensureMicroduckSceneMeta(mujoco, sceneEntry, envParams);
   const compiledPolicy = compilePopuLoraIndividual(baseModel, genome);
   const policyRunner = createPopuLoraRunner(compiledPolicy);
@@ -1011,7 +1072,7 @@ async function microduckRollout(
   };
 }
 
-async function evaluateMicroduck(genome, seeds, baseModel = null, physicsBuf = null) {
+async function evaluateMicroduck(genome, seeds, baseModel = null, physicsBuf = null, envParams = null) {
   const spec = taskSpecs.microduck || { maxSteps: 400 };
   const maxSteps = spec.maxSteps || 400;
   let sumRet = 0.0;
@@ -1035,7 +1096,8 @@ async function evaluateMicroduck(genome, seeds, baseModel = null, physicsBuf = n
       i === 0,
       2,
       baseModel,
-      physicsBuf
+      physicsBuf,
+      envParams
     );
     if (i === 0) primaryRollout = ro;
     sumRet += ro.return;
@@ -1144,17 +1206,16 @@ async function unitreeGo2Rollout(
   capturePoses = true,
   poseStride = 2,
   suppliedBaseModel = null,
-  suppliedPhysicsBuf = null
+  suppliedPhysicsBuf = null,
+  envParamsOverride = null
 ) {
-  const spec = taskSpecs.unitree_go2 || {};
-  const manifest = spec.sceneManifest;
-  const envParams = spec.envParams || {};
+  const { sceneId, manifest, envParams } = resolveSceneTaskConfig("unitree_go2", envParamsOverride);
 
   const [{ mujoco, model, data }, baseModel] = await Promise.all([
-    ensureMujocoScene("unitree_go2", manifest, suppliedPhysicsBuf),
+    ensureMujocoScene(sceneId, manifest, suppliedPhysicsBuf),
     ensurePopuLoraBaseModel("unitree_go2", genome, suppliedBaseModel),
   ]);
-  const sceneEntry = mountedScenes.get("unitree_go2");
+  const sceneEntry = mountedScenes.get(sceneId);
   const meta = ensureUnitreeGo2SceneMeta(mujoco, sceneEntry, envParams);
   const compiledPolicy = compilePopuLoraIndividual(baseModel, genome);
   const policyRunner = createPopuLoraRunner(compiledPolicy);
@@ -1482,7 +1543,7 @@ async function unitreeGo2Rollout(
   };
 }
 
-async function evaluateUnitreeGo2(genome, seeds, baseModel = null, physicsBuf = null) {
+async function evaluateUnitreeGo2(genome, seeds, baseModel = null, physicsBuf = null, envParams = null) {
   const spec = taskSpecs.unitree_go2 || { maxSteps: 400 };
   const maxSteps = spec.maxSteps || 400;
   let sumRet = 0.0;
@@ -1504,7 +1565,8 @@ async function evaluateUnitreeGo2(genome, seeds, baseModel = null, physicsBuf = 
       i === 0,
       2,
       baseModel,
-      physicsBuf
+      physicsBuf,
+      envParams
     );
     if (i === 0) primaryRollout = ro;
     sumRet += ro.return;
@@ -1551,7 +1613,13 @@ async function evaluateUnitreeGo2(genome, seeds, baseModel = null, physicsBuf = 
   };
 }
 
-// --- SO-101 6-DOF Robotic Arm Cube Pick & Lift Environment (PopuLoRA + MuJoCo WASM) ---
+// --- SO-101 / SO-ARM102 6-DOF Robotic Arm Cube Pick & Lift Environment (PopuLoRA + MuJoCo WASM) ---
+
+function resolveSo101Variant(envParamsOverride = null) {
+  const { variant, sceneId, manifest, envParams } = resolveSceneTaskConfig("so101", envParamsOverride);
+  const armModel = String(variant || envParams.arm_model || sceneId || "so102");
+  return { armModel, sceneId, manifest, envParams };
+}
 
 function ensureSo101SceneMeta(mujoco, entry, envParams) {
   if (entry.initialized) return entry.meta;
@@ -1562,6 +1630,9 @@ function ensureSo101SceneMeta(mujoco, entry, envParams) {
   const objKey = mujoco.mjtObj.mjOBJ_KEY.value ?? mujoco.mjtObj.mjOBJ_KEY;
   const objGeom = mujoco.mjtObj.mjOBJ_GEOM.value ?? mujoco.mjtObj.mjOBJ_GEOM;
   const objSite = mujoco.mjtObj.mjOBJ_SITE.value ?? mujoco.mjtObj.mjOBJ_SITE;
+  const objJnt = mujoco.mjtObj.mjOBJ_JOINT.value ?? mujoco.mjtObj.mjOBJ_JOINT;
+  const objBody = mujoco.mjtObj.mjOBJ_BODY.value ?? mujoco.mjtObj.mjOBJ_BODY;
+  const jntSlideVal = mujoco.mjtJoint?.mjJNT_SLIDE?.value ?? mujoco.mjtJoint?.mjJNT_SLIDE ?? 2;
 
   const homeIdx = Math.max(0, mujoco.mj_name2id(model, objKey, "home"));
   const homeQpos = Float64Array.from(model.key_qpos.subarray(homeIdx * model.nq, (homeIdx + 1) * model.nq));
@@ -1573,6 +1644,19 @@ function ensureSo101SceneMeta(mujoco, entry, envParams) {
   const fixedTipSite = mujoco.mj_name2id(model, objSite, "fixed_tip");
   const movingTipSite = mujoco.mj_name2id(model, objSite, "moving_tip");
 
+  let cubeJnt = mujoco.mj_name2id(model, objJnt, "cube_freejoint");
+  if (cubeJnt < 0) {
+    const cubeBody = mujoco.mj_name2id(model, objBody, "cube");
+    cubeJnt = cubeBody >= 0 ? Number(model.body_jntadr[cubeBody]) : -1;
+  }
+  const cubeQposAdr = cubeJnt >= 0 ? Number(model.jnt_qposadr[cubeJnt]) : 6;
+  const cubeDofAdr = cubeJnt >= 0 ? Number(model.jnt_dofadr[cubeJnt]) : 6;
+
+  const gripperJnt = mujoco.mj_name2id(model, objJnt, "gripper");
+  const gripperIsSlide = gripperJnt >= 0 && Number(model.jnt_type[gripperJnt]) === Number(jntSlideVal);
+  const mirrorJnt = mujoco.mj_name2id(model, objJnt, "gripper_mirror");
+  const mirrorQposAdr = mirrorJnt >= 0 ? Number(model.jnt_qposadr[mirrorJnt]) : -1;
+
   const { ctrlMin, ctrlMax } = readActuatorCtrlBounds(model, 3.14);
 
   entry.meta = {
@@ -1583,6 +1667,10 @@ function ensureSo101SceneMeta(mujoco, entry, envParams) {
     cubeGeom,
     fixedTipSite,
     movingTipSite,
+    cubeQposAdr,
+    cubeDofAdr,
+    gripperIsSlide,
+    mirrorQposAdr,
     ctrlMin,
     ctrlMax,
     obsBuf: new Float32Array(33),
@@ -1600,17 +1688,16 @@ async function so101Rollout(
   capturePoses = true,
   poseStride = 2,
   suppliedBaseModel = null,
-  suppliedPhysicsBuf = null
+  suppliedPhysicsBuf = null,
+  envParamsOverride = null
 ) {
-  const spec = taskSpecs.so101 || {};
-  const manifest = spec.sceneManifest;
-  const envParams = spec.envParams || {};
+  const { armModel, sceneId, manifest, envParams } = resolveSo101Variant(envParamsOverride);
 
   const [{ mujoco, model, data }, baseModel] = await Promise.all([
-    ensureMujocoScene("so101", manifest, suppliedPhysicsBuf),
+    ensureMujocoScene(sceneId, manifest, suppliedPhysicsBuf),
     ensurePopuLoraBaseModel("so101", genome, suppliedBaseModel),
   ]);
-  const sceneEntry = mountedScenes.get("so101");
+  const sceneEntry = mountedScenes.get(sceneId);
   const meta = ensureSo101SceneMeta(mujoco, sceneEntry, envParams);
   const compiledPolicy = compilePopuLoraIndividual(baseModel, genome);
   const policyRunner = createPopuLoraRunner(compiledPolicy);
@@ -1618,8 +1705,10 @@ async function so101Rollout(
 
   const nSubsteps = envParams.nSubsteps || 5;
   const ctrlDt = envParams.ctrlDt || 0.02;
-  const actionScales = envParams.actionScales || [0.65, 0.65, 0.65, 0.65, 0.55, 0.95];
-  const goalPos = envParams.goalPos || [0.23, 0.012, 0.14];
+  const actionScales =
+    envParams.actionScales ||
+    (meta.gripperIsSlide ? [0.65, 0.65, 0.65, 0.65, 0.55, 0.028] : [0.65, 0.65, 0.65, 0.65, 0.55, 0.95]);
+  const goalPos = envParams.goalPos || (meta.gripperIsSlide ? [0.238, 0.0, 0.14] : [0.23, 0.012, 0.14]);
   const cubeRestZ = envParams.cubeRestZ ?? 0.016;
 
   const reachW = envParams.reachWeight ?? 12.0;
@@ -1634,6 +1723,9 @@ async function so101Rollout(
   const floorScrapeW = envParams.floorScrapeWeight ?? 8.0;
   const actionRateW = envParams.actionRateWeight ?? 0.04;
 
+  const cQ = meta.cubeQposAdr;
+  const cV = meta.cubeDofAdr;
+
   mujoco.mj_resetData(model, data);
   let qpos = data.qpos;
   let qvel = data.qvel;
@@ -1641,15 +1733,22 @@ async function so101Rollout(
 
   const rng = mulberry32(seed);
   qpos.set(meta.homeQpos);
-  for (let j = 0; j < 6; j++) qpos[j] += (rng() * 2.0 - 1.0) * 0.015;
+  for (let j = 0; j < 6; j++) {
+    const pertScale = j === 5 && meta.gripperIsSlide ? 0.0015 : 0.015;
+    qpos[j] += (rng() * 2.0 - 1.0) * pertScale;
+  }
+  if (meta.gripperIsSlide) {
+    qpos[5] = Math.max(meta.ctrlMin[5], Math.min(meta.ctrlMax[5], qpos[5]));
+    if (meta.mirrorQposAdr >= 0) qpos[meta.mirrorQposAdr] = -qpos[5];
+  }
   // Perturb initial cube XY slightly per seed for closed-loop reaching
   if (seed > 0) {
-    qpos[6] += (rng() * 2.0 - 1.0) * 0.015;
-    qpos[7] += (rng() * 2.0 - 1.0) * 0.018;
+    qpos[cQ] += (rng() * 2.0 - 1.0) * 0.015;
+    qpos[cQ + 1] += (rng() * 2.0 - 1.0) * 0.018;
   }
-  if (nudge === "left") qpos[7] += 0.032;
-  else if (nudge === "right") qpos[7] -= 0.032;
-  else if (nudge === "back") qpos[6] += 0.030;
+  if (nudge === "left") qpos[cQ + 1] += 0.032;
+  else if (nudge === "right") qpos[cQ + 1] -= 0.032;
+  else if (nudge === "back") qpos[cQ] += 0.030;
 
   ctrl.set(meta.homeCtrl);
   mujoco.mj_forward(model, data);
@@ -1657,9 +1756,11 @@ async function so101Rollout(
   qvel = data.qvel;
   ctrl = data.ctrl;
 
-  const startCubeX = qpos[6];
-  const startCubeY = qpos[7];
+  const startCubeX = qpos[cQ];
+  const startCubeY = qpos[cQ + 1];
   const lastAction = new Float32Array(6);
+  const gripPosObsScale = meta.gripperIsSlide ? 25.0 : 1.0;
+  const gripVelObsScale = meta.gripperIsSlide ? 2.5 : 0.10;
 
   const readPinchAndCube = () => {
     const sx = data.site_xpos;
@@ -1672,7 +1773,7 @@ async function so101Rollout(
     const minTipZ = Math.min(sx[fOff + 2], sx[mOff + 2]);
     return {
       px, py, pz, minTipZ,
-      cx: qp[6], cy: qp[7], cz: qp[8],
+      cx: qp[cQ], cy: qp[cQ + 1], cz: qp[cQ + 2],
     };
   };
 
@@ -1688,8 +1789,12 @@ async function so101Rollout(
     const obs = meta.obsBuf;
     const qp = data.qpos;
     const qv = data.qvel;
-    for (let j = 0; j < 6; j++) obs[j] = qp[j] - meta.homeQpos[j];
-    for (let j = 0; j < 6; j++) obs[6 + j] = qv[j] * 0.10;
+    for (let j = 0; j < 5; j++) {
+      obs[j] = qp[j] - meta.homeQpos[j];
+      obs[6 + j] = qv[j] * 0.10;
+    }
+    obs[5] = (qp[5] - meta.homeQpos[5]) * gripPosObsScale;
+    obs[11] = qv[5] * gripVelObsScale;
     obs[12] = (st.px - 0.22) * 4.0;
     obs[13] = st.py * 4.0;
     obs[14] = (st.pz - 0.08) * 4.0;
@@ -1702,9 +1807,9 @@ async function so101Rollout(
     obs[21] = (goalPos[0] - st.cx) * 4.0;
     obs[22] = (goalPos[1] - st.cy) * 4.0;
     obs[23] = (goalPos[2] - st.cz) * 4.0;
-    obs[24] = qv[6] * 0.5;
-    obs[25] = qv[7] * 0.5;
-    obs[26] = qv[8] * 0.5;
+    obs[24] = qv[cV] * 0.5;
+    obs[25] = qv[cV + 1] * 0.5;
+    obs[26] = qv[cV + 2] * 0.5;
     for (let j = 0; j < 6; j++) obs[27 + j] = lastAction[j];
     return obs;
   };
@@ -1781,12 +1886,20 @@ async function so101Rollout(
     if (curLiftMm > maxLiftMm) maxLiftMm = curLiftMm;
 
     const rReach = reachW * (1.0 - Math.tanh(6.5 * dist)) * ctrlDt + reachProgW * dReachProg;
-    const gripAngle = qpos[5];
+    const gripPos = qpos[5];
     let rGrip = 0.0;
-    if (dist > 0.042) {
-      rGrip = 1.5 * Math.max(0.0, Math.min(1.0, (gripAngle - 0.25) / 0.40)) * ctrlDt;
+    if (meta.gripperIsSlide) {
+      if (dist > 0.042) {
+        rGrip = 1.5 * Math.max(0.0, Math.min(1.0, (gripPos - 0.012) / 0.016)) * ctrlDt;
+      } else {
+        rGrip = preGraspW * (1.0 - Math.max(0.0, Math.min(1.0, (gripPos - 0.002) / 0.024))) * ctrlDt;
+      }
     } else {
-      rGrip = preGraspW * (1.0 - Math.max(0.0, Math.min(1.0, (gripAngle + 0.12) / 0.75))) * ctrlDt;
+      if (dist > 0.042) {
+        rGrip = 1.5 * Math.max(0.0, Math.min(1.0, (gripPos - 0.25) / 0.40)) * ctrlDt;
+      } else {
+        rGrip = preGraspW * (1.0 - Math.max(0.0, Math.min(1.0, (gripPos + 0.12) / 0.75))) * ctrlDt;
+      }
     }
     if (bothTouch) rGrip += pinchGraspW * ctrlDt;
     else if (anyTouch && dist < 0.045) rGrip += singleTouchW * ctrlDt;
@@ -1824,6 +1937,8 @@ async function so101Rollout(
 
   return {
     seed,
+    armModel,
+    sceneId,
     steps,
     terminated: false,
     distance: maxLiftM,
@@ -1841,9 +1956,10 @@ async function so101Rollout(
   };
 }
 
-async function evaluateSo101(genome, seeds, baseModel = null, physicsBuf = null) {
+async function evaluateSo101(genome, seeds, baseModel = null, physicsBuf = null, envParams = null) {
   const spec = taskSpecs.so101 || { maxSteps: 250 };
   const maxSteps = spec.maxSteps || 250;
+  const { armModel } = resolveSo101Variant(envParams);
   let sumRet = 0.0;
   let sumLiftMm = 0.0;
   let sumMinDistCm = 0.0;
@@ -1861,7 +1977,8 @@ async function evaluateSo101(genome, seeds, baseModel = null, physicsBuf = null)
       i === 0,
       2,
       baseModel,
-      physicsBuf
+      physicsBuf,
+      envParams
     );
     if (i === 0) primaryRollout = ro;
     sumRet += ro.return;
@@ -1885,6 +2002,7 @@ async function evaluateSo101(genome, seeds, baseModel = null, physicsBuf = null)
   return {
     summary: {
       task: "so101",
+      armModel,
       seeds,
       return: meanRet,
       liftMm,
@@ -2293,7 +2411,7 @@ async function evaluateHalfCheetah(genome, seeds) {
 const SIM_TASK_HANDLERS = {
   microduck: {
     wasm: true,
-    evaluate: (g, seeds, bm, pb) => evaluateMicroduck(g, seeds, bm, pb),
+    evaluate: (g, seeds, bm, pb, ep) => evaluateMicroduck(g, seeds, bm, pb, ep),
     rollout: (msg) =>
       microduckRollout(
         msg.genome,
@@ -2304,12 +2422,13 @@ const SIM_TASK_HANDLERS = {
         true,
         1,
         msg.baseModel || null,
-        msg.physicsBuffer || null
+        msg.physicsBuffer || null,
+        msg.envParams || null
       ),
   },
   unitree_go2: {
     wasm: true,
-    evaluate: (g, seeds, bm, pb) => evaluateUnitreeGo2(g, seeds, bm, pb),
+    evaluate: (g, seeds, bm, pb, ep) => evaluateUnitreeGo2(g, seeds, bm, pb, ep),
     rollout: (msg) =>
       unitreeGo2Rollout(
         msg.genome,
@@ -2320,12 +2439,13 @@ const SIM_TASK_HANDLERS = {
         true,
         1,
         msg.baseModel || null,
-        msg.physicsBuffer || null
+        msg.physicsBuffer || null,
+        msg.envParams || null
       ),
   },
   so101: {
     wasm: true,
-    evaluate: (g, seeds, bm, pb) => evaluateSo101(g, seeds, bm, pb),
+    evaluate: (g, seeds, bm, pb, ep) => evaluateSo101(g, seeds, bm, pb, ep),
     rollout: (msg) =>
       so101Rollout(
         msg.genome,
@@ -2336,7 +2456,8 @@ const SIM_TASK_HANDLERS = {
         true,
         1,
         msg.baseModel || null,
-        msg.physicsBuffer || null
+        msg.physicsBuffer || null,
+        msg.envParams || null
       ),
   },
   halfcheetah: {
@@ -2383,8 +2504,8 @@ self.addEventListener("message", async (event) => {
         const warmSpec = msg.warmTaskId ? taskSpecs[msg.warmTaskId] : null;
         if (warmSpec && warmSpec.sceneManifest) {
           if (msg.physicsBuffer) {
-            const sId = warmSpec.sceneId || msg.warmTaskId;
-            await ensureMujocoScene(sId, warmSpec.sceneManifest, msg.physicsBuffer);
+            const vInfo = resolveSceneTaskConfig(msg.warmTaskId, msg.warmEnvParams || msg.envParams || null);
+            await ensureMujocoScene(vInfo.sceneId, vInfo.manifest, msg.physicsBuffer);
           } else {
             await ensureMujocoWasm();
           }
@@ -2399,12 +2520,12 @@ self.addEventListener("message", async (event) => {
     }
 
     if (type === "evalBatch") {
-      const { taskId, genomes, seeds, baseModel, physicsBuffer } = msg;
+      const { taskId, genomes, seeds, baseModel, physicsBuffer, envParams } = msg;
       const handler = getSimHandler(taskId);
       const items = [];
       for (let i = 0; i < genomes.length; i++) {
         const g = genomes[i];
-        const ev = await handler.evaluate(g, seeds, baseModel || null, physicsBuffer || null);
+        const ev = await handler.evaluate(g, seeds, baseModel || null, physicsBuffer || null, envParams || null);
         items.push({
           index: i,
           fp: genomeFingerprint(g),
@@ -2436,8 +2557,8 @@ self.addEventListener("message", async (event) => {
     }
 
     if (type === "evalSummary") {
-      const { taskId, genome, seeds, baseModel, physicsBuffer } = msg;
-      const ev = await getSimHandler(taskId).evaluate(genome, seeds, baseModel || null, physicsBuffer || null);
+      const { taskId, genome, seeds, baseModel, physicsBuffer, envParams } = msg;
+      const ev = await getSimHandler(taskId).evaluate(genome, seeds, baseModel || null, physicsBuffer || null, envParams || null);
       self.postMessage({
         reqId,
         ok: true,

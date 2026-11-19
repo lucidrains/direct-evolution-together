@@ -32,7 +32,16 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 
 from direct_evolution_together import mummy_ws, ws_bridge
 from direct_evolution_together.config import get_config
-from direct_evolution_together.crowd_trust import SQLITE_SYNC_LOCK, fetch_room_evals, submit_eval_attestations
+from direct_evolution_together.crowd_trust import (
+    SQLITE_SYNC_LOCK,
+    claim_crowd_eval_shard,
+    compute_goal_eval_rankings,
+    fetch_room_eval_map,
+    fetch_room_evals,
+    release_completed_shard_leases,
+    resolve_effective_quorum,
+    submit_eval_attestations,
+)
 from direct_evolution_together.cppn import (
     MAX_ARCHIVE_BYTES,
     MAX_CHECKPOINT_BYTES,
@@ -42,7 +51,9 @@ from direct_evolution_together.cppn import (
     MIN_POPULATION_SIZE,
     build_runner_script,
     create_seeded_population,
+    ensure_genome_uuid,
     genome_content_hash,
+    normalize_short_uuid,
     parse_uploaded_strain_bytes,
     save_cppn_bytes,
     slugify_policy_name,
@@ -50,16 +61,19 @@ from direct_evolution_together.cppn import (
 )
 from direct_evolution_together.environments import (
     TASK_ADAPTERS,
+    build_crowd_worker_script,
     build_worker_script,
     create_task_population,
     default_elite_for_task,
     evaluate_control_batch,
+    extract_task_env_overrides,
     get_scene_manifest,
     get_task_spec,
     get_task_specs_payload,
     normalize_task_id,
     render_task_media,
     rollout_control_episode,
+    sanitize_task_env_params,
 )
 from direct_evolution_together.models import ExternalEvalResult, Room, RoomEvolutionState
 from direct_evolution_together.populora_engine import (
@@ -128,14 +142,17 @@ _CONTRIBUTOR_COOKIE = "det_cid"
 _CONTRIBUTOR_SALT = "det.contributor"
 
 
-def _resolve_contributor_id(request: HttpRequest) -> tuple[str, bool]:
-    """Return ``(contributor_id, is_new)`` backed by a tamper-evident signed cookie (no session DB writes)."""
+def _resolve_contributor_id(request: HttpRequest, explicit_peer_id: str = "") -> tuple[str, bool]:
+    """Return ``(contributor_id, is_new)`` backed by a tamper-evident signed cookie or CLI peer token."""
     try:
         cid = str(request.get_signed_cookie(_CONTRIBUTOR_COOKIE, salt=_CONTRIBUTOR_SALT, default="") or "").strip()
     except Exception:
         cid = ""
     if len(cid) >= 8:
         return cid[:64], False
+    raw_peer = (explicit_peer_id or request.headers.get("X-Crowd-Peer", "")).strip()
+    if 6 <= len(raw_peer) <= 56 and all(ch.isalnum() or ch in ("_", "-") for ch in raw_peer):
+        return f"cli_{raw_peer}", False
     return f"peer_{secrets.token_hex(10)}", True
 
 
@@ -152,7 +169,13 @@ def _attach_contributor_cookie(resp: HttpResponse, cid: str, is_new: bool) -> Ht
     return resp
 
 
-def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
+def index(
+    request: HttpRequest,
+    room: str = "lobby",
+    *,
+    initial_goal_override: str = "",
+    initial_ind_override: str = "",
+) -> HttpResponse:
     """Serve the minimal collaborative evolution and chat page."""
     if not room or len(room) > 64:
         return HttpResponseBadRequest("Invalid room name")
@@ -165,8 +188,11 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
             room_title = meta["name"]
             room_description = meta["description"]
             room_has_worker = bool(meta["worker_token_hash"])
-    initial_goal = request.GET.get("goal", "").strip()[:32]
+    initial_goal = (initial_goal_override or request.GET.get("goal", "")).strip()[:32]
+    initial_ind = normalize_short_uuid(initial_ind_override or request.GET.get("ind", ""))
     initial_task = normalize_task_id(request.GET.get("task", ""))
+    raw_query_overrides = extract_task_env_overrides(initial_task, request.GET)
+    initial_env_params = sanitize_task_env_params(initial_task, raw_query_overrides) if raw_query_overrides else {}
     task_spec = get_task_spec(initial_task)
     default_pop = (
         min(settings.POPULATION_SIZE, task_spec.default_pop_size)
@@ -183,7 +209,7 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
     )
     initial_min_votes = _parse_clamped_int_param(raw_min_votes, default_min_votes, 1, 256)
     initial_max_votes = _parse_clamped_int_param(
-        request.GET.get("max_votes"), settings.MAX_VOTES_PER_USER, 1, 64
+        request.GET.get("max_votes"), settings.MAX_VOTES_PER_USER, 1, 128
     )
     initial_mut_sigma = _parse_clamped_float_param(
         request.GET.get("sigma"), settings.MUTATION_SIGMA, 0.05, 1.0
@@ -229,6 +255,8 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
             "can_evolve_now": can_evolve_now,
             "evolve_token": settings.EVOLVE_NOW_TOKEN if can_evolve_now else "",
             "initial_goal": initial_goal,
+            "initial_ind": initial_ind,
+            "initial_env_params": initial_env_params,
             "initial_task": initial_task,
             "initial_pop": initial_pop,
             "initial_min_votes": initial_min_votes,
@@ -246,6 +274,7 @@ def index(request: HttpRequest, room: str = "lobby") -> HttpResponse:
             },
         },
     )
+    resp["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return _attach_contributor_cookie(resp, contributor_id, cid_is_new)
 
 
@@ -259,6 +288,7 @@ _ASSET_CONTENT_TYPES = {
     ".mjs": "application/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".xml": "application/xml; charset=utf-8",
+    ".urdf": "application/xml; charset=utf-8",
     ".wasm": "application/wasm",
     ".json": "application/json; charset=utf-8",
     ".bin": "application/octet-stream",
@@ -631,6 +661,10 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
             else int(settings.POPULATION_SIZE)
         )
 
+    raw_env_override = extract_task_env_overrides(task, payload)
+    clean_env_params = sanitize_task_env_params(task, raw_env_override or None)
+    env_policy = get_config().get_env(task)
+
     base_path = _resolve_base_path(request)
     seeded_meta: dict | None = None
 
@@ -691,13 +725,20 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
             if (raw_min_votes is not None and str(raw_min_votes).strip() != "")
             else task_spec.default_min_votes
         )
+        max_votes_val = _parse_clamped_int_param(
+            payload.get("max_votes_per_user"), settings.MAX_VOTES_PER_USER, 1, 128
+        )
+        scaled = env_policy.constrain_room_scale(
+            pop_size,
+            min_votes_val,
+            max_votes_val,
+            is_control=(task_spec.kind == "control"),
+        )
         seeded_meta = {
             "genomes": genomes,
             "seeded": seeded_count,
-            "min_votes": min_votes_val,
-            "max_votes": _parse_clamped_int_param(
-                payload.get("max_votes_per_user"), settings.MAX_VOTES_PER_USER, 1, 64
-            ),
+            "min_votes": int(scaled["min_votes"]),
+            "max_votes": int(scaled["max_votes_per_user"]),
             "mut_sigma": _parse_clamped_float_param(
                 payload.get("mutation_sigma"), settings.MUTATION_SIGMA, 0.05, 1.0
             ),
@@ -744,6 +785,7 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
             goal_name,
             seeded_meta["genomes"],
             task=task,
+            env_params=clean_env_params,
             min_votes=seeded_meta["min_votes"],
             max_votes_per_user=seeded_meta["max_votes"],
             mut_sigma=seeded_meta["mut_sigma"],
@@ -764,11 +806,13 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
                 "goal": goal_name,
             }
         )
+        if clean_env_params:
+            resp_data["env_params"] = clean_env_params
 
     return JsonResponse(resp_data)
 
 
-def _parse_export_payload(request: HttpRequest) -> tuple[dict, str, str]:
+def _parse_export_payload(request: HttpRequest) -> tuple[dict, str, str, dict[str, object]]:
     payload = json.loads(request.body.decode("utf-8"))
     genome = payload.get("genome")
     is_populora = isinstance(genome, dict) and genome.get("kind") == "populora" and isinstance(genome.get("adapters"), dict)
@@ -781,7 +825,9 @@ def _parse_export_payload(request: HttpRequest) -> tuple[dict, str, str]:
     task = normalize_task_id(str(payload.get("task") or (genome.get("task") if is_populora else "image") or ("microduck" if is_populora else "image")))
     generation = int(payload.get("generation", 0))
     index = int(payload.get("index", 0))
-    return genome, slugify_policy_name(goal, generation, index), task
+    raw_env = extract_task_env_overrides(task, payload)
+    env_params = sanitize_task_env_params(task, raw_env or None)
+    return genome, slugify_policy_name(goal, generation, index), task, env_params
 
 
 def _serialize_policy_checkpoint(genome: dict, task: str) -> bytes:
@@ -797,7 +843,7 @@ def _serialize_policy_checkpoint(genome: dict, task: str) -> bytes:
 def export_weights(request: HttpRequest) -> HttpResponse:
     """Download a trained/evolved CPPN or PopuLoRA genome as a .pt checkpoint."""
     try:
-        genome, slug, task = _parse_export_payload(request)
+        genome, slug, task, _ = _parse_export_payload(request)
         data = _serialize_policy_checkpoint(genome, task)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         return HttpResponseBadRequest(str(exc))
@@ -811,7 +857,9 @@ def export_weights(request: HttpRequest) -> HttpResponse:
 def export_script(request: HttpRequest) -> HttpResponse:
     """Download the standalone uv runner script for checkpoints."""
     task = normalize_task_id(request.GET.get("task", "image"))
-    script = build_runner_script("weights.pt", task=task)
+    raw_env = extract_task_env_overrides(task, request.GET)
+    env_params = sanitize_task_env_params(task, raw_env or None) if raw_env else {}
+    script = build_runner_script("weights.pt", task=task, env_params=env_params or None)
     resp = HttpResponse(script, content_type="text/x-python; charset=utf-8")
     resp["Content-Disposition"] = 'attachment; filename="run.py"'
     return resp
@@ -821,24 +869,31 @@ def export_script(request: HttpRequest) -> HttpResponse:
 def export_bundle(request: HttpRequest) -> HttpResponse:
     """Download a zip containing weights.pt and the standalone uv runner script."""
     try:
-        genome, slug, task = _parse_export_payload(request)
+        genome, slug, task, env_params = _parse_export_payload(request)
         weights_bytes = _serialize_policy_checkpoint(genome, task)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         return HttpResponseBadRequest(str(exc))
 
-    script_text = build_runner_script("weights.pt", task=task)
+    script_text = build_runner_script("weights.pt", task=task, env_params=env_params or None)
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         zf.writestr(f"{slug}/weights.pt", weights_bytes)
         zf.writestr(f"{slug}/run.py", script_text)
         spec = get_task_spec(task)
+        resolved_env = spec.resolve_env_params(env_params)
+        eff_scene_id = str(resolved_env.get("sceneId") or spec.scene_id or "")
+        urdf_rel = resolved_env.get("urdfAsset")
         if spec.mjcf_asset:
             xml_path = _PKG_DIR / "assets" / spec.mjcf_asset
             if xml_path.is_file():
                 zf.writestr(f"{slug}/{spec.mjcf_asset}", xml_path.read_bytes())
-        if spec.scene_id:
-            lic_path = _PKG_DIR / "assets" / "scenes" / spec.scene_id / "LICENSE"
+        if isinstance(urdf_rel, str) and urdf_rel:
+            urdf_path = _PKG_DIR / "assets" / urdf_rel
+            if urdf_path.is_file():
+                zf.writestr(f"{slug}/{Path(urdf_rel).name}", urdf_path.read_bytes())
+        if eff_scene_id:
+            lic_path = _PKG_DIR / "assets" / "scenes" / eff_scene_id / "LICENSE"
             if lic_path.is_file():
                 zf.writestr(f"{slug}/SCENE_LICENSE", lic_path.read_bytes())
 
@@ -1281,9 +1336,258 @@ def api_worker_evals(request: HttpRequest, room: str) -> JsonResponse:
     return JsonResponse({"ok": True, "room": room, "goal": goal_name, "generation": generation, "items": items})
 
 
+def _is_goal_sharded(spec: object, pop_size: int) -> bool:
+    return bool(getattr(spec, "sim_phase_enabled", False) and pop_size > int(getattr(spec, "crowd_shard_threshold", 16)))
+
+
+def _strip_traj_sample(ev_rec: dict | None) -> dict | None:
+    if isinstance(ev_rec, dict) and "trajSample" in ev_rec:
+        return {k: v for k, v in ev_rec.items() if k != "trajSample"}
+    return ev_rec
+
+
+def _search_goals_for_uuid(
+    room_slug: str,
+    goals: list,
+    clean_uuid: str,
+) -> dict[str, object] | None:
+    for goal in goals:
+        if not isinstance(goal, dict):
+            continue
+        g_name = str(goal.get("name") or "")
+        task_id = normalize_task_id(str(goal.get("task") or "image"))
+        gen_num = int(goal.get("generation", 0))
+        env_params = goal.get("envParams") if isinstance(goal.get("envParams"), dict) else {}
+
+        def _pack_hit(entry: dict, *, entry_gen: int, idx: int | None, is_live: bool, gh: str) -> dict[str, object]:
+            eval_map = fetch_room_eval_map(room_slug, g_name, entry_gen, trusted_only=False) if gh else {}
+            return {
+                "uuid": clean_uuid,
+                "id": int(entry.get("id", 0) or 0),
+                "room": room_slug,
+                "goal": g_name,
+                "task": task_id,
+                "envParams": env_params,
+                "generation": entry_gen,
+                "index": idx,
+                "isLive": is_live,
+                "op": str(entry.get("op") or "random"),
+                "parents": [int(p) for p in (entry.get("parents") or []) if isinstance(p, int)],
+                "hash": gh,
+                "genome": entry,
+                "eval": _strip_traj_sample(eval_map.get(gh)),
+            }
+
+        for idx, g in enumerate(goal.get("genomes") or []):
+            if isinstance(g, dict) and normalize_short_uuid(g.get("uuid")) == clean_uuid:
+                gh = str(g.get("hash") or genome_content_hash(g, length=20))
+                return _pack_hit(g, entry_gen=gen_num, idx=idx, is_live=True, gh=gh)
+
+        for node in goal.get("lineage") or []:
+            if isinstance(node, dict) and normalize_short_uuid(node.get("uuid")) == clean_uuid:
+                return _pack_hit(
+                    node,
+                    entry_gen=int(node.get("gen", 0)),
+                    idx=None,
+                    is_live=False,
+                    gh=str(node.get("hash") or ""),
+                )
+    return None
+
+
+def _find_individual_by_uuid(ind_uuid: str, room_hint: str = "") -> dict[str, object] | None:
+    clean_uuid = normalize_short_uuid(ind_uuid)
+    if not clean_uuid:
+        return None
+    hint = (room_hint or "").strip()
+
+    checked_live: set[str] = set()
+    if ws_bridge.is_running():
+        try:
+            active_rooms = json.loads(mummy_ws.get_active_rooms_json() or "[]")
+        except ValueError:
+            active_rooms = []
+        ordered_live = ([hint] if hint else []) + [
+            str(r) for r in active_rooms if isinstance(r, str) and str(r) != hint
+        ]
+        for r_slug in ordered_live:
+            if not r_slug or r_slug in checked_live:
+                continue
+            checked_live.add(r_slug)
+            try:
+                snap = json.loads(mummy_ws.get_room_snapshot_with_lineage_json(r_slug) or "{}")
+            except ValueError:
+                continue
+            hit = _search_goals_for_uuid(r_slug, snap.get("goals") or [], clean_uuid)
+            if hit is not None:
+                return hit
+
+    db_qs = RoomEvolutionState.objects.all()
+    rows = list(db_qs)
+    rows.sort(key=lambda r: (0 if (hint and r.room == hint) else (1 if r.room == "lobby" else 2), r.room))
+    for row in rows:
+        try:
+            parsed = json.loads(row.state_json)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict):
+            hit = _search_goals_for_uuid(row.room, parsed.get("goals") or [], clean_uuid)
+            if hit is not None:
+                return hit
+    return None
+
+
+def _build_individual_permalink(base_path: str, room_slug: str, ind_uuid: str) -> str:
+    if room_slug and room_slug != "lobby":
+        return f"{base_path}/p/{urllib.parse.quote(room_slug, safe='')}/i/{ind_uuid}/"
+    return f"{base_path}/i/{ind_uuid}/"
+
+
+@require_GET
+def individual_permalink(request: HttpRequest, ind_uuid: str, room: str = "") -> HttpResponse:
+    """Direct researcher permalink `/i/<uuid>/` or `/p/<room>/i/<uuid>/` opening that individual."""
+    found = _find_individual_by_uuid(ind_uuid, room_hint=room)
+    if found is None:
+        raise Http404("Individual not found")
+    target_room = str(found["room"])
+    target_goal = str(found["goal"])
+    return index(
+        request,
+        room=target_room,
+        initial_goal_override=target_goal,
+        initial_ind_override=str(found["uuid"]),
+    )
+
+
+@require_GET
+def api_individual_detail(request: HttpRequest, ind_uuid: str, room: str = "") -> JsonResponse:
+    """Return full genome weights/adapters, lineage metadata, and permalink for an individual's short UUID."""
+    found = _find_individual_by_uuid(ind_uuid, room_hint=room)
+    if found is None:
+        return JsonResponse({"ok": False, "error": f"Individual '{ind_uuid}' not found."}, status=404)
+    base_path = _resolve_base_path(request)
+    permalink = _build_individual_permalink(base_path, str(found["room"]), str(found["uuid"]))
+    return JsonResponse({"ok": True, **found, "permalink": permalink})
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def api_crowd_claim(request: HttpRequest, room: str) -> JsonResponse:
+    """Claim a disjoint shard of unevaluated MuJoCo individuals for local client simulation."""
+    payload: dict = {}
+    if request.method == "POST" and request.body:
+        try:
+            parsed = json.loads(request.body.decode("utf-8"))
+            if isinstance(parsed, dict):
+                payload = parsed
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return JsonResponse({"ok": False, "error": "Invalid JSON."}, status=400)
+
+    req_goal = str(payload.get("goal") or request.GET.get("goal", "")).strip()[:64]
+    explicit_peer = str(payload.get("peerId") or request.GET.get("peer_id", "")).strip()
+    cid, cid_is_new = _resolve_contributor_id(request, explicit_peer_id=explicit_peer)
+
+    snapshot = _fetch_room_snapshot(room, req_goal)
+    goals = (snapshot or {}).get("goals") or []
+    if not goals:
+        resp = JsonResponse(
+            {
+                "ok": True,
+                "room": room,
+                "goal": req_goal or None,
+                "generation": 0,
+                "shard": [],
+                "totalCount": 0,
+                "completedCount": 0,
+                "remainingCount": 0,
+            }
+        )
+        return _attach_contributor_cookie(resp, cid, cid_is_new)
+
+    if req_goal:
+        target = next((g for g in goals if g.get("name") == req_goal), None)
+    else:
+        target = next(
+            (g for g in goals if get_task_spec(str(g.get("task") or "image")).sim_phase_enabled),
+            goals[0],
+        )
+    if target is None:
+        return JsonResponse({"ok": False, "error": f"Goal '{req_goal}' not found."}, status=404)
+
+    goal_name = str(target.get("name") or "")
+    task_id = normalize_task_id(str(target.get("task") or "image"))
+    spec = get_task_spec(task_id)
+    raw_batch = payload.get("batchSize", request.GET.get("batch_size", spec.crowd_shard_size))
+    batch_size = _parse_clamped_int_param(raw_batch, spec.crowd_shard_size, 1, 32)
+    generation = int(target.get("generation", 0))
+    genomes = [g for g in (target.get("genomes") or []) if isinstance(g, dict)]
+    goal_env_raw = target.get("envParams") if isinstance(target.get("envParams"), dict) else None
+    resolved_env = spec.resolve_env_params(goal_env_raw)
+
+    candidates: list[dict] = []
+    pop_hashes: list[str] = []
+    for idx, g in enumerate(genomes):
+        gh = str(g.get("hash") or genome_content_hash(g, length=20))
+        guuid = ensure_genome_uuid(g)
+        pop_hashes.append(gh)
+        candidates.append(
+            {
+                "index": idx,
+                "id": int(g.get("id", 0) or 0),
+                "uuid": guuid,
+                "hash": gh,
+                "genome": g,
+            }
+        )
+
+    with SQLITE_SYNC_LOCK:
+        done_hashes = set(
+            ExternalEvalResult.objects.filter(
+                room=room,
+                goal=goal_name,
+                generation=generation,
+                status="verified",
+                genome_hash__in=set(pop_hashes),
+            ).values_list("genome_hash", flat=True)
+        )
+
+    shard = claim_crowd_eval_shard(
+        room,
+        goal_name,
+        generation,
+        candidates,
+        peer_id=cid,
+        batch_size=batch_size,
+        done_hashes=done_hashes,
+    )
+    completed_cnt = sum(1 for h in pop_hashes if h in done_hashes)
+    resp = JsonResponse(
+        {
+            "ok": True,
+            "room": room,
+            "goal": goal_name,
+            "task": task_id,
+            "envParams": resolved_env,
+            "generation": generation,
+            "phase": str(target.get("phase") or "simulating"),
+            "sharded": _is_goal_sharded(spec, len(genomes)),
+            "crowdShardThreshold": spec.crowd_shard_threshold,
+            "crowdShardSize": spec.crowd_shard_size,
+            "evalSeeds": list(spec.eval_seeds or [0, 1]),
+            "baseHash": str(genomes[0].get("baseHash") or "") if genomes else "",
+            "contributorId": cid,
+            "totalCount": len(genomes),
+            "completedCount": completed_cnt,
+            "remainingCount": max(0, len(genomes) - completed_cnt),
+            "shard": shard,
+        }
+    )
+    return _attach_contributor_cookie(resp, cid, cid_is_new)
+
+
 @require_GET
 def api_crowd_evals(request: HttpRequest, room: str) -> JsonResponse:
-    """Fetch crowd WASM/WebGPU consensus results and caller contributor trust status."""
+    """Fetch crowd WASM/WebGPU/local-shard consensus results, rankings, and contributor trust status."""
     cfg = get_config().trust
     cid, cid_is_new = _resolve_contributor_id(request)
     goal_name = request.GET.get("goal", "").strip()[:64]
@@ -1297,27 +1601,38 @@ def api_crowd_evals(request: HttpRequest, room: str) -> JsonResponse:
         if goal_name
         else []
     )
+    rankings: list[dict[str, object]] = []
+    sharded = False
+    if goal_name:
+        snap = _fetch_room_snapshot(room, goal_name)
+        g_obj = next((g for g in ((snap or {}).get("goals") or []) if g.get("name") == goal_name), None)
+        if isinstance(g_obj, dict) and int(g_obj.get("generation", -1)) == generation:
+            g_list = [g for g in (g_obj.get("genomes") or []) if isinstance(g, dict)]
+            spec = get_task_spec(str(g_obj.get("task") or "image"))
+            sharded = _is_goal_sharded(spec, len(g_list))
+            eval_map = {str(it["hash"]): it for it in items if isinstance(it, dict) and it.get("hash")}
+            rankings = compute_goal_eval_rankings(g_list, eval_map)
+
     live_peers = _get_live_room_peer_count(room)
-    eff_quorum = (
-        1
-        if (live_peers is not None and live_peers <= 1)
-        else (min(cfg.quorum, max(1, live_peers)) if live_peers is not None else cfg.quorum)
-    )
+    eff_quorum = resolve_effective_quorum(cfg, active_peers=live_peers, sharded=sharded)
     resp = JsonResponse({
         "ok": True,
         "room": room,
         "goal": goal_name,
         "generation": generation,
+        "sharded": sharded,
         "quorum": eff_quorum,
         "contributorId": cid,
         "items": items,
+        "rankings": rankings,
     })
     return _attach_contributor_cookie(resp, cid, cid_is_new)
 
 
+@csrf_exempt
 @require_POST
 def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
-    """Submit browser-executed WASM/WebGPU telemetry attestations toward room consensus."""
+    """Submit browser WASM or local-runner MuJoCo simulation attestations toward room consensus."""
     trust_cfg = get_config().trust
     if not trust_cfg.enabled:
         return JsonResponse({"ok": True, "accepted": 0, "items": [], "disabled": True})
@@ -1339,7 +1654,16 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
     if not goal_name or not isinstance(results, list) or not results:
         return JsonResponse({"ok": False, "error": "goal, generation, and non-empty results are required."}, status=400)
 
-    cid, cid_is_new = _resolve_contributor_id(request)
+    explicit_peer = str(payload.get("peerId") or "").strip()
+    cid, cid_is_new = _resolve_contributor_id(request, explicit_peer_id=explicit_peer)
+
+    snapshot = _fetch_room_snapshot(room, goal_name)
+    goal_obj = next((g for g in ((snapshot or {}).get("goals") or []) if g.get("name") == goal_name), None)
+    goal_genomes = [g for g in ((goal_obj or {}).get("genomes") or []) if isinstance(g, dict)]
+    task_spec = get_task_spec(str((goal_obj or {}).get("task") or "image"))
+    pop_total = len(goal_genomes)
+    is_sharded = bool(payload.get("sharded")) or _is_goal_sharded(task_spec, pop_total)
+
     live_peers = _get_live_room_peer_count(room)
     outcome = submit_eval_attestations(
         room=room,
@@ -1349,8 +1673,17 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
         contributor_id=cid,
         authority=False,
         active_peers=live_peers,
+        sharded=is_sharded,
     )
     items = outcome["items"]
+    verified_batch_hashes = [
+        str(it["hash"])
+        for it in items
+        if isinstance(it, dict) and (it.get("trust") or {}).get("status") == "verified"
+    ]
+    if verified_batch_hashes:
+        release_completed_shard_leases(room, goal_name, generation, verified_batch_hashes)
+
     changed_items = outcome.get("changedItems") or []
     if changed_items:
         ws_items = [{k: v for k, v in it.items() if k != "trajSample"} for it in changed_items]
@@ -1365,6 +1698,11 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
             goal=goal_name,
         )
     pop_verified, phase = _sync_goal_sim_phase(room, goal_name, generation)
+    rankings: list[dict[str, object]] = []
+    if goal_genomes and int((goal_obj or {}).get("generation", -1)) == generation:
+        eval_map = fetch_room_eval_map(room, goal_name, generation, trusted_only=False)
+        rankings = compute_goal_eval_rankings(goal_genomes, eval_map)
+
     ack_items = [
         {
             "hash": it["hash"],
@@ -1376,15 +1714,37 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
     resp = JsonResponse({
         "ok": True,
         "accepted": len(ack_items),
+        "sharded": is_sharded,
         "verifiedCount": outcome["verifiedCount"],
         "goalVerifiedCount": pop_verified,
+        "completedCount": pop_verified,
+        "totalCount": pop_total,
         "phase": phase,
         "quorum": outcome.get("quorum", trust_cfg.quorum),
         "contributorReputation": outcome["contributorReputation"],
         "quarantined": outcome["quarantined"],
         "items": ack_items,
+        "rankings": rankings,
     })
     return _attach_contributor_cookie(resp, cid, cid_is_new)
+
+
+@require_GET
+def export_crowd_worker_script(request: HttpRequest) -> HttpResponse:
+    """Download a standalone PEP 723 ``uv run`` local MuJoCo crowd shard simulator script."""
+    room = request.GET.get("room", "lobby").strip()[:64] or "lobby"
+    goal = request.GET.get("goal", "").strip()[:64]
+    snap = _fetch_room_snapshot(room, goal)
+    g_obj = next((g for g in ((snap or {}).get("goals") or []) if not goal or g.get("name") == goal), None)
+    spec = get_task_spec(str((g_obj or {}).get("task") or "microduck"))
+    base_path = _resolve_base_path(request)
+    scheme = request.scheme or "http"
+    host = request.get_host()
+    server_url = f"{scheme}://{host}{base_path}"
+    script = build_crowd_worker_script(room, server_url, goal_name=goal, default_batch_size=spec.crowd_shard_size)
+    resp = HttpResponse(script, content_type="text/x-python; charset=utf-8")
+    resp["Content-Disposition"] = f'attachment; filename="crowd_worker_{slugify(room) or "room"}.py"'
+    return resp
 
 
 @require_GET

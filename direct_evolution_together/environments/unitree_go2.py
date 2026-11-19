@@ -94,3 +94,16 @@ UNITREE_GO2_ENV_PARAMS: dict[str, object] = {
     "fallPenalty": 120.0,
     "hipJoints": [0, 3, 6, 9],
 }
+
+UNITREE_GO2_HYPERPARAM_SPECS: tuple[dict[str, object], ...] = (
+    {
+        "key": "actionScale",
+        "label": "Joint Action Scale",
+        "type": "float",
+        "default": 0.42,
+        "min": 0.20,
+        "max": 0.75,
+        "step": 0.02,
+        "description": "Per-step joint target amplitude (rad) around home stance.",
+    },
+)

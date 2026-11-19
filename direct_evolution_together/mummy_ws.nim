@@ -15,15 +15,16 @@ const
   max_cid_len = 40
 
   min_population_size = 3
-  max_population_size = 64
-  control_max_population_size = 32
+  max_population_size = 128
+  control_max_population_size = 128
   default_population_size = 30
   default_control_population_size = 30
   default_control_min_votes = 20
+  default_crowd_shard_threshold = 16
   max_round_min_votes = 256
 
   min_votes_per_user = 1
-  max_votes_per_user = 64
+  max_votes_per_user = 128
   default_max_votes_per_user = 20
 
   min_mut_sigma = 0.05
@@ -82,6 +83,7 @@ type
     default_pop_size: int
     max_pop_size: int
     default_min_votes: int
+    crowd_shard_threshold: int
     has_elite_override: bool
     default_elite_frac: float
 
@@ -94,6 +96,7 @@ type
     initial_task: string
     initial_pop_size: int
     initial_params: GoalParams
+    initial_env_params_json: string
     gzip: bool
     can_evolve_now: bool
     lazy_goals: bool
@@ -122,6 +125,8 @@ type
     task: string
     generation: int
     genomes_json: string
+    sharded_genomes_json: string
+    env_params_json: string
     lineage_json: string
     lean_lineage_json: string
     lineage_total: int
@@ -141,6 +146,7 @@ type
     pending_creates: HashSet[string]
     pending_create_tasks: Table[string, string]
     pending_create_params: Table[string, GoalParams]
+    pending_create_env_params: Table[string, string]
     default_params: GoalParams
     initializing: bool
 
@@ -152,6 +158,7 @@ type
     generation: int
     username: string
     genomes_json: string
+    env_params_json: string
     scores: seq[int]
     up_counts: seq[int]
     population_size: int
@@ -194,6 +201,7 @@ func default_task_configs(): Table[string, TaskConfig] =
     default_pop_size: default_population_size,
     max_pop_size: max_population_size,
     default_min_votes: 0,
+    crowd_shard_threshold: default_crowd_shard_threshold,
     has_elite_override: false,
     default_elite_frac: default_elite_frac,
   )
@@ -202,6 +210,7 @@ func default_task_configs(): Table[string, TaskConfig] =
     default_pop_size: default_control_population_size,
     max_pop_size: control_max_population_size,
     default_min_votes: default_control_min_votes,
+    crowd_shard_threshold: default_crowd_shard_threshold,
     has_elite_override: true,
     default_elite_frac: 0.0,
   )
@@ -210,6 +219,7 @@ func default_task_configs(): Table[string, TaskConfig] =
     default_pop_size: default_control_population_size,
     max_pop_size: control_max_population_size,
     default_min_votes: default_control_min_votes,
+    crowd_shard_threshold: default_crowd_shard_threshold,
     has_elite_override: true,
     default_elite_frac: 0.05,
   )
@@ -220,6 +230,7 @@ func default_task_configs(): Table[string, TaskConfig] =
     default_pop_size: 8,
     max_pop_size: control_max_population_size,
     default_min_votes: 4,
+    crowd_shard_threshold: default_crowd_shard_threshold,
     has_elite_override: true,
     default_elite_frac: 0.25,
   )
@@ -230,6 +241,7 @@ func default_task_configs(): Table[string, TaskConfig] =
     default_pop_size: default_control_population_size,
     max_pop_size: max_population_size,
     default_min_votes: default_control_min_votes,
+    crowd_shard_threshold: default_crowd_shard_threshold,
     has_elite_override: true,
     default_elite_frac: 0.10,
   )
@@ -338,6 +350,7 @@ proc task_cfg_locked(task: string): TaskConfig {.gcsafe.} =
     default_pop_size: default_population_size,
     max_pop_size: max_population_size,
     default_min_votes: 0,
+    crowd_shard_threshold: default_crowd_shard_threshold,
     has_elite_override: false,
     default_elite_frac: default_elite_frac,
   )
@@ -512,6 +525,23 @@ proc sync_goal_countdown(goal: var GoalPopulation; c: RuntimeConfig; now: int64)
   else:
     goal.countdown_ends_at_ms = 0
 
+proc build_sharded_genomes_json(genomes_json: string): string {.gcsafe.} =
+  ## Build a lightweight metadata-only genome array (omitting bulky LoRA `adapters`) for sharded WS broadcasts.
+  if genomes_json.len == 0:
+    return "[]"
+  let parsed = parseJson(genomes_json)
+  if parsed.kind != JArray:
+    return "[]"
+  var arr = newJArray()
+  for item in parsed:
+    if item.kind != JObject:
+      continue
+    var stub = copy(item)
+    if "adapters" in stub:
+      stub.delete("adapters")
+    arr.add(stub)
+  $arr
+
 proc extract_lineage_nodes(genomes_json: string; gen: int): JsonNode {.gcsafe.} =
   result = newJArray()
   if genomes_json.len == 0:
@@ -521,6 +551,7 @@ proc extract_lineage_nodes(genomes_json: string; gen: int): JsonNode {.gcsafe.} 
     return
   for item in parsed:
     let gid = item.getOrDefault("id").getInt(0)
+    let guuid = item.getOrDefault("uuid").getStr("")
     let raw_parents = item.getOrDefault("parents")
     let parents_node =
       if raw_parents != nil and raw_parents.kind == JArray: raw_parents
@@ -529,6 +560,7 @@ proc extract_lineage_nodes(genomes_json: string; gen: int): JsonNode {.gcsafe.} 
     if item.getOrDefault("kind").getStr("") == "populora":
       result.add(%*{
         "id": gid,
+        "uuid": guuid,
         "gen": gen,
         "parents": parents_node,
         "op": op_str,
@@ -539,6 +571,7 @@ proc extract_lineage_nodes(genomes_json: string; gen: int): JsonNode {.gcsafe.} 
     else:
       result.add(%*{
         "id": gid,
+        "uuid": guuid,
         "gen": gen,
         "parents": parents_node,
         "op": op_str,
@@ -748,11 +781,14 @@ proc attach_round_fields(
     elif goal.phase.len > 0: goal.phase
     elif tc.sim_phase_enabled: "simulating"
     else: "voting"
+  let is_sharded = tc.sim_phase_enabled and goal.votes.len > max(3, tc.crowd_shard_threshold)
   obj["phase"] = %eff_phase
   obj["simPhaseEnabled"] = %tc.sim_phase_enabled
   obj["simCompleted"] = %goal.sim_completed
   obj["simTotal"] = %max(1, goal.votes.len)
   obj["autoEvolve"] = %goal.auto_evolve
+  obj["genomesSharded"] = %is_sharded
+  obj["crowdShardThreshold"] = %max(3, tc.crowd_shard_threshold)
   obj["countdownMs"] = %remaining_countdown_ms(goal, now)
   obj["countdownDurationMs"] = %c.countdown_ms
   obj["evolving"] = %goal.evolving
@@ -771,25 +807,32 @@ proc goal_to_json_str(
   is_public: bool = false;
   include_genomes: bool = true;
 ): string {.gcsafe.} =
-  ## Fast zero-reparse serializer: splices pre-serialized `genomes_json` and `lean_lineage_json` directly.
+  ## Fast zero-reparse serializer: splices pre-serialized `genomes_json` (or `sharded_genomes_json`) directly.
   let round_obj = newJObject()
   round_obj.attach_round_fields(
     goal, c, client_map, now, room_user_count, is_public, include_votes = include_genomes
   )
   let round_str = $round_obj
+  let tc = task_cfg_locked(goal.task)
+  let is_sharded = tc.sim_phase_enabled and goal.votes.len > max(3, tc.crowd_shard_threshold)
   let genomes_str =
-    if include_genomes and goal.genomes_json.len > 0: goal.genomes_json
+    if not include_genomes: "[]"
+    elif is_sharded and goal.sharded_genomes_json.len > 0: goal.sharded_genomes_json
+    elif goal.genomes_json.len > 0: goal.genomes_json
     else: "[]"
+  let env_params_str = if goal.env_params_json.len > 0: goal.env_params_json else: "{}"
   let lineage_str =
     if include_genomes and goal.lean_lineage_json.len > 0: goal.lean_lineage_json
     else: "[]"
   let task_str = if goal.task.len > 0: goal.task else: "image"
 
-  result = newStringOfCap(genomes_str.len + lineage_str.len + round_str.len + 192)
+  result = newStringOfCap(genomes_str.len + lineage_str.len + env_params_str.len + round_str.len + 224)
   result.add("{\"name\":")
   result.add(escapeJson(goal.name))
   result.add(",\"task\":")
   result.add(escapeJson(task_str))
+  result.add(",\"envParams\":")
+  result.add(env_params_str)
   result.add(",\"generation\":")
   result.add($goal.generation)
   result.add(",\"genomesLoaded\":")
@@ -908,12 +951,15 @@ proc serialize_room_evolution(evo: RoomEvolution): string {.gcsafe.} =
       if g.lineage_json.len > 0: g.lineage_json
       else: $extract_lineage_nodes(g.genomes_json, g.generation)
     let gp_str = $goal_params_json(g.params)
+    let env_p_str = if g.env_params_json.len > 0: g.env_params_json else: "{}"
     let task_str = if g.task.len > 0: g.task else: "image"
-    var item = newStringOfCap(g_genomes.len + g_lineage.len + gp_str.len + 128)
+    var item = newStringOfCap(g_genomes.len + g_lineage.len + gp_str.len + env_p_str.len + 148)
     item.add("{\"name\":")
     item.add(escapeJson(g.name))
     item.add(",\"task\":")
     item.add(escapeJson(task_str))
+    item.add(",\"envParams\":")
+    item.add(env_p_str)
     item.add(",\"generation\":")
     item.add($g.generation)
     item.add(",\"genomes\":")
@@ -1095,6 +1141,7 @@ proc init_goal_population_locked(
   pop_len: int;
   gp: GoalParams;
   auto_evolve_override: int = -1;
+  env_params_json: string = "{}";
 ): GoalPopulation {.gcsafe.} =
   let clean_task = sanitize_task_name_locked(task)
   let tc = task_cfg_locked(clean_task)
@@ -1106,11 +1153,17 @@ proc init_goal_population_locked(
   let init_auto =
     if auto_evolve_override >= 0: auto_evolve_override > 0
     else: tc.default_auto_evolve
+  let sharded_json =
+    if tc.sim_phase_enabled: build_sharded_genomes_json(genomes_json)
+    else: ""
+  let eff_env_json = if env_params_json.len > 0: env_params_json else: "{}"
   GoalPopulation(
     name: name,
     task: clean_task,
     generation: 0,
     genomes_json: genomes_json,
+    sharded_genomes_json: sharded_json,
+    env_params_json: eff_env_json,
     lineage_json: l_json,
     lean_lineage_json: lean.lean_json,
     lineage_total: lean.total,
@@ -1134,6 +1187,7 @@ proc populate_room_goals_locked(
     pending_creates: initHashSet[string](),
     pending_create_tasks: initTable[string, string](),
     pending_create_params: initTable[string, GoalParams](),
+    pending_create_env_params: initTable[string, string](),
     default_params: dp,
     initializing: false,
   )
@@ -1156,8 +1210,12 @@ proc populate_room_goals_locked(
       if item.hasKey("autoEvolve") and item["autoEvolve"].kind == JBool:
         (if item["autoEvolve"].getBool(false): 1 else: 0)
       else: -1
+    let env_node = item.getOrDefault("envParams")
+    let env_json =
+      if env_node != nil and env_node.kind == JObject: $env_node
+      else: "{}"
     result.goal_order.add(name)
-    result.goals[name] = init_goal_population_locked(name, task, g_json, g_arr.len, gp, auto_override)
+    result.goals[name] = init_goal_population_locked(name, task, g_json, g_arr.len, gp, auto_override, env_json)
 
 proc upgrade_handler(request: Request) {.gcsafe.} =
   let room = request.pathParams["room"]
@@ -1224,6 +1282,15 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
       base_cfg.params.crossover_rate, min_crossover_rate, max_crossover_rate,
     ),
   )
+  let raw_env_q = request.queryParams["env_params"].strip()
+  var req_env_params_json = "{}"
+  if raw_env_q.len > 0 and raw_env_q.len <= 1024:
+    try:
+      let parsed_env = parseJson(raw_env_q)
+      if parsed_env.kind == JObject:
+        req_env_params_json = $parsed_env
+    except CatchableError:
+      discard
 
   with_state_lock:
     let ws = request.upgradeToWebSocket()
@@ -1236,6 +1303,7 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
       initial_task: initial_task,
       initial_pop_size: req_pop,
       initial_params: req_params,
+      initial_env_params_json: req_env_params_json,
       gzip: wants_gzip,
       can_evolve_now: can_evolve,
       lazy_goals: lazy_goals,
@@ -1419,6 +1487,7 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
           pending_creates: initHashSet[string](),
           pending_create_tasks: initTable[string, string](),
           pending_create_params: initTable[string, GoalParams](),
+          pending_create_env_params: initTable[string, string](),
           default_params: room_params,
           initializing: true,
         )
@@ -1428,6 +1497,7 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
           goal: (if is_private: info.initial_goal else: ""),
           task: (if is_private: info.initial_task else: "image"),
           username: unique_name,
+          env_params_json: (if is_private: info.initial_env_params_json else: "{}"),
           population_size: room_pop,
           params: room_params,
         ))
@@ -1607,9 +1677,17 @@ proc handle_create_goal(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
           elite_frac: payload.getOrDefault("elite_frac").getFloat(task_default_elite),
           crossover_rate: payload.getOrDefault("crossover_rate").getFloat(d.crossover_rate),
         ))
+        let env_node = payload.getOrDefault("env_params")
+        let alt_env_node = payload.getOrDefault("envParams")
+        var req_env_json = "{}"
+        if env_node != nil and env_node.kind == JObject:
+          req_env_json = $env_node
+        elif alt_env_node != nil and alt_env_node.kind == JObject:
+          req_env_json = $alt_env_node
         room_evolution[info.room].pending_creates.incl(goal_name)
         room_evolution[info.room].pending_create_tasks[goal_name] = task_name
         room_evolution[info.room].pending_create_params[goal_name] = g_params
+        room_evolution[info.room].pending_create_env_params[goal_name] = req_env_json
         clients[ws].active_goal = goal_name
         pending_evo_jobs.add(EvoJob(
           kind: EvoJobKind.create,
@@ -1617,6 +1695,7 @@ proc handle_create_goal(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
           goal: goal_name,
           task: task_name,
           username: info.username,
+          env_params_json: req_env_json,
           population_size: req_pop,
           params: g_params,
         ))
@@ -2054,7 +2133,7 @@ proc internal_room_clear_handler(request: Request) {.gcsafe.} =
   clear_room_evolution(room, $goals_node, goal_name, username)
   request.respond(200, @[("Content-Type", "application/json")], """{"ok":true}""")
 
-proc build_room_snapshot_json(room: string; filter_goal: string = ""): string {.gcsafe.} =
+proc build_room_snapshot_json(room: string; filter_goal: string = ""; include_lineage: bool = false): string {.gcsafe.} =
   var parts: seq[string] = @[]
   var total_len = room.len + 36
   with_state_lock:
@@ -2066,12 +2145,18 @@ proc build_room_snapshot_json(room: string; filter_goal: string = ""): string {.
         if g_name in evo.goals:
           let g = evo.goals[g_name]
           let g_genomes = if g.genomes_json.len > 0: g.genomes_json else: "[]"
+          let env_p = if g.env_params_json.len > 0: g.env_params_json else: "{}"
+          let l_str =
+            if include_lineage and g.lineage_json.len > 0: g.lineage_json
+            else: ""
           let task_str = if g.task.len > 0: g.task else: "image"
-          var item = newStringOfCap(g_genomes.len + 96)
+          var item = newStringOfCap(g_genomes.len + env_p.len + l_str.len + 128)
           item.add("{\"name\":")
           item.add(escapeJson(g.name))
           item.add(",\"task\":")
           item.add(escapeJson(task_str))
+          item.add(",\"envParams\":")
+          item.add(env_p)
           item.add(",\"generation\":")
           item.add($g.generation)
           item.add(",\"phase\":")
@@ -2082,6 +2167,9 @@ proc build_room_snapshot_json(room: string; filter_goal: string = ""): string {.
           item.add(if g.auto_evolve: "true" else: "false")
           item.add(",\"genomes\":")
           item.add(g_genomes)
+          if include_lineage:
+            item.add(",\"lineage\":")
+            item.add(if l_str.len > 0: l_str else: "[]")
           item.add("}")
           total_len += item.len + 1
           parts.add(item)
@@ -2096,8 +2184,21 @@ proc build_room_snapshot_json(room: string; filter_goal: string = ""): string {.
   result.add("]}")
 
 proc get_room_snapshot_json*(room: string): string {.exportpy, gcsafe.} =
-  ## Return current active goal states (name, task, generation, genomes) for `room`.
+  ## Return current active goal states (name, task, envParams, generation, genomes) for `room`.
   build_room_snapshot_json(room)
+
+proc get_room_snapshot_with_lineage_json*(room: string): string {.exportpy, gcsafe.} =
+  ## Return current active goal states including full ancestor lineage for individual UUID lookup.
+  build_room_snapshot_json(room, "", include_lineage = true)
+
+proc get_active_rooms_json*(): string {.exportpy, gcsafe.} =
+  ## Return JSON array of room names currently loaded in memory.
+  var arr = newJArray()
+  with_state_lock:
+    for r in room_evolution.keys:
+      if not room_evolution[r].initializing:
+        arr.add(%r)
+  $arr
 
 proc get_room_goal_snapshot_json*(room, goal_name: string): string {.exportpy, gcsafe.} =
   ## Return snapshot for a single goal in `room` without serializing unrelated tabs.
@@ -2431,6 +2532,11 @@ proc register_task_configs*(configs_json: string) {.exportpy.} =
           max_population_size,
         ),
         default_min_votes: max(0, min(max_round_min_votes, item.getOrDefault("defaultMinVotes").getInt(0))),
+        crowd_shard_threshold: clamp(
+          item.getOrDefault("crowdShardThreshold").getInt(default_crowd_shard_threshold),
+          min_population_size,
+          256,
+        ),
         has_elite_override: has_elite,
         default_elite_frac: (
           if has_elite: clamp(item["defaultEliteFrac"].getFloat(0.0), min_elite_frac, max_elite_frac)
@@ -2474,8 +2580,11 @@ proc drain_evo_jobs*(): string {.exportpy.} =
     }
     let meta_str = $meta
     let g_str = if job.genomes_json.len > 0: job.genomes_json else: "[]"
-    var item = newStringOfCap(meta_str.len + g_str.len + 16)
+    let ep_str = if job.env_params_json.len > 0: job.env_params_json else: "{}"
+    var item = newStringOfCap(meta_str.len + g_str.len + ep_str.len + 32)
     item.add(meta_str[0 ..< meta_str.len - 1])
+    item.add(",\"envParams\":")
+    item.add(ep_str)
     item.add(",\"genomes\":")
     item.add(g_str)
     item.add("}")
@@ -2496,21 +2605,28 @@ proc apply_room_init*(room, goals_json: string) {.exportpy.} =
     var carry_creates = initHashSet[string]()
     var carry_tasks = initTable[string, string]()
     var carry_params = initTable[string, GoalParams]()
+    var carry_env_params = initTable[string, string]()
     if room in room_evolution and room_evolution[room].initializing:
       # keep goals requested before the room finished booting
       carry_creates = room_evolution[room].pending_creates
       carry_tasks = room_evolution[room].pending_create_tasks
       carry_params = room_evolution[room].pending_create_params
+      carry_env_params = room_evolution[room].pending_create_env_params
     room_evolution[room] = populate_room_goals_locked(parsed, dp)
     room_evolution[room].pending_creates = carry_creates
     room_evolution[room].pending_create_tasks = carry_tasks
     room_evolution[room].pending_create_params = carry_params
+    room_evolution[room].pending_create_env_params = carry_env_params
     dirty_rooms.incl(room)
     queue_evolution_state_outbox_locked(room, outbox)
   for item in outbox:
     broadcast(item.targets, item.payload)
 
-proc apply_goal_create_impl(room, goal_name, task_override, username, genomes_json: string; min_votes: int = -1) =
+proc apply_goal_create_impl(
+  room, goal_name, task_override, username, genomes_json: string;
+  min_votes: int = -1;
+  env_params_override: string = "";
+) =
   let g_arr = parseJson(genomes_json)
   var
     outbox: seq[PendingBroadcast] = @[]
@@ -2525,6 +2641,11 @@ proc apply_goal_create_impl(room, goal_name, task_override, username, genomes_js
         if task_override.len == 0:
           task_name = sanitize_task_name_locked(room_evolution[room].pending_create_tasks[goal_name])
         room_evolution[room].pending_create_tasks.del(goal_name)
+      var env_p_json = if env_params_override.len > 0: env_params_override else: "{}"
+      if goal_name in room_evolution[room].pending_create_env_params:
+        if env_params_override.len == 0:
+          env_p_json = room_evolution[room].pending_create_env_params[goal_name]
+        room_evolution[room].pending_create_env_params.del(goal_name)
       var gp = room_evolution[room].default_params
       if gp.max_votes_per_user <= 0:
         gp = cfg.params
@@ -2537,7 +2658,9 @@ proc apply_goal_create_impl(room, goal_name, task_override, username, genomes_js
         gp.min_votes = default_min_votes_for_task_locked(task_name)
       if goal_name notin room_evolution[room].goals:
         room_evolution[room].goal_order.add(goal_name)
-        room_evolution[room].goals[goal_name] = init_goal_population_locked(goal_name, task_name, genomes_json, g_arr.len, gp)
+        room_evolution[room].goals[goal_name] = init_goal_population_locked(
+          goal_name, task_name, genomes_json, g_arr.len, gp, env_params_json = env_p_json
+        )
         dirty_rooms.incl(room)
         queue_evolution_state_outbox_locked(room, outbox)
         sys_payload = system_msg_payload(username & " created goal \"" & goal_name & "\"")
@@ -2551,6 +2674,9 @@ proc apply_goal_create_impl(room, goal_name, task_override, username, genomes_js
 
 proc apply_goal_create*(room, goal_name, username, genomes_json: string) {.exportpy.} =
   apply_goal_create_impl(room, goal_name, "", username, genomes_json)
+
+proc apply_goal_create_with_env*(room, goal_name, username, genomes_json, env_params_json: string) {.exportpy.} =
+  apply_goal_create_impl(room, goal_name, "", username, genomes_json, -1, env_params_json)
 
 proc apply_goal_create_with_task*(room, goal_name, task_name, username, genomes_json: string; min_votes: int = -1) {.exportpy.} =
   apply_goal_create_impl(room, goal_name, task_name, username, genomes_json, min_votes)
@@ -2576,6 +2702,7 @@ proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.expo
         evo.pending_creates.excl(target_goal)
         evo.pending_create_tasks.del(target_goal)
         evo.pending_create_params.del(target_goal)
+        evo.pending_create_env_params.del(target_goal)
         if parsed.len == 0:
           evo.goals.del(target_goal)
           var next_order: seq[string] = @[]
@@ -2595,12 +2722,16 @@ proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.expo
         else:
           var gp = dp
           var goal_task = "image"
+          var goal_env_json = "{}"
           if target_goal in evo.goals:
             gp = evo.goals[target_goal].params
             goal_task = evo.goals[target_goal].task
+            goal_env_json = evo.goals[target_goal].env_params_json
           else:
             evo.goal_order.add(target_goal)
-          evo.goals[target_goal] = init_goal_population_locked(target_goal, goal_task, $parsed, parsed.len, gp)
+          evo.goals[target_goal] = init_goal_population_locked(
+            target_goal, goal_task, $parsed, parsed.len, gp, env_params_json = goal_env_json
+          )
           room_evolution[room] = evo
           dirty_rooms.incl(room)
           queue_goal_updated_outbox_locked(room, evo.goals[target_goal], now_ms(), outbox)
@@ -2618,6 +2749,7 @@ proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.expo
             pending_creates: initHashSet[string](),
             pending_create_tasks: initTable[string, string](),
             pending_create_params: initTable[string, GoalParams](),
+            pending_create_env_params: initTable[string, string](),
             default_params: dp,
             initializing: false,
           )
@@ -2648,13 +2780,15 @@ proc apply_goal_reset*(room, goal_name, username, genomes_json: string) {.export
     if room in room_evolution and goal_name in room_evolution[room].goals:
       let now = now_ms()
       var goal = room_evolution[room].goals[goal_name]
+      let tc = task_cfg_locked(goal.task)
       goal.generation = 0
       goal.genomes_json = genomes_json
+      goal.sharded_genomes_json = (if tc.sim_phase_enabled: build_sharded_genomes_json(genomes_json) else: "")
       goal.lineage_json = fresh_lineage
       goal.lean_lineage_json = fresh_lean.lean_json
       goal.lineage_total = fresh_lean.total
       goal.votes = empty_votes(max(1, g_arr.len))
-      goal.phase = (if task_cfg_locked(goal.task).sim_phase_enabled: "simulating" else: "voting")
+      goal.phase = (if tc.sim_phase_enabled: "simulating" else: "voting")
       goal.sim_completed = 0
       goal.countdown_ends_at_ms = 0
       goal.evolving = false
@@ -2682,12 +2816,14 @@ proc apply_goal_evolve*(room, goal_name, genomes_json: string; top_score: int) {
     if room in room_evolution and goal_name in room_evolution[room].goals:
       let now = now_ms()
       var goal = room_evolution[room].goals[goal_name]
+      let tc = task_cfg_locked(goal.task)
       inc goal.generation
       goal.genomes_json = genomes_json
+      goal.sharded_genomes_json = (if tc.sim_phase_enabled: build_sharded_genomes_json(genomes_json) else: "")
       goal.lineage_json = merge_lineage_json(goal.lineage_json, genomes_json, goal.generation)
       goal.refresh_goal_lineage_cache()
       goal.votes = empty_votes(max(1, g_arr.len))
-      goal.phase = (if task_cfg_locked(goal.task).sim_phase_enabled: "simulating" else: "voting")
+      goal.phase = (if tc.sim_phase_enabled: "simulating" else: "voting")
       goal.sim_completed = 0
       goal.countdown_ends_at_ms = 0
       goal.evolving = false
@@ -2733,6 +2869,7 @@ proc cancel_goal_create*(room, goal_name: string) {.exportpy, gcsafe.} =
       room_evolution[room].pending_creates.excl(goal_name)
       room_evolution[room].pending_create_tasks.del(goal_name)
       room_evolution[room].pending_create_params.del(goal_name)
+      room_evolution[room].pending_create_env_params.del(goal_name)
 
 proc apply_goal_resize*(room, goal_name, username, genomes_json: string) {.exportpy.} =
   let g_len = max(1, parseJson(genomes_json).len)
@@ -2745,11 +2882,13 @@ proc apply_goal_resize*(room, goal_name, username, genomes_json: string) {.expor
     if room in room_evolution and goal_name in room_evolution[room].goals:
       let now = now_ms()
       var goal = room_evolution[room].goals[goal_name]
+      let tc = task_cfg_locked(goal.task)
       var next_votes = empty_votes(g_len)
       let keep = min(goal.votes.len, g_len)
       for i in 0 ..< keep:
         next_votes[i] = goal.votes[i]
       goal.genomes_json = genomes_json
+      goal.sharded_genomes_json = (if tc.sim_phase_enabled: build_sharded_genomes_json(genomes_json) else: "")
       goal.lineage_json = merge_missing_lineage_json(goal.lineage_json, genomes_json, goal.generation)
       goal.refresh_goal_lineage_cache()
       goal.votes = next_votes
@@ -2847,6 +2986,7 @@ proc restore_room_state*(room, state_json: string) {.exportpy.} =
       pending_creates: initHashSet[string](),
       pending_create_tasks: initTable[string, string](),
       pending_create_params: initTable[string, GoalParams](),
+      pending_create_env_params: initTable[string, string](),
       default_params: dp,
       initializing: false,
     )
@@ -2864,6 +3004,10 @@ proc restore_room_state*(room, state_json: string) {.exportpy.} =
         gp.min_votes = default_min_votes_for_task_locked(task)
       clamp_control_min_votes_locked(task, gp)
       let g_json = $genomes_arr
+      let env_node = item.getOrDefault("envParams")
+      let env_json =
+        if env_node != nil and env_node.kind == JObject: $env_node
+        else: "{}"
       let lin_node = item.getOrDefault("lineage")
       let l_json =
         if lin_node != nil and lin_node.kind == JArray and lin_node.len > 0:
@@ -2872,6 +3016,7 @@ proc restore_room_state*(room, state_json: string) {.exportpy.} =
           $extract_lineage_nodes(g_json, gen)
       let lean = compute_lean_lineage(l_json, g_json, gen)
       let tc = task_cfg_locked(task)
+      let sharded_json = (if tc.sim_phase_enabled: build_sharded_genomes_json(g_json) else: "")
       let default_phase = if tc.sim_phase_enabled: "simulating" else: "voting"
       let raw_phase = item.getOrDefault("phase").getStr(default_phase)
       let eff_phase = if raw_phase in ["simulating", "voting"]: raw_phase else: default_phase
@@ -2883,6 +3028,8 @@ proc restore_room_state*(room, state_json: string) {.exportpy.} =
         task: task,
         generation: gen,
         genomes_json: g_json,
+        sharded_genomes_json: sharded_json,
+        env_params_json: env_json,
         lineage_json: l_json,
         lean_lineage_json: lean.lean_json,
         lineage_total: lean.total,

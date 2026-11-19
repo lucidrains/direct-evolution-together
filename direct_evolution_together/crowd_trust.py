@@ -396,6 +396,20 @@ def _ingest_peer(
     return status, atts, entry
 
 
+def resolve_effective_quorum(
+    trust_cfg: TrustPolicyConfig,
+    *,
+    active_peers: int | None = None,
+    sharded: bool = False,
+) -> int:
+    """Return effective attestation quorum given peer count and sharded population mode."""
+    if sharded:
+        return max(1, int(trust_cfg.shard_quorum))
+    if active_peers is None:
+        return int(trust_cfg.quorum)
+    return 1 if active_peers <= 1 else min(int(trust_cfg.quorum), active_peers)
+
+
 def submit_eval_attestations(
     *,
     room: str,
@@ -405,20 +419,17 @@ def submit_eval_attestations(
     contributor_id: str,
     authority: bool = False,
     active_peers: int | None = None,
+    sharded: bool = False,
 ) -> dict[str, object]:
     trust_cfg = get_config().trust
-    eff_quorum = (
-        1
-        if (active_peers is not None and active_peers <= 1)
-        else (min(trust_cfg.quorum, max(1, active_peers)) if active_peers is not None else trust_cfg.quorum)
-    )
+    eff_quorum = resolve_effective_quorum(trust_cfg, active_peers=active_peers, sharded=sharded)
     stored_items: list[dict] = []
     changed_items: list[dict] = []
     verified_count = 0
     contrib: ContributorTrust | None = None
 
     parsed_batch: list[tuple[str, dict, dict[str, object]]] = []
-    for raw_item in results[:64]:
+    for raw_item in results[:128]:
         if not isinstance(raw_item, dict):
             continue
         gh = str(raw_item.get("hash") or "").strip()[:32]
@@ -536,7 +547,7 @@ def submit_eval_attestations(
                         rep_deltas,
                         trust_cfg,
                         seed_contrib=contrib,
-                        submission_count=len(results[:64]),
+                        submission_count=len(results[:128]),
                     )
             break
         except OperationalError as exc:
@@ -592,3 +603,131 @@ def fetch_room_evals(
             payload.setdefault("trust", {"status": row.status})
             items.append(payload)
     return items
+
+
+_SHARD_LOCK = threading.Lock()
+_SHARD_LEASES: dict[tuple[str, str, int], dict[str, tuple[str, float]]] = {}
+
+
+def claim_crowd_eval_shard(
+    room: str,
+    goal: str,
+    generation: int,
+    candidates: list[dict],
+    *,
+    peer_id: str,
+    batch_size: int = 4,
+    lease_ttl_sec: float = 45.0,
+    done_hashes: set[str] | None = None,
+) -> list[dict]:
+    """Assign a disjoint batch of unevaluated candidates to ``peer_id`` with TTL lease expiry."""
+    if not candidates or batch_size <= 0:
+        return []
+    done = done_hashes or set()
+    now = time.monotonic()
+    key = (room, goal, int(generation))
+    eff_batch = max(1, min(32, int(batch_size)))
+
+    with _SHARD_LOCK:
+        # Prune stale generation keys if map grows large
+        if len(_SHARD_LEASES) > 256:
+            stale_keys = [
+                k for k, lmap in _SHARD_LEASES.items()
+                if not lmap or all(exp <= now for _, exp in lmap.values())
+            ]
+            for sk in stale_keys:
+                _SHARD_LEASES.pop(sk, None)
+
+        leases = _SHARD_LEASES.setdefault(key, {})
+        for gh in list(leases.keys()):
+            _, exp = leases[gh]
+            if gh in done or exp <= now:
+                leases.pop(gh, None)
+
+        chosen: list[dict] = []
+        # 1. Prefer completely unleased, undone candidates so peers divvy up disjoint work
+        for cand in candidates:
+            gh = str(cand.get("hash") or "")
+            if not gh or gh in done or gh in leases:
+                continue
+            leases[gh] = (peer_id, now + lease_ttl_sec)
+            chosen.append(cand)
+            if len(chosen) >= eff_batch:
+                return chosen
+
+        # 2. If all remaining undone candidates are currently leased by other peers (tail straggler),
+        #    hand out oldest leased items so stalled clients cannot block completion.
+        if not chosen:
+            leased_undone = [
+                cand for cand in candidates
+                if str(cand.get("hash") or "") not in done
+                and str(cand.get("hash") or "") in leases
+            ]
+            leased_undone.sort(
+                key=lambda c: (
+                    1 if leases[str(c["hash"])][0] == peer_id else 0,
+                    leases[str(c["hash"])][1],
+                )
+            )
+            for cand in leased_undone[:eff_batch]:
+                chosen.append(cand)
+        return chosen
+
+
+def release_completed_shard_leases(
+    room: str,
+    goal: str,
+    generation: int,
+    completed_hashes: Iterable[str],
+) -> None:
+    key = (room, goal, int(generation))
+    with _SHARD_LOCK:
+        leases = _SHARD_LEASES.get(key)
+        if not leases:
+            return
+        for gh in completed_hashes:
+            leases.pop(str(gh), None)
+        if not leases:
+            _SHARD_LEASES.pop(key, None)
+
+
+def compute_goal_eval_rankings(
+    genomes: list[dict],
+    eval_map: dict[str, dict],
+) -> list[dict[str, object]]:
+    """Build global 1..K leaderboard across evaluated individuals in ``genomes``."""
+    scored: list[tuple[float, int, dict[str, object]]] = []
+    for idx, g in enumerate(genomes):
+        if not isinstance(g, dict):
+            continue
+        gh = str(g.get("hash") or "")
+        rec = eval_map.get(gh)
+        if not isinstance(rec, dict):
+            continue
+        summ = rec.get("summary") if isinstance(rec.get("summary"), dict) else {}
+        try:
+            pval = float(summ.get("primaryValue", 0.0))
+        except (TypeError, ValueError):
+            pval = 0.0
+        if not math.isfinite(pval):
+            continue
+        trust = rec.get("trust") if isinstance(rec.get("trust"), dict) else {}
+        scored.append(
+            (
+                pval,
+                idx,
+                {
+                    "index": idx,
+                    "id": g.get("id", 0),
+                    "uuid": str(g.get("uuid") or ""),
+                    "hash": gh,
+                    "primaryValue": round(pval, 4),
+                    "primaryDisplay": str(summ.get("primaryDisplay") or ""),
+                    "badgeText": str(summ.get("badgeText") or ""),
+                    "tier": str(summ.get("tier") or ""),
+                    "status": str(trust.get("status") or "verified"),
+                },
+            )
+        )
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    return [{"rank": rank_idx, **entry} for rank_idx, (_, _, entry) in enumerate(scored, start=1)]

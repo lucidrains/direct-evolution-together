@@ -5,26 +5,42 @@ from __future__ import annotations
 from direct_evolution_together.cppn import build_uv_script_header
 
 from .adapters import TASK_ADAPTERS
-from .registry import get_task_spec
+from .registry import get_task_spec, sanitize_task_env_params
 
 
-def build_control_runner_script(task_id: str, weights_filename: str = "weights.pt") -> str:
+def build_control_runner_script(
+    task_id: str,
+    weights_filename: str = "weights.pt",
+    env_params: dict[str, object] | None = None,
+) -> str:
     """Return a standalone uv script that evaluates an exported policy on a control task."""
     spec = get_task_spec(task_id)
     if spec.genome_kind == "populora":
+        clean_env = sanitize_task_env_params(spec.task_id, env_params) if env_params else {}
+        user_overrides = {
+            str(h["key"]): clean_env[str(h["key"])]
+            for h in spec.hyperparam_specs
+            if h.get("key") and str(h["key"]) in clean_env
+        }
+        env_line = f"ENV_PARAMS = {user_overrides!r}" if user_overrides else "ENV_PARAMS = None"
         return "\n".join(
             [
                 *build_uv_script_header(extra_deps=("populora",)),
                 "import sys",
                 "import torch",
-                "from direct_evolution_together.environments import get_task_spec",
-                "from direct_evolution_together.populora_engine import build_policy_module",
+                "from direct_evolution_together.environments import evaluate_populora_genome, get_task_spec",
+                "from direct_evolution_together.populora_engine import build_policy_module, load_populora_checkpoint_bytes",
                 "",
                 f'spec = get_task_spec("{spec.task_id}")',
+                env_line,
                 "model = build_policy_module(spec.policy_spec)",
-                f'state = torch.load(sys.argv[1] if len(sys.argv) > 1 else "{weights_filename}", map_location="cpu", weights_only=True)',
+                f'ckpt_path = sys.argv[1] if len(sys.argv) > 1 else "{weights_filename}"',
+                'raw_bytes = open(ckpt_path, "rb").read()',
+                'state = torch.load(ckpt_path, map_location="cpu", weights_only=True)',
                 "model.load_state_dict(state, strict=False)",
-                f'print("Loaded PopuLoRA policy for {spec.task_id}:", sum(p.numel() for p in model.parameters()), "params")',
+                f'genome = load_populora_checkpoint_bytes(raw_bytes, spec.policy_spec, task_id="{spec.task_id}", assign_id=False)',
+                f'ev = evaluate_populora_genome("{spec.task_id}", genome, env_params=ENV_PARAMS, include_replay=False)',
+                f'print("Loaded PopuLoRA policy for {spec.task_id}:", sum(p.numel() for p in model.parameters()), "params ->", ev["summary"]["primaryDisplay"])',
                 "",
             ]
         )
@@ -138,6 +154,118 @@ def build_worker_script(
             "            })",
             "            print(f\"Submitted {len(results)} evals for {job['goal']} gen {job['generation']}\")",
             "        time.sleep(1.0)",
+            "",
+            "if __name__ == '__main__':",
+            "    main()",
+            "",
+        ]
+    )
+
+
+def build_crowd_worker_script(
+    room_slug: str,
+    server_url: str,
+    goal_name: str = "",
+    default_batch_size: int = 4,
+) -> str:
+    """Return a standalone PEP 723 ``uv run`` script that crowdsources MuJoCo simulation shards locally."""
+    clean_base = server_url.rstrip("/")
+    eff_batch = max(1, min(32, int(default_batch_size)))
+    return "\n".join(
+        [
+            *build_uv_script_header(extra_deps=("populora",)),
+            '"""Local crowdsourced MuJoCo shard simulator for direct-evolution-together.',
+            "",
+            "Claims disjoint batches of unevaluated individuals from a large-population room,",
+            "runs native MuJoCo rollouts locally, ranks the shard, and posts verified",
+            "fitnesses + trajectories back to advance evolution.",
+            '"""',
+            "import argparse",
+            "import json",
+            "import secrets",
+            "import time",
+            "import urllib.request",
+            "from direct_evolution_together.environments import evaluate_populora_shard",
+            "",
+            f'DEFAULT_URL = "{clean_base}"',
+            f'DEFAULT_ROOM = "{room_slug}"',
+            f'DEFAULT_GOAL = "{goal_name}"',
+            "",
+            "def _json_req(method: str, url: str, payload: dict | None = None, peer_id: str = '') -> dict:",
+            "    data = json.dumps(payload).encode('utf-8') if payload is not None else None",
+            "    headers = {'Accept': 'application/json'}",
+            "    if peer_id:",
+            "        headers['X-Crowd-Peer'] = peer_id",
+            "    if data is not None:",
+            "        headers['Content-Type'] = 'application/json'",
+            "    req = urllib.request.Request(url, data=data, headers=headers, method=method)",
+            "    with urllib.request.urlopen(req, timeout=30) as resp:",
+            "        return json.loads(resp.read().decode('utf-8'))",
+            "",
+            "def run_once(base_url: str, room: str, goal: str, batch_size: int, peer_id: str, auto_vote_top: int = 0) -> int:",
+            "    claim = _json_req(",
+            "        'POST',",
+            "        f'{base_url}/api/rooms/{room}/crowd/claim/',",
+            "        {'goal': goal, 'batchSize': batch_size, 'peerId': peer_id},",
+            "        peer_id=peer_id,",
+            "    )",
+            "    shard = claim.get('shard') or []",
+            "    if not shard:",
+            "        return 0",
+            "    task_id = claim['task']",
+            "    env_params = claim.get('envParams') or {}",
+            "    seeds = claim.get('evalSeeds') or [0, 1]",
+            "    base_hash = claim.get('baseHash') or ''",
+            "    base_model = None",
+            "    if base_hash:",
+            "        bm_resp = _json_req('GET', f'{base_url}/api/sim/base-model/?task={task_id}&hash={base_hash}', peer_id=peer_id)",
+            "        if bm_resp.get('tensors'):",
+            "            base_model = bm_resp",
+            "    evaluated = evaluate_populora_shard(",
+            "        task_id,",
+            "        shard,",
+            "        seeds=seeds,",
+            "        env_params=env_params,",
+            "        base_model_payload=base_model,",
+            "        include_replay=True,",
+            "    )",
+            "    res = _json_req(",
+            "        'POST',",
+            "        f'{base_url}/api/rooms/{room}/crowd/results/',",
+            "        {",
+            "            'goal': claim['goal'],",
+            "            'generation': claim['generation'],",
+            "            'peerId': peer_id,",
+            "            'sharded': True,",
+            "            'results': evaluated['results'],",
+            "            'shardRanking': evaluated['shardRanking'],",
+            "        },",
+            "        peer_id=peer_id,",
+            "    )",
+            "    top = evaluated['shardRanking'][0] if evaluated['shardRanking'] else {}",
+            "    print(",
+            "        f\"[{claim['goal']} gen {claim['generation']}] simulated {len(shard)} individuals \"",
+            "        f\"(best #{top.get('uuid', '?')} = {top.get('primaryValue', 0.0):.1f}) -> \"",
+            "        f\"{res.get('completedCount', 0)}/{res.get('totalCount', 0)} ready\"",
+            "    )",
+            "    return len(shard)",
+            "",
+            "def main() -> None:",
+            "    ap = argparse.ArgumentParser(description='Crowdsourced local MuJoCo shard runner')",
+            "    ap.add_argument('--url', default=DEFAULT_URL)",
+            "    ap.add_argument('--room', default=DEFAULT_ROOM)",
+            "    ap.add_argument('--goal', default=DEFAULT_GOAL)",
+            f"    ap.add_argument('--batch-size', type=int, default={eff_batch})",
+            "    ap.add_argument('--once', action='store_true', help='Drain current generation shards once and exit')",
+            "    args = ap.parse_args()",
+            "    peer_id = f'pyworker-{secrets.token_hex(6)}'",
+            "    print(f'Crowd runner {peer_id} connected to {args.url}/p/{args.room}/')",
+            "    while True:",
+            "        n = run_once(args.url.rstrip('/'), args.room, args.goal, args.batch_size, peer_id)",
+            "        if args.once and n == 0:",
+            "            break",
+            "        if n == 0:",
+            "            time.sleep(1.0)",
             "",
             "if __name__ == '__main__':",
             "    main()",

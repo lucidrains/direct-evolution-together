@@ -83,10 +83,12 @@ from .registry import (
     clamp_pop_for_task,
     default_elite_for_task,
     default_pop_for_task,
+    extract_task_env_overrides,
     get_nim_task_configs_payload,
     get_task_spec,
     get_task_specs_payload,
     normalize_task_id,
+    sanitize_task_env_params,
 )
 from .rng import mulberry32
 from .scene_assets import (
@@ -96,18 +98,37 @@ from .scene_assets import (
     pack_vfs_entries,
     unpack_vfs_entries,
 )
-from .scripts import build_control_runner_script, build_worker_script
+from .scene_sim import (
+    evaluate_populora_genome,
+    evaluate_populora_shard,
+    microduck_rollout,
+    rank_eval_items,
+    so101_rollout,
+    unitree_go2_rollout,
+)
+from .scripts import (
+    build_control_runner_script,
+    build_crowd_worker_script,
+    build_worker_script,
+)
 from .so101 import (
     SO101_ACTION_DIM,
     SO101_ACTION_LABELS,
     SO101_DT,
     SO101_ENV_PARAMS,
     SO101_EVAL_SEEDS,
+    SO101_HYPERPARAM_SPECS,
     SO101_LOW_RANK,
     SO101_MAX_STEPS,
     SO101_OBS_DIM,
     SO101_OBS_LABELS,
     SO101_POLICY_SPEC,
+    SO102_ENV_PARAMS,
+    SO102_STL_ASSETS,
+    SO102_URDF_ASSET,
+    SO_ARM_VARIANTS,
+    normalize_so_arm_model,
+    resolve_so_arm_env_params,
 )
 from .substrate import HyperNEATSubstrate, get_substrate
 from .types import ControlTaskAdapter, TaskSpec
@@ -176,11 +197,16 @@ __all__ = [
     "SO101_DT",
     "SO101_ENV_PARAMS",
     "SO101_EVAL_SEEDS",
+    "SO101_HYPERPARAM_SPECS",
     "SO101_LOW_RANK",
     "SO101_MAX_STEPS",
     "SO101_OBS_DIM",
     "SO101_OBS_LABELS",
     "SO101_POLICY_SPEC",
+    "SO102_ENV_PARAMS",
+    "SO102_STL_ASSETS",
+    "SO102_URDF_ASSET",
+    "SO_ARM_VARIANTS",
     "TASK_ADAPTERS",
     "TASK_SPECS",
     "UNITREE_GO2_ACTION_DIM",
@@ -203,6 +229,7 @@ __all__ = [
     "_render_cheetah_frame",
     "attach_halfcheetah_geoms",
     "build_control_runner_script",
+    "build_crowd_worker_script",
     "build_worker_script",
     "cartpole_reset",
     "cartpole_rollout",
@@ -214,6 +241,8 @@ __all__ = [
     "default_pop_for_task",
     "evaluate_control_batch",
     "evaluate_control_genome",
+    "evaluate_populora_genome",
+    "evaluate_populora_shard",
     "get_halfcheetah_model",
     "get_nim_task_configs_payload",
     "get_scene_manifest",
@@ -224,10 +253,17 @@ __all__ = [
     "halfcheetah_reset",
     "halfcheetah_rollout",
     "is_gen0_founder_presolved",
+    "microduck_rollout",
     "mulberry32",
+    "normalize_so_arm_model",
     "normalize_task_id",
     "pack_vfs_entries",
+    "rank_eval_items",
     "render_task_media",
+    "resolve_so_arm_env_params",
     "rollout_control_episode",
+    "sanitize_task_env_params",
+    "so101_rollout",
+    "unitree_go2_rollout",
     "unpack_vfs_entries",
 ]

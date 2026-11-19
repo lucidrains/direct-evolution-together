@@ -12,10 +12,10 @@ import shutil
 PKG_DIR = Path(__file__).resolve().parent
 
 PUBLIC_ASSET_SUFFIXES = frozenset(
-    {".js", ".mjs", ".css", ".xml", ".wasm", ".json", ".bin", ".stl", ".obj", ".png"}
+    {".js", ".mjs", ".css", ".xml", ".urdf", ".wasm", ".json", ".bin", ".stl", ".obj", ".png"}
 )
 PRECOMPRESS_SUFFIXES = frozenset(
-    {".js", ".mjs", ".css", ".xml", ".wasm", ".json", ".bin", ".stl", ".obj"}
+    {".js", ".mjs", ".css", ".xml", ".urdf", ".wasm", ".json", ".bin", ".stl", ".obj"}
 )
 
 

@@ -8,7 +8,9 @@ from django.db import close_old_connections
 
 from direct_evolution_together import mummy_ws
 from direct_evolution_together.cppn import (
+    ensure_genome_uuid,
     evolve_population,
+    normalize_short_uuid,
     resize_population,
     sync_genome_counter,
 )
@@ -23,6 +25,7 @@ from direct_evolution_together.environments import (
     get_task_spec,
     is_gen0_founder_presolved,
     normalize_task_id,
+    sanitize_task_env_params,
 )
 from direct_evolution_together.models import ChatMessage, RoomEvolutionState
 from direct_evolution_together.populora_engine import (
@@ -44,10 +47,12 @@ _persist_to_db = False
 def _build_lineage_from_genomes(genomes: list[dict], gen: int = 0) -> list[dict]:
     nodes: list[dict] = []
     for g in genomes:
+        guuid = ensure_genome_uuid(g)
         if g.get("kind") == "populora":
             nodes.append(
                 {
                     "id": int(g["id"]),
+                    "uuid": guuid,
                     "gen": gen,
                     "parents": [int(p) for p in g.get("parents", [])],
                     "op": str(g.get("op", "random")),
@@ -60,6 +65,7 @@ def _build_lineage_from_genomes(genomes: list[dict], gen: int = 0) -> list[dict]
             nodes.append(
                 {
                     "id": int(g["id"]),
+                    "uuid": guuid,
                     "gen": gen,
                     "parents": [int(p) for p in g.get("parents", [])],
                     "op": str(g.get("op", "random")),
@@ -71,20 +77,64 @@ def _build_lineage_from_genomes(genomes: list[dict], gen: int = 0) -> list[dict]
     return nodes
 
 
+def _ensure_state_uuids(state_json: str) -> tuple[str, bool]:
+    """Backfill short UUIDs on any persisted DB genomes/lineage nodes lacking ``uuid``."""
+    try:
+        parsed = json.loads(state_json)
+    except ValueError:
+        return state_json, False
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("goals"), list):
+        return state_json, False
+
+    changed = False
+    for goal in parsed["goals"]:
+        if not isinstance(goal, dict):
+            continue
+        id_to_uuid: dict[int, str] = {}
+        for g in goal.get("genomes") or []:
+            if isinstance(g, dict):
+                had = bool(normalize_short_uuid(g.get("uuid")))
+                u = ensure_genome_uuid(g)
+                if not had:
+                    changed = True
+                gid = g.get("id")
+                if isinstance(gid, int):
+                    id_to_uuid[gid] = u
+        for node in goal.get("lineage") or []:
+            if isinstance(node, dict):
+                cur_u = normalize_short_uuid(node.get("uuid"))
+                gid = node.get("id")
+                if not cur_u:
+                    if isinstance(gid, int) and gid in id_to_uuid:
+                        node["uuid"] = id_to_uuid[gid]
+                    else:
+                        u = ensure_genome_uuid(node)
+                        if isinstance(gid, int):
+                            id_to_uuid[gid] = u
+                    changed = True
+    if not changed:
+        return state_json, False
+    return json.dumps(parsed, separators=(",", ":")), True
+
+
 def _build_goal_entry(
     name: str,
     task: str,
     pop_size: int,
+    env_params: object = None,
 ) -> dict:
     clean_task = normalize_task_id(task)
     spec = get_task_spec(clean_task)
     eff_pop = clamp_pop_for_task(clean_task, pop_size)
+    clean_env = sanitize_task_env_params(clean_task, env_params)
     entry: dict = {
         "name": name,
         "task": clean_task,
         "minVotes": spec.default_min_votes,
         "genomes": create_task_population(clean_task, eff_pop),
     }
+    if clean_env:
+        entry["envParams"] = clean_env
     if spec.default_elite_frac is not None:
         entry["eliteFrac"] = float(spec.default_elite_frac)
     return entry
@@ -93,6 +143,7 @@ def _build_goal_entry(
 def _build_goals_payload(
     goal_specs: tuple[tuple[str, str, int | None], ...] | tuple[str, ...] = DEFAULT_GOAL_SPECS,
     pop_size: int = 30,
+    env_params: object = None,
 ) -> str:
     entries: list[dict] = []
     for item in goal_specs:
@@ -102,7 +153,7 @@ def _build_goals_payload(
         else:
             name, task = str(item), "image"
             target_pop = pop_size
-        entries.append(_build_goal_entry(name, task, target_pop))
+        entries.append(_build_goal_entry(name, task, target_pop, env_params=env_params))
     return json.dumps(entries, separators=(",", ":"))
 
 
@@ -111,6 +162,7 @@ def build_room_state_json(
     genomes: list[dict],
     *,
     task: str = "image",
+    env_params: object = None,
     min_votes: int | None = None,
     max_votes_per_user: int = 20,
     mut_sigma: float = 0.30,
@@ -121,6 +173,7 @@ def build_room_state_json(
     """Serialize initial Generation-0 room state matching Mummy's RoomEvolutionState schema."""
     clean_task = normalize_task_id(task)
     spec = get_task_spec(clean_task)
+    clean_env = sanitize_task_env_params(clean_task, env_params)
     eff_min_votes = spec.default_min_votes if min_votes is None else int(min_votes)
     if spec.kind == "control":
         eff_min_votes = max(1, min(eff_min_votes, int(max_votes_per_user)))
@@ -138,22 +191,23 @@ def build_room_state_json(
     }
     lineage = _build_lineage_from_genomes(genomes, gen=0)
     eff_auto = spec.default_auto_evolve if auto_evolve is None else bool(auto_evolve)
+    goal_doc: dict[str, object] = {
+        "name": goal_name,
+        "task": clean_task,
+        "generation": 0,
+        "genomes": genomes,
+        "lineage": lineage,
+        "params": params,
+        "phase": "simulating" if spec.sim_phase_enabled else "voting",
+        "simCompleted": 0,
+        "autoEvolve": eff_auto,
+    }
+    if clean_env:
+        goal_doc["envParams"] = clean_env
     return json.dumps(
         {
             "defaultParams": params,
-            "goals": [
-                {
-                    "name": goal_name,
-                    "task": clean_task,
-                    "generation": 0,
-                    "genomes": genomes,
-                    "lineage": lineage,
-                    "params": params,
-                    "phase": "simulating" if spec.sim_phase_enabled else "voting",
-                    "simCompleted": 0,
-                    "autoEvolve": eff_auto,
-                }
-            ],
+            "goals": [goal_doc],
         },
         separators=(",", ":"),
     )
@@ -202,6 +256,7 @@ def _ensure_lobby_default_goals(
     ):
         base_params["maxVotesPerUser"] = int(default_max_votes)
         changed = True
+    cfg = get_config()
     for g in parsed["goals"]:
         if not isinstance(g, dict):
             continue
@@ -214,6 +269,21 @@ def _ensure_lobby_default_goals(
             p["maxVotesPerUser"] = int(default_max_votes)
             changed = True
         task_id = normalize_task_id(str(g.get("task", "image")))
+        if task_id != "image":
+            env_cfg = cfg.get_env(task_id)
+            canonical_name = env_cfg.lobby_name or task_id.title()
+            default_task_env = sanitize_task_env_params(task_id, None)
+            cur_name = str(g.get("name", ""))
+            if env_cfg.lobby_default and cur_name != canonical_name and canonical_name not in existing:
+                existing.discard(cur_name)
+                g["name"] = canonical_name
+                existing.add(canonical_name)
+                if default_task_env:
+                    g["envParams"] = default_task_env
+                changed = True
+            elif default_task_env and not g.get("envParams"):
+                g["envParams"] = default_task_env
+                changed = True
         task_spec = get_task_spec(task_id)
         if task_spec.kind == "control":
             p = g.get("params")
@@ -293,19 +363,21 @@ def _ensure_lobby_default_goals(
             "eliteFrac": default_elite_for_task(task, float(base_params.get("eliteFrac", 0.20))),
             "crossoverRate": float(base_params.get("crossoverRate", 0.75)),
         }
-        added.append(
-            {
-                "name": name,
-                "task": task,
-                "generation": 0,
-                "genomes": genomes,
-                "lineage": _build_lineage_from_genomes(genomes, gen=0),
-                "params": params,
-                "phase": "simulating" if spec.sim_phase_enabled else "voting",
-                "simCompleted": 0,
-                "autoEvolve": bool(spec.default_auto_evolve),
-            }
-        )
+        new_goal_doc: dict[str, object] = {
+            "name": name,
+            "task": task,
+            "generation": 0,
+            "genomes": genomes,
+            "lineage": _build_lineage_from_genomes(genomes, gen=0),
+            "params": params,
+            "phase": "simulating" if spec.sim_phase_enabled else "voting",
+            "simCompleted": 0,
+            "autoEvolve": bool(spec.default_auto_evolve),
+        }
+        default_env = sanitize_task_env_params(task, None)
+        if default_env:
+            new_goal_doc["envParams"] = default_env
+        added.append(new_goal_doc)
     lobby_order_map = {
         name: idx for idx, (name, _, _) in enumerate(get_config().get_lobby_goal_specs())
     }
@@ -344,19 +416,22 @@ def seed_from_db(default_pop_size: int = 30, default_max_votes: int | None = Non
     max_id = 0
     for row in RoomEvolutionState.objects.all():
         state_json = row.state_json
+        state_json, uuid_changed = _ensure_state_uuids(state_json)
         max_id = max(max_id, _max_genome_id_in_state(state_json))
         sync_genome_counter(max_id)
+        lobby_changed = False
         if row.room == "lobby":
-            updated_json, changed = _ensure_lobby_default_goals(
+            updated_json, lobby_changed = _ensure_lobby_default_goals(
                 state_json,
                 default_pop_size=default_pop_size,
                 default_max_votes=default_max_votes,
             )
-            if changed:
+            if lobby_changed:
                 state_json = updated_json
-                row.state_json = state_json
-                row.save(update_fields=["state_json", "updated_at"])
                 max_id = max(max_id, _max_genome_id_in_state(state_json))
+        if uuid_changed or lobby_changed:
+            row.state_json = state_json
+            row.save(update_fields=["state_json", "updated_at"])
         mummy_ws.restore_room_state(row.room, state_json)
     sync_genome_counter(max_id)
 
@@ -426,8 +501,12 @@ def flush_evo_jobs() -> int:
                     close_old_connections()
                     saved_row = RoomEvolutionState.objects.filter(room=room).first()
                     if saved_row is not None:
-                        sync_genome_counter(_max_genome_id_in_state(saved_row.state_json))
-                        mummy_ws.restore_room_state(room, saved_row.state_json)
+                        st_json, st_changed = _ensure_state_uuids(saved_row.state_json)
+                        if st_changed:
+                            saved_row.state_json = st_json
+                            saved_row.save(update_fields=["state_json", "updated_at"])
+                        sync_genome_counter(_max_genome_id_in_state(st_json))
+                        mummy_ws.restore_room_state(room, st_json)
                         processed += 1
                         continue
                 initial_goal = goal_name.strip()
@@ -438,12 +517,22 @@ def flush_evo_jobs() -> int:
                 else:
                     goal_specs = get_config().get_lobby_goal_specs()
                 mummy_ws.apply_room_init(
-                    room, _build_goals_payload(goal_specs, pop_size=pop_size)
+                    room,
+                    _build_goals_payload(
+                        goal_specs,
+                        pop_size=pop_size,
+                        env_params=job.get("envParams") if initial_goal else None,
+                    ),
                 )
             elif kind == "create":
                 genomes = create_task_population(task, pop_size)
-                mummy_ws.apply_goal_create(
-                    room, goal_name, job["username"], json.dumps(genomes, separators=(",", ":"))
+                clean_env = sanitize_task_env_params(task, job.get("envParams"))
+                mummy_ws.apply_goal_create_with_env(
+                    room,
+                    goal_name,
+                    job["username"],
+                    json.dumps(genomes, separators=(",", ":")),
+                    json.dumps(clean_env, separators=(",", ":")) if clean_env else "{}",
                 )
             elif kind == "evolve":
                 spec = get_task_spec(task)

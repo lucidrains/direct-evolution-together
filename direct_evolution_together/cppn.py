@@ -4,6 +4,7 @@ import itertools
 import math
 from pathlib import Path, PurePosixPath
 import re
+import secrets
 import tempfile
 import threading
 from typing import Iterable, Sequence
@@ -22,7 +23,7 @@ NUM_HIDDEN = sum(LAYER_DIMS[1:-1])  # 36
 NUM_ACTIVATIONS = 5  # 0=tanh, 1=sin, 2=gauss, 3=abs, 4=leaky_relu
 POPULATION_SIZE = 30
 MIN_POPULATION_SIZE = 3
-MAX_POPULATION_SIZE = 64
+MAX_POPULATION_SIZE = 128
 MAX_CHECKPOINT_BYTES = 128 * 1024  # 128 KB (~4.5 KB typical CPPN .pt)
 MAX_CHECKPOINT_UNCOMPRESSED_BYTES = 256 * 1024  # 256 KB max internal .pt zip payload
 MAX_PT_ARCHIVE_ENTRIES = 64
@@ -37,11 +38,35 @@ DEFAULT_CROSSOVER_RATE = 0.75
 
 _counter_lock = threading.Lock()
 _genome_counter = itertools.count(1)
+SHORT_UUID_RE = re.compile(r"^[0-9a-f]{8}$")
 
 
 def _alloc_genome_id() -> int:
     with _counter_lock:
         return next(_genome_counter)
+
+
+def alloc_short_uuid() -> str:
+    """Allocate a compact 8-character lowercase hex UUID without perturbing PyTorch RNG."""
+    return secrets.token_hex(4)
+
+
+def normalize_short_uuid(raw: object) -> str:
+    """Validate and normalize an 8-character hex short UUID (accepting optional leading '#')."""
+    if isinstance(raw, str):
+        cand = raw.strip().lower().lstrip("#")
+        if SHORT_UUID_RE.match(cand):
+            return cand
+    return ""
+
+
+def ensure_genome_uuid(genome: dict) -> str:
+    """Ensure ``genome['uuid']`` is a valid 8-char short UUID in-place and return it."""
+    u = normalize_short_uuid(genome.get("uuid"))
+    if not u:
+        u = alloc_short_uuid()
+        genome["uuid"] = u
+    return u
 
 
 def sync_genome_counter(max_existing_id: int) -> None:
@@ -92,6 +117,7 @@ class CPPN(nn.Module):
     ) -> None:
         super().__init__()
         self.genome_id = genome_id if genome_id is not None else _alloc_genome_id()
+        self.uuid: str = alloc_short_uuid()
         self.parents: list[int] = list(parents) if parents else []
         self.op: str = op
         self.layers = nn.ModuleList(
@@ -232,6 +258,7 @@ class CPPN(nn.Module):
                 biases.append(0 if rv == 0.0 else rv)
         return {
             "id": self.genome_id,
+            "uuid": self.uuid,
             "parents": list(self.parents),
             "op": self.op,
             "weights": weights,
@@ -247,6 +274,9 @@ class CPPN(nn.Module):
             parents=[int(p) for p in data.get("parents", [])],
             op=str(data.get("op", "random")),
         )
+        restored_uuid = normalize_short_uuid(data.get("uuid"))
+        if restored_uuid:
+            net.uuid = restored_uuid
         w_flat = data["weights"]
         b_flat = data["biases"]
         w_offset = 0
@@ -327,6 +357,7 @@ def evolve_population(
     def _clone_elite(src: CPPN) -> CPPN:
         elite = CPPN.from_dict(src.to_dict())
         elite.genome_id = _alloc_genome_id()
+        elite.uuid = alloc_short_uuid()
         elite.parents = [src.genome_id]
         elite.op = "elite"
         return elite
@@ -490,6 +521,7 @@ def validate_genome_dict(raw: object) -> dict:
 
     return {
         "id": int(raw.get("id", 0) or 0),
+        "uuid": normalize_short_uuid(raw.get("uuid")) or alloc_short_uuid(),
         "parents": [int(p) for p in raw.get("parents", []) if isinstance(p, int)],
         "op": str(raw.get("op", "random")),
         "weights": weights,
@@ -780,6 +812,7 @@ def create_seeded_population(
             {
                 **g,
                 "id": _alloc_genome_id(),
+                "uuid": alloc_short_uuid(),
                 "parents": [],
                 "op": "seed",
             }
@@ -804,12 +837,16 @@ def build_uv_script_header(extra_deps: Sequence[str] = ()) -> list[str]:
     return ["# /// script", f"# dependencies = [{deps_json}]", "# ///"]
 
 
-def build_runner_script(weights_filename: str = "weights.pt", task: str = "image") -> str:
+def build_runner_script(
+    weights_filename: str = "weights.pt",
+    task: str = "image",
+    env_params: dict[str, object] | None = None,
+) -> str:
     """Return a standalone uv script that loads a CPPN checkpoint and runs its task."""
     if task != "image":
         from direct_evolution_together.environments import build_control_runner_script
 
-        return build_control_runner_script(task, weights_filename)
+        return build_control_runner_script(task, weights_filename, env_params=env_params)
 
     return "\n".join(
         [
