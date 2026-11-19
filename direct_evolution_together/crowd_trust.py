@@ -588,11 +588,19 @@ def fetch_room_evals(
     *,
     trusted_only: bool = False,
     include_traj: bool = True,
+    genome_hashes: Iterable[str] | None = None,
 ) -> list[dict]:
+    hash_filter: set[str] | None = None
+    if genome_hashes is not None:
+        hash_filter = {str(h) for h in genome_hashes if h}
+        if not hash_filter:
+            return []
     with SQLITE_SYNC_LOCK:
         qs = ExternalEvalResult.objects.filter(room=room, goal=goal, generation=generation)
         if trusted_only:
             qs = qs.filter(status="verified")
+        if hash_filter is not None:
+            qs = qs.filter(genome_hash__in=hash_filter)
         rows = list(qs.order_by("id"))
     items: list[dict] = []
     for row in rows:

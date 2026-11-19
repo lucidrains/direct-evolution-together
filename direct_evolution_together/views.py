@@ -67,6 +67,7 @@ from direct_evolution_together.environments import (
     default_elite_for_task,
     evaluate_control_batch,
     extract_task_env_overrides,
+    get_lean_task_specs_payload,
     get_scene_manifest,
     get_task_spec,
     get_task_specs_payload,
@@ -227,9 +228,9 @@ def index(
     contributor_id, cid_is_new = _resolve_contributor_id(request)
     fe_dir = Path(__file__).resolve().parent / "frontend"
     fe_sig = hashlib.sha256()
-    for js_p in sorted(fe_dir.glob("*.js")):
-        st = js_p.stat()
-        fe_sig.update(f"{js_p.name}:{st.st_size}:{st.st_mtime_ns}|".encode("ascii"))
+    for fe_p in sorted([*fe_dir.glob("*.js"), *fe_dir.glob("*.css")]):
+        st = fe_p.stat()
+        fe_sig.update(f"{fe_p.name}:{st.st_size}:{st.st_mtime_ns}|".encode("ascii"))
     asset_ver = fe_sig.hexdigest()[:10]
     mujoco_wasm_url = cfg.mujoco_wasm_url or settings.MUJOCO_WASM_URL
     if not mujoco_wasm_url:
@@ -267,7 +268,7 @@ def index(
             "initial_elite_frac": f"{initial_elite_frac:.2f}",
             "initial_crossover_rate": f"{initial_crossover_rate:.2f}",
             "mujoco_wasm_url": mujoco_wasm_url,
-            "task_specs": get_task_specs_payload(),
+            "task_specs": get_lean_task_specs_payload(),
             "crowd_config": {
                 **cfg.trust.to_client_dict(),
                 "contributorId": contributor_id,
@@ -1319,7 +1320,10 @@ def api_worker_results(request: HttpRequest, room: str) -> JsonResponse:
 @require_GET
 def api_config(request: HttpRequest) -> JsonResponse:
     """Return active centralized environment, execution-lock, and crowd-trust config."""
-    return JsonResponse({"ok": True, **get_config().to_public_dict()})
+    payload: dict[str, object] = {"ok": True, **get_config().to_public_dict()}
+    if request.GET.get("task_specs", "").strip().lower() in ("1", "true", "yes", "full"):
+        payload["taskSpecs"] = get_task_specs_payload()
+    return JsonResponse(payload)
 
 
 @require_GET
@@ -1586,7 +1590,7 @@ def api_crowd_claim(request: HttpRequest, room: str) -> JsonResponse:
 
 
 @require_GET
-def api_crowd_evals(request: HttpRequest, room: str) -> JsonResponse:
+def api_crowd_evals(request: HttpRequest, room: str) -> HttpResponse:
     """Fetch crowd WASM/WebGPU/local-shard consensus results, rankings, and contributor trust status."""
     cfg = get_config().trust
     cid, cid_is_new = _resolve_contributor_id(request)
@@ -1596,11 +1600,10 @@ def api_crowd_evals(request: HttpRequest, room: str) -> JsonResponse:
     except ValueError:
         generation = 0
     trusted_only = request.GET.get("trusted_only", "").strip().lower() in ("1", "true", "yes")
-    items = (
-        fetch_room_evals(room, goal_name, generation, trusted_only=trusted_only, include_traj=False)
-        if goal_name
-        else []
-    )
+    active_only = request.GET.get("active_only", "").strip().lower() in ("1", "true", "yes")
+
+    g_list: list[dict] = []
+    pop_hashes: list[str] | None = None
     rankings: list[dict[str, object]] = []
     sharded = False
     if goal_name:
@@ -1610,12 +1613,31 @@ def api_crowd_evals(request: HttpRequest, room: str) -> JsonResponse:
             g_list = [g for g in (g_obj.get("genomes") or []) if isinstance(g, dict)]
             spec = get_task_spec(str(g_obj.get("task") or "image"))
             sharded = _is_goal_sharded(spec, len(g_list))
-            eval_map = {str(it["hash"]): it for it in items if isinstance(it, dict) and it.get("hash")}
-            rankings = compute_goal_eval_rankings(g_list, eval_map)
+            if active_only and g_list:
+                pop_hashes = [
+                    str(g.get("hash") or genome_content_hash(g, length=20))
+                    for g in g_list
+                ]
+
+    items = (
+        fetch_room_evals(
+            room,
+            goal_name,
+            generation,
+            trusted_only=trusted_only,
+            include_traj=False,
+            genome_hashes=pop_hashes,
+        )
+        if goal_name
+        else []
+    )
+    if g_list:
+        eval_map = {str(it["hash"]): it for it in items if isinstance(it, dict) and it.get("hash")}
+        rankings = compute_goal_eval_rankings(g_list, eval_map)
 
     live_peers = _get_live_room_peer_count(room)
     eff_quorum = resolve_effective_quorum(cfg, active_peers=live_peers, sharded=sharded)
-    resp = JsonResponse({
+    payload_obj = {
         "ok": True,
         "room": room,
         "goal": goal_name,
@@ -1625,7 +1647,21 @@ def api_crowd_evals(request: HttpRequest, room: str) -> JsonResponse:
         "contributorId": cid,
         "items": items,
         "rankings": rankings,
-    })
+    }
+    raw_bytes = json.dumps(payload_obj, separators=(",", ":")).encode("utf-8")
+    accept_enc = (request.META.get("HTTP_ACCEPT_ENCODING") or "").lower()
+    etag_suffix = "-gz" if "gzip" in accept_enc else ""
+    etag = f'W/"{hashlib.sha1(raw_bytes).hexdigest()[:16]}{etag_suffix}"'
+    if not cid_is_new and request.headers.get("If-None-Match") == etag:
+        not_mod = HttpResponseNotModified()
+        not_mod["ETag"] = etag
+        not_mod["Cache-Control"] = "private, no-cache"
+        not_mod["Vary"] = "Accept-Encoding"
+        return not_mod
+    resp = HttpResponse(raw_bytes, content_type="application/json")
+    resp["ETag"] = etag
+    resp["Cache-Control"] = "private, no-cache"
+    resp["Vary"] = "Accept-Encoding"
     return _attach_contributor_cookie(resp, cid, cid_is_new)
 
 

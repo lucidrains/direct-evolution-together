@@ -3997,3 +3997,324 @@ def test_centralized_hyperparameters_and_population_scaling_constraints(client, 
     assert sharded_spec.crowd_shard_threshold == 16
     assert sharded_spec.crowd_shard_size == 4
 
+
+@pytest.mark.django_db(transaction=True)
+def test_client_asset_registry_and_lazy_wire_optimization(client, tmp_path):
+    import re
+    import time
+    from direct_evolution_together.environments import (
+        get_lean_task_specs_payload,
+        get_task_specs_payload,
+    )
+    from direct_evolution_together.models import ChatMessage
+    from direct_evolution_together.public_assets import stage_public_assets
+
+    # 1. Initial HTML omits render-blocking <script src>, embeds lean task specs (< 5 KB vs > 20 KB full),
+    #    serves /assets/deferred_ui.css with gzip + ETag, and hydrates full task specs via /api/config/?task_specs=1.
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.content.decode("utf-8")
+    assert re.findall(r"<script\b[^>]*\bsrc=", html) == []
+
+    lean_raw = json.dumps(get_lean_task_specs_payload())
+    full_raw = json.dumps(get_task_specs_payload())
+    assert len(lean_raw) < 9_500
+    assert len(full_raw) > 22_000
+    assert len(lean_raw) < len(full_raw) * 0.4
+
+    lean_m = re.search(
+        r'<script id="det-task-specs" type="application/json">(.*?)</script>',
+        html,
+        flags=re.S,
+    )
+    assert lean_m is not None
+    embedded_specs = json.loads(lean_m.group(1))
+    assert set(embedded_specs.keys()) >= {"image", "cartpole", "halfcheetah", "microduck", "unitree_go2", "so101"}
+    for tid, spec in embedded_specs.items():
+        assert spec.get("isLean") is True, f"{tid} embedded spec should be lean"
+        assert "policySpec" not in spec
+        assert "layerCoords" not in spec
+
+    cfg_default = client.get("/api/config/").json()
+    assert cfg_default["ok"] is True and "taskSpecs" not in cfg_default
+    cfg_full = client.get("/api/config/?task_specs=1").json()
+    assert cfg_full["ok"] is True and "taskSpecs" in cfg_full
+    assert "policySpec" in cfg_full["taskSpecs"]["microduck"]
+    assert "nudges" in cfg_full["taskSpecs"]["microduck"]
+    assert "layerCoords" in cfg_full["taskSpecs"]["cartpole"]
+
+    css_resp = client.get("/assets/deferred_ui.css", HTTP_ACCEPT_ENCODING="gzip")
+    assert css_resp.status_code == 200
+    assert "text/css" in css_resp["Content-Type"].lower()
+    assert css_resp.get("Content-Encoding") == "gzip"
+    assert len(css_resp.content) < 7_000
+    css_304 = client.get(
+        "/assets/deferred_ui.css",
+        HTTP_ACCEPT_ENCODING="gzip",
+        HTTP_IF_NONE_MATCH=css_resp["ETag"],
+    )
+    assert css_304.status_code == 304
+
+    staged_dir = tmp_path / "staged_lazy"
+    stage_public_assets(staged_dir, precompress=True)
+    assert (staged_dir / "deferred_ui.css").is_file()
+    assert (staged_dir / "deferred_ui.css.gz").is_file()
+
+    # 2. Execute window.DetClientAssets in Node to verify loaded/loading/unloaded tracking across all categories
+    js_main = html.split("<script>\n", 1)[1].rsplit("</script>", 1)[0]
+    reg_start = js_main.index("const ASSET_URLS = {")
+    reg_end = js_main.index("const loadedAssetScripts = new Map();")
+    boot_start = js_main.index('DetClientAssets.register("wasm", "simWorker:0"')
+    boot_end = js_main.index("function ensureFullTaskSpecs() {")
+    registry_harness = tmp_path / "asset_registry_check.js"
+    registry_harness.write_text(
+        f"""
+globalThis.window = globalThis;
+const basePath = "";
+const assetVer = "testver";
+const mujocoWasmUrl = "/assets/vendor/mujoco/mujoco.js?v=testver";
+const taskSpecs = {json.dumps(embedded_specs)};
+{js_main[reg_start:reg_end]}
+{js_main[boot_start:boot_end]}
+
+(async () => {{
+  const snap0 = window.DetClientAssets.snapshot();
+  let calls = 0;
+  const [a, b] = await Promise.all([
+    window.DetClientAssets.loadOnce("visualPacks", "microduck", async () => {{
+      calls += 1;
+      return new Uint8Array(128);
+    }}),
+    window.DetClientAssets.loadOnce("visualPacks", "microduck", async () => {{
+      calls += 1;
+      return new Uint8Array(128);
+    }}),
+  ]);
+
+  let failedOnce = false;
+  try {{
+    await window.DetClientAssets.loadOnce("scripts", "networkViz", async () => {{
+      throw new Error("network glitch");
+    }});
+  }} catch (e) {{
+    failedOnce = window.DetClientAssets.getStatus("scripts", "networkViz") === "error";
+  }}
+  await window.DetClientAssets.loadOnce("scripts", "networkViz", async () => true);
+
+  window.DetClientAssets.syncGoalSnapshot({{
+    name: "Microduck",
+    generation: 0,
+    populationSize: 8,
+    genomesLoaded: true,
+    genomesAdaptersLoaded: false,
+    lineageLoaded: false,
+    lineage: [],
+    genomes: Array.from({{ length: 8 }}, (_, i) => ({{
+      uuid: "0000000" + i,
+      kind: "populora",
+      hash: "h" + i,
+      baseHash: "b0",
+    }})),
+  }});
+  const goalDeferred = window.DetClientAssets.getGoalState("Microduck");
+  const snapDeferred = window.DetClientAssets.snapshot();
+
+  window.DetClientAssets.syncGoalSnapshot({{
+    name: "Microduck",
+    generation: 0,
+    populationSize: 8,
+    genomesLoaded: true,
+    genomesAdaptersLoaded: true,
+    lineageLoaded: true,
+    lineage: [{{ gen: 0, idx: 0 }}],
+    genomes: Array.from({{ length: 8 }}, (_, i) => ({{
+      uuid: "0000000" + i,
+      kind: "populora",
+      hash: "h" + i,
+      baseHash: "b0",
+      adapters: {{ l0: {{ A: [1], B: [2] }} }},
+    }})),
+  }});
+  const goalHydrated = window.DetClientAssets.getGoalState("Microduck");
+  window.DetClientAssets.setHistoryState({{ status: "loaded", loadedCount: 10, totalCount: 42, offset: 32, hasMore: true }});
+  const snapFinal = window.DetClientAssets.snapshot();
+
+  console.log(JSON.stringify({{
+    snap0Summary: snap0.summary,
+    leanLoaded: window.DetClientAssets.isLoaded("data", "leanTaskSpecs"),
+    fullUnloaded: window.DetClientAssets.getStatus("data", "fullTaskSpecs"),
+    wasmUnloaded: window.DetClientAssets.getStatus("wasm", "mujocoWasm"),
+    cssUnloaded: window.DetClientAssets.getStatus("styles", "deferredUi"),
+    dedupCalls: calls,
+    visBytes: snapFinal.visualPacks.microduck.bytes,
+    failedOnce,
+    netVizFinal: window.DetClientAssets.getStatus("scripts", "networkViz"),
+    goalDeferred,
+    indDeferred: snapDeferred.individuals,
+    goalHydrated,
+    indHydrated: snapFinal.individuals,
+    history: snapFinal.history,
+  }}));
+}})();
+""",
+        encoding="utf-8",
+    )
+    reg_out = json.loads(subprocess.check_output(["node", str(registry_harness)], text=True))
+    assert reg_out["snap0Summary"]["loadedCount"] == 1
+    assert reg_out["snap0Summary"]["unloadedCount"] >= 16
+    assert reg_out["leanLoaded"] is True
+    assert reg_out["fullUnloaded"] == "unloaded"
+    assert reg_out["wasmUnloaded"] == "unloaded"
+    assert reg_out["cssUnloaded"] == "unloaded"
+    assert reg_out["dedupCalls"] == 1
+    assert reg_out["visBytes"] == 128
+    assert reg_out["failedOnce"] is True
+    assert reg_out["netVizFinal"] == "loaded"
+    assert reg_out["goalDeferred"]["genomesLoaded"] is True
+    assert reg_out["goalDeferred"]["adaptersLoaded"] is False
+    assert reg_out["indDeferred"] == {"loadedCount": 0, "unloadedCount": 8, "totalTracked": 8}
+    assert reg_out["goalHydrated"]["adaptersLoaded"] is True
+    assert reg_out["goalHydrated"]["lineageActiveLoaded"] is True
+    assert reg_out["indHydrated"] == {"loadedCount": 8, "unloadedCount": 0, "totalTracked": 8}
+    assert reg_out["history"]["hasMore"] is True and reg_out["history"]["loadedCount"] == 10
+
+    # 3. WebSocket lazy wire flags: defer_adapters=1, defer_lineage=1, chat_limit, hydrate_genomes,
+    #    lineage_active, and history_more (>150x smaller initial WS state on Microduck!)
+    for idx in range(35):
+        ChatMessage.objects.create(room="lobby", username="archivist", message=f"log-{idx:02d}")
+
+    def _recv_raw_type(ws, target_type: str, timeout: float = 5.0) -> tuple[str, int, dict]:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            raw = ws.recv(timeout=max(0.05, deadline - time.monotonic()))
+            wire_len = len(raw) if isinstance(raw, bytes) else len(raw.encode("utf-8"))
+            text = gzip.decompress(raw).decode("utf-8") if isinstance(raw, bytes) else raw
+            msg = json.loads(text)
+            if msg.get("type") == target_type:
+                return text, wire_len, msg
+        raise AssertionError(f"Timed out waiting for {target_type}")
+
+    with _ws_server(seed=True) as port:
+        mummy_ws.set_round_config(1, 60)
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=eager_peer&gzip=1") as ws_eager:
+            raw_eager, wire_eager, evo_eager = _recv_raw_type(ws_eager, "evolution_state")
+            assert len(raw_eager) > 950_000
+            md_full_hashes = [g["hash"] for g in evo_eager["goals"][0]["genomes"]]
+            # Evolve Butterfly once so it accumulates non-empty lineage history
+            ws_eager.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 0, "index": 0, "vote": 1}))
+            _, _, bfly_evolved = _recv_raw_type(ws_eager, "goal_updated", timeout=6.0)
+            assert bfly_evolved["goal"]["generation"] == 1
+            assert bfly_evolved["goal"]["lineageTotal"] >= 30
+
+        with connect(
+            f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=ultralazy&gzip=1&lazy=1&defer_adapters=1&defer_lineage=1&chat_limit=10"
+        ) as ws_ul:
+            # Verify evolution_state arrives BEFORE history when defer_adapters=1
+            seen_order = []
+            evo_ul = None
+            hist_ul = None
+            raw_ul = ""
+            wire_ul = 0
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and (evo_ul is None or hist_ul is None):
+                raw = ws_ul.recv(timeout=2.0)
+                wlen = len(raw) if isinstance(raw, bytes) else len(raw.encode("utf-8"))
+                txt = gzip.decompress(raw).decode("utf-8") if isinstance(raw, bytes) else raw
+                msg = json.loads(txt)
+                mtype = msg.get("type")
+                seen_order.append(mtype)
+                if mtype == "evolution_state":
+                    evo_ul = msg
+                    raw_ul = txt
+                    wire_ul = wlen
+                elif mtype == "history":
+                    hist_ul = msg
+
+            assert seen_order.index("evolution_state") < seen_order.index("history")
+            assert len(raw_ul) < 8_000
+            assert wire_ul < 2_200
+            assert len(raw_eager) / max(1, len(raw_ul)) > 130.0
+
+            md_stub = evo_ul["goals"][0]
+            assert md_stub["name"] == "Microduck"
+            assert md_stub["genomesLoaded"] is True
+            assert md_stub["genomesAdaptersLoaded"] is False
+            assert md_stub["lineageLoaded"] is False
+            assert md_stub["lineage"] == []
+            assert len(md_stub["genomes"]) == 8
+            assert [g["hash"] for g in md_stub["genomes"]] == md_full_hashes
+            assert all("adapters" not in g for g in md_stub["genomes"])
+
+            # Bounded chat history + history_more pagination
+            assert len(hist_ul["messages"]) == 10
+            assert hist_ul["total"] >= 35
+            assert hist_ul["hasMore"] is True
+            ws_ul.send(json.dumps({"type": "history_more", "before": hist_ul["offset"], "limit": 12}))
+            _, _, older = _recv_raw_type(ws_ul, "history_more")
+            assert len(older["messages"]) == 12
+            assert older["offset"] == hist_ul["offset"] - 12
+            assert older["messages"][-1]["message"] != hist_ul["messages"][0]["message"]
+
+            # On-demand PopuLoRA adapter hydration via hydrate_genomes (subset + full)
+            ws_ul.send(json.dumps({"type": "hydrate_genomes", "goal": "Microduck", "indices": [2, 5]}))
+            _, _, hyd_sub = _recv_raw_type(ws_ul, "genomes_hydrated")
+            assert [it["index"] for it in hyd_sub["items"]] == [2, 5]
+            assert all(len(it["genome"]["adapters"]) == 6 for it in hyd_sub["items"])
+
+            ws_ul.send(json.dumps({"type": "hydrate_genomes", "goal": "Microduck"}))
+            _, _, hydrated = _recv_raw_type(ws_ul, "genomes_hydrated")
+            assert hydrated["goal"] == "Microduck"
+            assert len(hydrated["items"]) == 8
+            assert all(isinstance(it["genome"].get("adapters"), dict) and len(it["genome"]["adapters"]) == 6 for it in hydrated["items"])
+
+            # Selecting evolved Butterfly with defer_lineage=1 omits lineage until lineage_active is requested
+            ws_ul.send(json.dumps({"type": "select_goal", "goal": "Butterfly", "needGenomes": True}))
+            _, _, bfly_sel = _recv_raw_type(ws_ul, "goal_updated")
+            assert bfly_sel["goal"]["name"] == "Butterfly"
+            assert bfly_sel["goal"]["genomesLoaded"] is True
+            assert bfly_sel["goal"]["lineageLoaded"] is False
+            assert bfly_sel["goal"]["lineage"] == []
+            assert bfly_sel["goal"]["lineageTotal"] >= 30
+
+            ws_ul.send(json.dumps({"type": "lineage_active", "goal": "Butterfly"}))
+            _, _, lin_act = _recv_raw_type(ws_ul, "lineage_active")
+            assert lin_act["goal"] == "Butterfly"
+            assert lin_act["generation"] == 1
+            assert len(lin_act["lineage"]) > 0
+            assert lin_act["lineageTotal"] >= 30
+
+        # 4. Crowd evals active-population hash filter (?active_only=1) + weak ETag 304 Not Modified
+        live_hash = md_full_hashes[0]
+        for h_val in (live_hash, "stale_dead_hash_0001", "stale_dead_hash_0002"):
+            r_post = client.post(
+                "/api/rooms/lobby/crowd/results/",
+                data=json.dumps({
+                    "goal": "Microduck",
+                    "generation": 0,
+                    "results": [{"hash": h_val, "summary": {"primaryValue": 10.0, "return": 10.0}}],
+                }),
+                content_type="application/json",
+            )
+            assert r_post.status_code == 200
+
+        all_evals = client.get("/api/rooms/lobby/crowd/evals/?goal=Microduck&generation=0")
+        assert all_evals.status_code == 200
+        all_hashes = {it["hash"] for it in all_evals.json()["items"]}
+        assert {live_hash, "stale_dead_hash_0001", "stale_dead_hash_0002"} <= all_hashes
+
+        act_evals = client.get("/api/rooms/lobby/crowd/evals/?goal=Microduck&generation=0&active_only=1")
+        assert act_evals.status_code == 200
+        assert "ETag" in act_evals
+        act_hashes = {it["hash"] for it in act_evals.json()["items"]}
+        assert live_hash in act_hashes
+        assert "stale_dead_hash_0001" not in act_hashes
+        assert "stale_dead_hash_0002" not in act_hashes
+
+        act_304 = client.get(
+            "/api/rooms/lobby/crowd/evals/?goal=Microduck&generation=0&active_only=1",
+            HTTP_IF_NONE_MATCH=act_evals["ETag"],
+        )
+        assert act_304.status_code == 304
+        assert len(act_304.content) == 0
+
+

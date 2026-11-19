@@ -18,6 +18,7 @@ __all__ = [
     "default_elite_for_task",
     "default_pop_for_task",
     "extract_task_env_overrides",
+    "get_lean_task_specs_payload",
     "get_nim_task_configs_payload",
     "get_task_spec",
     "get_task_specs_payload",
@@ -125,6 +126,10 @@ def sanitize_task_env_params(task_id: str | None, raw_overrides: object = None) 
 
 def get_task_specs_payload() -> dict[str, dict[str, object]]:
     return {k: get_task_spec(k).to_client_dict() for k in TASK_SPECS}
+
+
+def get_lean_task_specs_payload() -> dict[str, dict[str, object]]:
+    return {k: get_task_spec(k).to_lean_client_dict() for k in TASK_SPECS}
 
 
 def get_nim_task_configs_payload() -> list[dict[str, object]]:

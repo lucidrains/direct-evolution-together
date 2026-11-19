@@ -1,6 +1,6 @@
 ## Mummy WebSocket server and room evolution state engine for direct-evolution-together.
 
-import std/[algorithm, atomics, json, locks, os, sets, strutils, sysrand, tables, times]
+import std/[algorithm, atomics, hashes, json, locks, os, sets, strutils, sysrand, tables, times]
 import mummy, mummy/routers
 import nimpy
 import zippy
@@ -100,6 +100,9 @@ type
     gzip: bool
     can_evolve_now: bool
     lazy_goals: bool
+    defer_adapters: bool
+    defer_lineage: bool
+    chat_limit: int
     active_goal: string
 
   ClientInfo = object
@@ -113,6 +116,9 @@ type
     gzip: bool
     can_evolve_now: bool
     lazy_goals: bool
+    defer_adapters: bool
+    defer_lineage: bool
+    chat_limit: int
     active_goal: string
 
   PendingPersist = object
@@ -806,6 +812,8 @@ proc goal_to_json_str(
   room_user_count: int = 1;
   is_public: bool = false;
   include_genomes: bool = true;
+  defer_adapters: bool = false;
+  defer_lineage: bool = false;
 ): string {.gcsafe.} =
   ## Fast zero-reparse serializer: splices pre-serialized `genomes_json` (or `sharded_genomes_json`) directly.
   let round_obj = newJObject()
@@ -815,18 +823,21 @@ proc goal_to_json_str(
   let round_str = $round_obj
   let tc = task_cfg_locked(goal.task)
   let is_sharded = tc.sim_phase_enabled and goal.votes.len > max(3, tc.crowd_shard_threshold)
+  let strip_adapters = include_genomes and (is_sharded or defer_adapters) and goal.sharded_genomes_json.len > 0
   let genomes_str =
     if not include_genomes: "[]"
-    elif is_sharded and goal.sharded_genomes_json.len > 0: goal.sharded_genomes_json
+    elif strip_adapters: goal.sharded_genomes_json
     elif goal.genomes_json.len > 0: goal.genomes_json
     else: "[]"
+  let adapters_loaded = include_genomes and (not strip_adapters)
   let env_params_str = if goal.env_params_json.len > 0: goal.env_params_json else: "{}"
+  let include_lineage = include_genomes and (not defer_lineage)
   let lineage_str =
-    if include_genomes and goal.lean_lineage_json.len > 0: goal.lean_lineage_json
+    if include_lineage and goal.lean_lineage_json.len > 0: goal.lean_lineage_json
     else: "[]"
   let task_str = if goal.task.len > 0: goal.task else: "image"
 
-  result = newStringOfCap(genomes_str.len + lineage_str.len + env_params_str.len + round_str.len + 224)
+  result = newStringOfCap(genomes_str.len + lineage_str.len + env_params_str.len + round_str.len + 288)
   result.add("{\"name\":")
   result.add(escapeJson(goal.name))
   result.add(",\"task\":")
@@ -837,8 +848,12 @@ proc goal_to_json_str(
   result.add($goal.generation)
   result.add(",\"genomesLoaded\":")
   result.add(if include_genomes: "true" else: "false")
+  result.add(",\"genomesAdaptersLoaded\":")
+  result.add(if adapters_loaded: "true" else: "false")
   result.add(",\"genomes\":")
   result.add(genomes_str)
+  result.add(",\"lineageLoaded\":")
+  result.add(if include_lineage: "true" else: "false")
   result.add(",\"lineage\":")
   result.add(lineage_str)
   result.add(",\"lineageTotal\":")
@@ -869,10 +884,15 @@ proc build_goal_updated_payload(
   room_user_count: int = 1;
   is_public: bool = false;
   include_genomes: bool = true;
+  defer_adapters: bool = false;
+  defer_lineage: bool = false;
 ): string {.gcsafe.} =
   let g_str = goal_to_json_str(
     goal, c, client_map, now, room_user_count,
-    is_public = is_public, include_genomes = include_genomes,
+    is_public = is_public,
+    include_genomes = include_genomes,
+    defer_adapters = defer_adapters,
+    defer_lineage = defer_lineage,
   )
   result = newStringOfCap(g_str.len + 32)
   result.add("{\"type\":\"goal_updated\",\"goal\":")
@@ -891,6 +911,8 @@ proc build_evolution_state_payload(
   room: string;
   lazy_goals: bool = false;
   focus_goal: string = "";
+  defer_adapters: bool = false;
+  defer_lineage: bool = false;
 ): string {.gcsafe.} =
   let now = now_ms()
   let is_pub = room == "lobby"
@@ -906,7 +928,10 @@ proc build_evolution_state_payload(
           let inc_genomes = (not lazy_goals) or (name == active_target)
           let g_str = goal_to_json_str(
             evo.goals[name], cfg, clients, now, r_cnt,
-            is_public = is_pub, include_genomes = inc_genomes,
+            is_public = is_pub,
+            include_genomes = inc_genomes,
+            defer_adapters = defer_adapters,
+            defer_lineage = defer_lineage,
           )
           total_len += g_str.len + 1
           parts.add(g_str)
@@ -1001,12 +1026,20 @@ proc build_presence_payload(room: string): string {.gcsafe.} =
     "count": users.len,
   })
 
-proc build_history_payload(room: string): string {.gcsafe.} =
+proc build_history_payload(room: string; limit: int = history_limit): string {.gcsafe.} =
   var parts: seq[string] = @[]
   {.gcsafe.}:
     if room in room_history:
       parts = room_history[room]
-  "{\"type\":\"history\",\"messages\":[" & parts.join(",") & "]}"
+  let total = parts.len
+  let eff_limit = clamp(limit, 0, history_limit)
+  let start_idx = if eff_limit < total: total - eff_limit else: 0
+  let slice =
+    if eff_limit <= 0 or total == 0: @[]
+    else: parts[start_idx .. ^1]
+  let has_more = if start_idx > 0: "true" else: "false"
+  "{\"type\":\"history\",\"total\":" & $total & ",\"offset\":" & $start_idx &
+    ",\"hasMore\":" & has_more & ",\"messages\":[" & slice.join(",") & "]}"
 
 proc system_msg_payload(msg: string): string {.gcsafe.} =
   $(%*{
@@ -1033,29 +1066,37 @@ proc queue_evolution_state_outbox_locked(room: string; outbox: var seq[PendingBr
     let targets = room_targets(room)
     if targets.len == 0:
       return
-    var full_targets: seq[WebSocket] = @[]
-    var lazy_buckets = initTable[string, seq[WebSocket]]()
+    type EvoBucketKey = tuple[lazy: bool, focus: string, defer_adap: bool, defer_lin: bool]
+    var buckets = initTable[EvoBucketKey, seq[WebSocket]]()
     let has_evo = room in room_evolution
     for ws in targets:
-      if ws in clients and clients[ws].lazy_goals:
-        let resolved =
-          if has_evo: resolve_lazy_target_goal(room_evolution[room], clients[ws].active_goal)
-          else: ""
-        clients[ws].active_goal = resolved
-        if resolved notin lazy_buckets:
-          lazy_buckets[resolved] = @[]
-        lazy_buckets[resolved].add(ws)
+      if ws in clients:
+        let cinfo = clients[ws]
+        var resolved = ""
+        if cinfo.lazy_goals:
+          resolved =
+            if has_evo: resolve_lazy_target_goal(room_evolution[room], cinfo.active_goal)
+            else: ""
+          clients[ws].active_goal = resolved
+        let k: EvoBucketKey = (cinfo.lazy_goals, resolved, cinfo.defer_adapters, cinfo.defer_lineage)
+        if k notin buckets:
+          buckets[k] = @[]
+        buckets[k].add(ws)
       else:
-        full_targets.add(ws)
-    if full_targets.len > 0:
-      outbox.add(PendingBroadcast(
-        targets: full_targets,
-        payload: build_evolution_state_payload(room, lazy_goals = false),
-      ))
-    for focus_name, bucket_targets in lazy_buckets:
+        let k: EvoBucketKey = (false, "", false, false)
+        if k notin buckets:
+          buckets[k] = @[]
+        buckets[k].add(ws)
+    for k, bucket_targets in buckets:
       outbox.add(PendingBroadcast(
         targets: bucket_targets,
-        payload: build_evolution_state_payload(room, lazy_goals = true, focus_goal = focus_name),
+        payload: build_evolution_state_payload(
+          room,
+          lazy_goals = k.lazy,
+          focus_goal = k.focus,
+          defer_adapters = k.defer_adap,
+          defer_lineage = k.defer_lin,
+        ),
       ))
 
 proc queue_goal_updated_outbox_locked(
@@ -1070,25 +1111,34 @@ proc queue_goal_updated_outbox_locked(
       return
     let r_cnt = max(1, targets.len)
     let is_pub = room == "lobby"
-    var full_targets: seq[WebSocket] = @[]
-    var stub_targets: seq[WebSocket] = @[]
+    type GoalBucketKey = tuple[inc_genomes: bool, defer_adap: bool, defer_lin: bool]
+    var buckets = initTable[GoalBucketKey, seq[WebSocket]]()
     for ws in targets:
-      if ws in clients and clients[ws].lazy_goals and clients[ws].active_goal != goal.name:
-        stub_targets.add(ws)
+      if ws in clients:
+        let cinfo = clients[ws]
+        let is_stub = cinfo.lazy_goals and cinfo.active_goal != goal.name
+        let k: GoalBucketKey = (
+          not is_stub,
+          (not is_stub) and cinfo.defer_adapters,
+          (not is_stub) and cinfo.defer_lineage,
+        )
+        if k notin buckets:
+          buckets[k] = @[]
+        buckets[k].add(ws)
       else:
-        full_targets.add(ws)
-    if full_targets.len > 0:
+        let k: GoalBucketKey = (true, false, false)
+        if k notin buckets:
+          buckets[k] = @[]
+        buckets[k].add(ws)
+    for k, bucket_targets in buckets:
       outbox.add(PendingBroadcast(
-        targets: full_targets,
+        targets: bucket_targets,
         payload: build_goal_updated_payload(
-          goal, cfg, clients, now, r_cnt, is_public = is_pub, include_genomes = true
-        ),
-      ))
-    if stub_targets.len > 0:
-      outbox.add(PendingBroadcast(
-        targets: stub_targets,
-        payload: build_goal_updated_payload(
-          goal, cfg, clients, now, r_cnt, is_public = is_pub, include_genomes = false
+          goal, cfg, clients, now, r_cnt,
+          is_public = is_pub,
+          include_genomes = k.inc_genomes,
+          defer_adapters = k.defer_adap,
+          defer_lineage = k.defer_lin,
         ),
       ))
 
@@ -1230,6 +1280,9 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
   let raw_focus_goal = sanitize_goal_name(request.queryParams["focus"])
   let focus_goal = if raw_focus_goal.len > 0: raw_focus_goal else: initial_goal
   let lazy_goals = request.queryParams["lazy"] == "1"
+  let defer_adapters = request.queryParams["defer_adapters"] == "1"
+  let defer_lineage = request.queryParams["defer_lineage"] == "1"
+  let chat_limit = parse_clamped_int(request.queryParams["chat_limit"], history_limit, 0, history_limit)
   let raw_initial_task = request.queryParams["task"]
   let wants_gzip = request.queryParams["gzip"] == "1"
   let raw_evolve_token = request.queryParams["evolve_token"].strip()
@@ -1307,6 +1360,9 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
       gzip: wants_gzip,
       can_evolve_now: can_evolve,
       lazy_goals: lazy_goals,
+      defer_adapters: defer_adapters,
+      defer_lineage: defer_lineage,
+      chat_limit: chat_limit,
       active_goal: focus_goal,
     )
 
@@ -1373,6 +1429,7 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
     extra_outbox: seq[PendingBroadcast] = @[]
     found = false
     has_evolution_ready = false
+    prioritize_evolution = false
 
   with_state_lock:
     if ws in pending_upgrades:
@@ -1415,6 +1472,9 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
         gzip: info.gzip,
         can_evolve_now: info.can_evolve_now,
         lazy_goals: info.lazy_goals,
+        defer_adapters: info.defer_adapters,
+        defer_lineage: info.defer_lineage,
+        chat_limit: info.chat_limit,
         active_goal: resolved_active_goal,
       )
       if info.room notin rooms:
@@ -1464,13 +1524,16 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
         "username": unique_name,
         "canEvolveNow": info.can_evolve_now,
       })
-      history_payload = build_history_payload(info.room)
+      history_payload = build_history_payload(info.room, info.chat_limit)
+      prioritize_evolution = info.defer_adapters
 
       if info.room in room_evolution and not room_evolution[info.room].initializing:
         evolution_payload = build_evolution_state_payload(
           info.room,
           lazy_goals = info.lazy_goals,
           focus_goal = resolved_active_goal,
+          defer_adapters = info.defer_adapters,
+          defer_lineage = info.defer_lineage,
         )
         has_evolution_ready = true
       elif info.room notin room_evolution:
@@ -1514,9 +1577,14 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
     broadcast(item.targets, item.payload)
   if found:
     send_payload(ws, identity_payload)
-    send_payload(ws, history_payload)
-    if has_evolution_ready:
-      send_payload(ws, evolution_payload)
+    if prioritize_evolution:
+      if has_evolution_ready:
+        send_payload(ws, evolution_payload)
+      send_payload(ws, history_payload)
+    else:
+      send_payload(ws, history_payload)
+      if has_evolution_ready:
+        send_payload(ws, evolution_payload)
     broadcast(targets, presence_payload)
     if join_payload.len > 0:
       broadcast(targets, join_payload)
@@ -1808,6 +1876,93 @@ proc handle_lineage_all(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
   if response.len > 0:
     send_payload(ws, response)
 
+proc handle_lineage_active(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
+  let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
+  var response = ""
+  with_state_lock:
+    if ws in clients:
+      let room = clients[ws].room
+      if room in room_evolution and goal_name in room_evolution[room].goals:
+        let goal = room_evolution[room].goals[goal_name]
+        let lineage_payload = lineage_payload_node(goal, full = false)
+        response = $(%*{
+          "type": "lineage_active",
+          "goal": goal_name,
+          "generation": goal.generation,
+          "lineage": lineage_payload.lineage,
+          "lineageTotal": lineage_payload.total,
+        })
+  if response.len > 0:
+    send_payload(ws, response)
+
+proc handle_hydrate_genomes(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
+  let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
+  if goal_name.len == 0:
+    return
+  let req_gen = payload.getOrDefault("generation").getInt(-1)
+  let indices_node = payload.getOrDefault("indices")
+  var
+    genomes_raw = ""
+    actual_gen = -1
+  with_state_lock:
+    if ws in clients:
+      let room = clients[ws].room
+      if room in room_evolution and goal_name in room_evolution[room].goals:
+        let goal = room_evolution[room].goals[goal_name]
+        if req_gen < 0 or goal.generation == req_gen:
+          genomes_raw = goal.genomes_json
+          actual_gen = goal.generation
+  if actual_gen < 0 or genomes_raw.len == 0:
+    return
+  var parsed: JsonNode
+  try:
+    parsed = parseJson(genomes_raw)
+  except CatchableError:
+    return
+  if parsed.kind != JArray:
+    return
+  var items = newJArray()
+  if indices_node != nil and indices_node.kind == JArray and indices_node.len > 0:
+    var seen = initHashSet[int]()
+    for idx_n in indices_node:
+      if idx_n.kind == JInt:
+        let idx = idx_n.getInt(-1)
+        if idx >= 0 and idx < parsed.len and idx notin seen:
+          seen.incl(idx)
+          items.add(%*{"index": idx, "genome": parsed[idx]})
+  else:
+    for idx in 0 ..< parsed.len:
+      items.add(%*{"index": idx, "genome": parsed[idx]})
+  send_payload(ws, $(%*{
+    "type": "genomes_hydrated",
+    "goal": goal_name,
+    "generation": actual_gen,
+    "items": items,
+  }))
+
+proc handle_history_more(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
+  let before_idx = payload.getOrDefault("before").getInt(0)
+  let req_limit = clamp(payload.getOrDefault("limit").getInt(50), 1, history_limit)
+  var response = ""
+  with_state_lock:
+    if ws in clients:
+      let room = clients[ws].room
+      var parts: seq[string] = @[]
+      if room in room_history:
+        parts = room_history[room]
+      let total = parts.len
+      let end_idx = clamp(before_idx, 0, total)
+      let start_idx = max(0, end_idx - req_limit)
+      let slice =
+        if end_idx > start_idx: parts[start_idx ..< end_idx]
+        else: @[]
+      let has_more = if start_idx > 0: "true" else: "false"
+      response =
+        "{\"type\":\"history_more\",\"total\":" & $total & ",\"offset\":" & $start_idx &
+        ",\"hasMore\":" & has_more & ",\"messages\":[" & slice.join(",") & "]}"
+  if response.len > 0:
+    send_payload(ws, response)
+
 proc build_evolve_job_and_broadcast(
   room: string;
   goal: var GoalPopulation;
@@ -1951,6 +2106,8 @@ proc handle_select_goal(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
             cfg, clients, now_ms(), r_cnt,
             is_public = (room == "lobby"),
             include_genomes = true,
+            defer_adapters = clients[ws].defer_adapters,
+            defer_lineage = clients[ws].defer_lineage,
           )
   if response.len > 0:
     send_payload(ws, response)
@@ -1996,6 +2153,9 @@ proc websocket_handler(
     of "set_auto_evolve": handle_set_auto_evolve(ws, payload)
     of "evolve_now": handle_evolve_now(ws, payload)
     of "lineage_all": handle_lineage_all(ws, payload)
+    of "lineage_active": handle_lineage_active(ws, payload)
+    of "hydrate_genomes": handle_hydrate_genomes(ws, payload)
+    of "history_more": handle_history_more(ws, payload)
     else: discard
   of ErrorEvent:
     discard

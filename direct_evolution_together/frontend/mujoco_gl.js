@@ -920,12 +920,13 @@
   }
 
   function renderSceneCardLiveFrame(canvas, visualPack, bodyPoses, stepIdx, maxSteps) {
-    if (!bodyPoses || !bodyPoses.length) return;
+    const poses = Array.isArray(bodyPoses) ? bodyPoses : (bodyPoses && bodyPoses.bodyPoses) || [];
+    if (!poses.length) return;
     const ctx = canvas.getContext("2d");
     const w = canvas.width;
     const h = canvas.height;
-    const idx = Math.min(stepIdx, bodyPoses.length - 1);
-    const poseRow = bodyPoses[idx];
+    const idx = Math.min(stepIdx, poses.length - 1);
+    const poseRow = poses[idx];
     const viewer = visualPack ? ensureSharedCardViewer(w, h) : null;
     if (viewer && viewer.renderSceneBodies(visualPack, poseRow)) {
       ctx.drawImage(sharedOffscreenCanvas, 0, 0, w, h);
@@ -937,7 +938,7 @@
     ctx.fillStyle = "rgba(24, 24, 32, 0.85)";
     ctx.fillRect(margin, 10, usableW, 4);
     ctx.fillStyle = "#38bdf8";
-    ctx.fillRect(margin, 10, Math.round(usableW * Math.min(1, idx / Math.max(1, bodyPoses.length - 1))), 4);
+    ctx.fillRect(margin, 10, Math.round(usableW * Math.min(1, idx / Math.max(1, poses.length - 1))), 4);
   }
 
   global.DetMujocoGL = {

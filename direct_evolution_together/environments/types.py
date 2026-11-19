@@ -195,6 +195,104 @@ class TaskSpec:
             "crowdShardSize": int(self.crowd_shard_size),
         }
 
+    def to_lean_client_dict(self) -> dict[str, object]:
+        """Minimal boot-time descriptor embedded in HTML; full mechanics hydrate on demand."""
+        def _lean_manifest(sid: str | None) -> dict[str, object] | None:
+            m = get_scene_manifest(sid)
+            if not m:
+                return None
+            return {
+                "sceneId": m.get("sceneId"),
+                "physicsAsset": m.get("physicsAsset"),
+                "physicsSha256": str(m.get("physicsSha256") or "")[:12],
+                "visualAsset": m.get("visualAsset"),
+                "visualSha256": str(m.get("visualSha256") or "")[:12],
+                "nbody": m.get("nbody"),
+                "cameraDefaults": m.get("cameraDefaults"),
+            }
+
+        resolved_params = self.resolve_env_params()
+        eff_scene_id = str(resolved_params.get("sceneId") or self.scene_id or "") or None
+        lean_env_params: dict[str, object] | None = None
+        if resolved_params:
+            keep_keys = {"sceneId", "shortLabel", "gripperKind", *(str(h.get("key") or "") for h in self.hyperparam_specs)}
+            filtered = {k: v for k, v in resolved_params.items() if k in keep_keys and v is not None}
+            lean_env_params = filtered or None
+        lean_variants: dict[str, dict[str, object]] | None = None
+        if self.variants:
+            lean_variants = {}
+            for vk, vv in self.variants.items():
+                v_scene = str(vv.get("sceneId") or self.scene_id or "") or None
+                v_entry: dict[str, object] = {}
+                if v_scene and v_scene != eff_scene_id:
+                    v_entry["sceneManifest"] = _lean_manifest(v_scene)
+                for k in ("sceneId", "shortLabel", "gripperKind"):
+                    if k in vv and vv[k] is not None:
+                        v_entry[k] = vv[k]
+                lean_variants[vk] = v_entry
+        lean_hspecs: list[dict[str, object]] = []
+        for h in self.hyperparam_specs:
+            hs: dict[str, object] = {}
+            for k in ("key", "label", "type", "default", "min", "max", "step", "aliases"):
+                if k in h and h[k] is not None:
+                    hs[k] = h[k]
+            if isinstance(h.get("options"), (list, tuple)):
+                hs["options"] = [
+                    {ok: ov for ok, ov in opt.items() if ok in ("value", "label", "aliases") and ov is not None}
+                    for opt in h["options"]
+                    if isinstance(opt, Mapping)
+                ]
+            lean_hspecs.append(hs)
+        out: dict[str, object] = {
+            "task": self.task_id,
+            "kind": self.kind,
+            "genomeKind": self.genome_kind,
+            "lobbyOrder": self.lobby_order,
+            "label": self.label,
+            "minPopSize": int(self.min_pop_size),
+            "defaultPopSize": self.default_pop_size,
+            "maxPopSize": self.max_pop_size,
+            "defaultMinVotes": self.default_min_votes,
+            "defaultEliteFrac": self.default_elite_frac,
+            "crowdShardThreshold": int(self.crowd_shard_threshold),
+            "crowdShardSize": int(self.crowd_shard_size),
+            "clientSim": self.client_sim,
+            "enabled": self.enabled,
+            "executionPolicy": self.execution_policy,
+            "crowdContribute": self.crowd_contribute,
+            "simPhaseEnabled": self.sim_phase_enabled,
+            "defaultAutoEvolve": self.default_auto_evolve,
+            "allowServerVideo": self.allow_server_video,
+            "simModes": list(self.sim_modes),
+            "defaultSimMode": self.default_sim_mode,
+            "supportsVideo": self.supports_video,
+            "obsDim": self.obs_dim,
+            "hiddenDims": list(self.hidden_dims),
+            "actionDim": self.action_dim,
+            "continuous": self.continuous,
+            "maxSteps": self.max_steps,
+            "dt": self.dt,
+            "evalSeeds": list(self.eval_seeds),
+            "phaseFreq": self.phase_freq,
+            "phaseHarmonics": self.phase_harmonics,
+            "primaryMetric": self.primary_metric,
+            "sortLabel": self.sort_label,
+            "solvedLabel": self.solved_label,
+            "isLean": True,
+        }
+        if self.mjcf_asset:
+            out["mjcfAsset"] = self.mjcf_asset
+        if eff_scene_id:
+            out["sceneId"] = eff_scene_id
+            out["sceneManifest"] = _lean_manifest(eff_scene_id)
+        if lean_env_params:
+            out["envParams"] = lean_env_params
+        if lean_hspecs:
+            out["hyperparamSpecs"] = lean_hspecs
+        if lean_variants:
+            out["variants"] = lean_variants
+        return out
+
     def to_client_dict(self) -> dict[str, object]:
         resolved_params = self.resolve_env_params()
         eff_scene_id = str(resolved_params.get("sceneId") or self.scene_id or "") or None
