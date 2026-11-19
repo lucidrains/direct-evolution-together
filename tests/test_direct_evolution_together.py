@@ -4318,3 +4318,241 @@ const taskSpecs = {json.dumps(embedded_specs)};
         assert len(act_304.content) == 0
 
 
+@pytest.mark.django_db(transaction=True)
+def test_handle_no_stacked_suffixes_and_refresh_cid_lifecycle(client):
+    """Refreshing never appends -2/-2-2; collisions increment instead of stacking; client CID survives reloads."""
+    from contextlib import ExitStack
+    import re
+    import subprocess
+    import tempfile
+
+    # 1. Server-side WebSocket tests against live Mummy server
+    with _ws_server(seed=True, pop_size=6, max_votes=4) as port:
+        seed_from_db(default_pop_size=6, default_max_votes=4)
+
+        # (a) Repeated overlapping refreshes with same cid keep exact handle & notify superseded socket
+        with ExitStack() as stack:
+            prev_ws = stack.enter_context(
+                connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice&cid=reloadcid00001")
+            )
+            assert _recv_until(prev_ws, "identity")["username"] == "alice"
+            _recv_until(prev_ws, "evolution_state")
+
+            for _ in range(5):
+                next_ws = stack.enter_context(
+                    connect(
+                        f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice&cid=reloadcid00001&reconnect=1"
+                    )
+                )
+                assert _recv_until(next_ws, "identity")["username"] == "alice"
+                _recv_until(next_ws, "evolution_state")
+                assert _recv_until(next_ws, "presence")["users"] == ["alice"]
+                assert _recv_until(prev_ws, "replaced", timeout=2.0)["type"] == "replaced"
+                prev_ws = next_ws
+
+        # (b) Collisions increment (-2 -> -3), never stack (-2-2 / -2-2-2), even on explicit "-2" requests
+        with (
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice&cid=usercid000001") as w1,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice&cid=usercid000002") as w2,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice-2&cid=usercid000003") as w3,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice-2-2&cid=usercid000004") as w4,
+        ):
+            assert _recv_until(w1, "identity")["username"] == "alice"
+            assert _recv_until(w2, "identity")["username"] == "alice-2"
+            assert _recv_until(w3, "identity")["username"] == "alice-3"
+            id4 = _recv_until(w4, "identity")["username"]
+            with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username={id4}&cid=usercid000005") as w5:
+                id5 = _recv_until(w5, "identity")["username"]
+                assert id5 == "alice-4"
+                assert "-2-2" not in id5
+
+            # (c) handle_rename always replies with identity even when desired name stays mapped to old_name
+            w2.send(json.dumps({"type": "rename", "username": "alice"}))
+            assert _recv_until(w2, "identity", timeout=2.0)["username"] == "alice-2"
+
+        # (d) Auto-anon handles (anon-1234) and 3-digit handles (so-102) preserve base stem without stacking
+        with (
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=anon-1234&cid=anoncid000001") as a1,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=anon-1234&cid=anoncid000002") as a2,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=anon-1234-2&cid=anoncid000003") as a3,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=so-102&cid=socid00000001") as s1,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=so-102&cid=socid00000002") as s2,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=so-102-2&cid=socid00000003") as s3,
+        ):
+            assert _recv_until(a1, "identity")["username"] == "anon-1234"
+            assert _recv_until(a2, "identity")["username"] == "anon-1234-2"
+            assert _recv_until(a3, "identity")["username"] == "anon-1234-3"
+            assert _recv_until(s1, "identity")["username"] == "so-102"
+            assert _recv_until(s2, "identity")["username"] == "so-102-2"
+            assert _recv_until(s3, "identity")["username"] == "so-102-3"
+
+    # 2. Client-side JS verification against actual rendered index.html helpers in Node
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.content.decode("utf-8")
+    m_disambig = re.search(
+        r"(function isDisambiguatedVariantOf\(actual, preferred\)\s*\{.*?\n      \})",
+        html,
+        flags=re.S,
+    )
+    m_cid_block = re.search(
+        r"(const TAB_CID_KEY = .*?let clientCidReady = resolveClientCid\(\);)",
+        html,
+        flags=re.S,
+    )
+    assert m_disambig and m_cid_block
+    extracted_js = (
+        m_disambig.group(1)
+        + "\n"
+        + m_cid_block.group(1).replace("let clientCidReady = resolveClientCid();", "")
+        + "\n"
+        + """
+        globalThis.__exports = {
+          isDisambiguatedVariantOf,
+          resolveClientCid,
+          releaseCidLock,
+          rotateClientCidForDuplicateTab,
+          getState: () => ({ clientCid, reusedReloadCid }),
+          markUnload: () => {
+            releaseCidLock();
+            sessionStorage.setItem(TAB_CID_KEY, clientCid);
+            sessionStorage.setItem(UNLOAD_MARK_KEY, JSON.stringify({ room: roomName, ts: Date.now() }));
+            recordTrackedRoomCid(clientCid);
+          },
+        };
+        """
+    )
+
+    node_harness = f"""
+const assert = require("assert");
+const crypto = require("crypto");
+const vm = require("vm");
+const SOURCE = {json.dumps(extracted_js)};
+
+function makeStorage(seed = {{}}) {{
+  const map = new Map(Object.entries(seed));
+  return {{
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => map.set(String(k), String(v)),
+    removeItem: (k) => map.delete(k),
+    snapshot: () => Object.fromEntries(map.entries()),
+  }};
+}}
+
+function makeLockManager() {{
+  const held = new Map();
+  function acquire(name, cb) {{
+    const entry = {{ waiters: [] }};
+    held.set(name, entry);
+    return Promise.resolve()
+      .then(() => cb({{ name }}))
+      .finally(() => {{
+        const next = entry.waiters.shift();
+        held.delete(name);
+        if (next) next();
+      }});
+  }}
+  return {{
+    request(name, opts, cb) {{
+      if (typeof opts === "function") {{ cb = opts; opts = {{}}; }}
+      opts = opts || {{}};
+      if (opts.ifAvailable) return held.has(name) ? Promise.resolve(cb(null)) : acquire(name, cb);
+      if (!held.has(name)) return acquire(name, cb);
+      return new Promise((resolve, reject) => {{
+        const entry = held.get(name);
+        const onGranted = () => acquire(name, cb).then(resolve, reject);
+        entry.waiters.push(onGranted);
+        if (opts.signal) {{
+          const onAbort = () => {{
+            const i = entry.waiters.indexOf(onGranted);
+            if (i >= 0) entry.waiters.splice(i, 1);
+            reject(new Error("AbortError"));
+          }};
+          if (opts.signal.aborted) return onAbort();
+          opts.signal.addEventListener("abort", onAbort, {{ once: true }});
+        }}
+      }});
+    }},
+  }};
+}}
+
+function makeTab({{ roomName = "lobby", sessionSeed = {{}}, localStorage, locks, navType = "navigate" }}) {{
+  const sessionStorage = makeStorage(sessionSeed);
+  const ctx = {{
+    roomName,
+    sessionStorage,
+    localStorage,
+    window: {{ crypto: {{ randomUUID: () => crypto.randomUUID() }} }},
+    navigator: {{ locks }},
+    performance: {{ getEntriesByType: () => [{{ type: navType }}] }},
+    AbortController,
+    setTimeout,
+    clearTimeout,
+  }};
+  vm.runInNewContext(SOURCE, ctx);
+  return {{ ...ctx.__exports, sessionStorage }};
+}}
+
+(async () => {{
+  const sharedLocal = makeStorage();
+  const sharedLocks = makeLockManager();
+
+  // Disambiguation variant checks
+  const h = makeTab({{ localStorage: sharedLocal, locks: sharedLocks }});
+  assert.strictEqual(h.isDisambiguatedVariantOf("alice-2", "alice"), true);
+  assert.strictEqual(h.isDisambiguatedVariantOf("alice-3", "alice"), true);
+  assert.strictEqual(h.isDisambiguatedVariantOf("alice", "alice"), false);
+  assert.strictEqual(h.isDisambiguatedVariantOf("other-2", "alice"), false);
+  assert.strictEqual(h.isDisambiguatedVariantOf("abcdefghijklmnopqrstuv-2", "abcdefghijklmnopqrstuvwx"), true);
+
+  // Initial load -> normal reload -> crash reload (no beforeunload) -> 35ms delayed lock release
+  const t1 = makeTab({{ localStorage: sharedLocal, locks: sharedLocks }});
+  const cid1 = await t1.resolveClientCid();
+  assert.ok(cid1.length >= 8);
+  assert.strictEqual(t1.getState().reusedReloadCid, false);
+
+  t1.markUnload();
+  await new Promise((r) => setTimeout(r, 5));
+  const t2 = makeTab({{ sessionSeed: t1.sessionStorage.snapshot(), localStorage: sharedLocal, locks: sharedLocks, navType: "reload" }});
+  assert.strictEqual(await t2.resolveClientCid(), cid1);
+  assert.strictEqual(t2.getState().reusedReloadCid, true);
+
+  // Crash/Safari reload where beforeunload never fired
+  t2.releaseCidLock();
+  await new Promise((r) => setTimeout(r, 5));
+  const t3 = makeTab({{ sessionSeed: t2.sessionStorage.snapshot(), localStorage: sharedLocal, locks: sharedLocks, navType: "reload" }});
+  assert.strictEqual(await t3.resolveClientCid(), cid1);
+  assert.strictEqual(t3.getState().reusedReloadCid, true);
+
+  // Fast reload with 35ms lock-release delay
+  setTimeout(() => t3.releaseCidLock(), 35);
+  const t4 = makeTab({{ sessionSeed: t3.sessionStorage.snapshot(), localStorage: sharedLocal, locks: sharedLocks, navType: "reload" }});
+  assert.strictEqual(await t4.resolveClientCid(), cid1);
+  assert.strictEqual(t4.getState().reusedReloadCid, true);
+
+  // Duplicate tab while t4 is live -> distinct cid (no kick loop)
+  const dup = makeTab({{ sessionSeed: t4.sessionStorage.snapshot(), localStorage: sharedLocal, locks: sharedLocks }});
+  assert.notStrictEqual(await dup.resolveClientCid(), cid1);
+
+  // Close t4, open brand-new tab (empty sessionStorage) -> reclaims cid1 to evict lingering ghost socket
+  t4.releaseCidLock();
+  await new Promise((r) => setTimeout(r, 5));
+  const reopened = makeTab({{ sessionSeed: {{}}, localStorage: sharedLocal, locks: sharedLocks }});
+  assert.strictEqual(await reopened.resolveClientCid(), cid1);
+  assert.strictEqual(reopened.getState().reusedReloadCid, false);
+
+  reopened.releaseCidLock();
+  dup.releaseCidLock();
+}})().catch((err) => {{ console.error(err); process.exit(1); }});
+"""
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as tf:
+        tf.write(node_harness)
+        harness_path = tf.name
+    try:
+        proc = subprocess.run(["node", harness_path], capture_output=True, text=True, timeout=15)
+        assert proc.returncode == 0, f"Node CID lifecycle harness failed:\n{proc.stderr}\n{proc.stdout}"
+    finally:
+        os.unlink(harness_path)
+
+
+

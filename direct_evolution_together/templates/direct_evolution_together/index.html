@@ -5405,10 +5405,22 @@
         return TaskRenderers.image;
       }
 
-      let preferredUsername = localStorage.getItem("det_username") || "";
+      const PREFERRED_USERNAME_KEY = "det_username";
+      function isDisambiguatedVariantOf(actual, preferred) {
+        const a = String(actual || "").trim().toLowerCase();
+        const p = String(preferred || "").trim().toLowerCase();
+        const m = a && p && a !== p ? a.match(/^(.+)-([2-9]\d*)$/) : null;
+        if (!m) return false;
+        return m[1] === p.slice(0, Math.max(1, 24 - m[2].length - 1));
+      }
+
+      let preferredUsername = (() => {
+        try { return (localStorage.getItem(PREFERRED_USERNAME_KEY) || "").trim().slice(0, 24); } catch { return ""; }
+      })();
       const nameInput = document.getElementById("name-input");
       let savedUsername = preferredUsername;
       let pendingExplicitRename = false;
+      let lastAutoReclaimAt = 0;
       nameInput.value = preferredUsername;
 
       const messagesEl = document.getElementById("messages");
@@ -5421,8 +5433,9 @@
 
       function syncNameDirty() {
         const cur = nameInput.value.trim();
-        nameForm.classList.toggle("is-dirty", populationReady && Boolean(cur) && cur !== savedUsername);
-        if (nameBtn) nameBtn.disabled = !populationReady || !cur;
+        const isDirty = populationReady && Boolean(cur) && cur !== savedUsername;
+        nameForm.classList.toggle("is-dirty", isDirty);
+        if (nameBtn) nameBtn.disabled = !isDirty;
       }
       syncNameDirty();
       const usersList = document.getElementById("users-list");
@@ -5718,37 +5731,129 @@
         return parseClampedFloat(inputEl, 0.0, 1.0, fallback);
       }
 
-      const RELOAD_CID_STORAGE_KEY = `det_reload_cid_${roomName}`;
+      const TAB_CID_KEY = "det_tab_cid";
+      const UNLOAD_MARK_KEY = "det_tab_unload";
+      const ROOM_CIDS_KEY = `det_room_cids_${roomName}`;
+      const isValidCid = (val) => typeof val === "string" && /^[a-zA-Z0-9_-]{8,40}$/.test(val);
+
       function generateClientCid() {
-        if (window.crypto && typeof window.crypto.randomUUID === "function") {
-          return window.crypto.randomUUID().replace(/-/g, "");
-        }
-        let out = "";
-        for (let i = 0; i < 4; i++) {
-          out += Math.floor((Math.random() + 1) * 0x100000000).toString(16).slice(1);
-        }
-        return out;
+        if (window.crypto?.randomUUID) return window.crypto.randomUUID().replace(/-/g, "");
+        return Array.from({ length: 4 }, () => Math.floor((Math.random() + 1) * 0x100000000).toString(16).slice(1)).join("");
       }
-      let reusedReloadCid = false;
-      const clientCid = (() => {
+
+      function readTrackedRoomCids() {
         try {
-          const raw = sessionStorage.getItem(RELOAD_CID_STORAGE_KEY);
-          if (raw) {
-            sessionStorage.removeItem(RELOAD_CID_STORAGE_KEY);
-            const parsed = JSON.parse(raw);
-            if (
-              parsed &&
-              typeof parsed.cid === "string" &&
-              parsed.cid.length >= 8 &&
-              Date.now() - Number(parsed.ts || 0) < 30000
-            ) {
-              reusedReloadCid = true;
-              return parsed.cid;
+          const parsed = JSON.parse(localStorage.getItem(ROOM_CIDS_KEY) || "[]");
+          const cutoff = Date.now() - 300000;
+          return Array.isArray(parsed)
+            ? parsed.filter((e) => e && isValidCid(e.cid) && Number(e.ts || 0) > cutoff).slice(0, 8)
+            : [];
+        } catch {
+          return [];
+        }
+      }
+
+      function recordTrackedRoomCid(cid) {
+        if (!isValidCid(cid)) return;
+        try {
+          const next = [{ cid, ts: Date.now() }, ...readTrackedRoomCids().filter((e) => e.cid !== cid)].slice(0, 8);
+          localStorage.setItem(ROOM_CIDS_KEY, JSON.stringify(next));
+        } catch {}
+      }
+
+      let clientCid = "";
+      let reusedReloadCid = false;
+      let releaseCidLockFn = null;
+      let connectInFlight = false;
+
+      function releaseCidLock() {
+        const fn = releaseCidLockFn;
+        releaseCidLockFn = null;
+        if (fn) try { fn(); } catch {}
+      }
+
+      function commitClientCid(cid, isReload = false) {
+        clientCid = cid;
+        reusedReloadCid = isReload;
+        try { sessionStorage.setItem(TAB_CID_KEY, cid); } catch {}
+        recordTrackedRoomCid(cid);
+        return cid;
+      }
+
+      function tryAcquireCidLock(cid, waitMs = 0) {
+        if (!isValidCid(cid)) return Promise.resolve(false);
+        if (!navigator.locks?.request) return Promise.resolve(true);
+
+        return new Promise((resolve) => {
+          let done = false;
+          const finish = (ok) => { if (!done) { done = true; resolve(ok); } };
+          const ctrl = waitMs > 0 && typeof AbortController === "function" ? new AbortController() : null;
+          const timer = waitMs > 0 ? setTimeout(() => { ctrl?.abort(); finish(false); }, waitMs) : null;
+          const opts = waitMs <= 0 ? { ifAvailable: true } : (ctrl ? { signal: ctrl.signal } : {});
+
+          navigator.locks.request(`det_tab_cid_${cid}`, opts, (lock) => {
+            if (timer) clearTimeout(timer);
+            if (!lock || done) return finish(false);
+            return new Promise((release) => {
+              releaseCidLock();
+              releaseCidLockFn = release;
+              finish(true);
+            });
+          }).catch(() => {
+            if (timer) clearTimeout(timer);
+            finish(waitMs <= 0);
+          });
+        });
+      }
+
+      async function resolveClientCid() {
+        let sessionCid = "";
+        let justUnloaded = false;
+        let sameRoomUnload = false;
+        try {
+          const rawMark = sessionStorage.getItem(UNLOAD_MARK_KEY);
+          if (rawMark) {
+            sessionStorage.removeItem(UNLOAD_MARK_KEY);
+            const mark = JSON.parse(rawMark);
+            if (mark && Date.now() - Number(mark.ts || 0) < 30000) {
+              justUnloaded = true;
+              sameRoomUnload = mark.room === roomName;
             }
           }
+          const stored = sessionStorage.getItem(TAB_CID_KEY);
+          if (isValidCid(stored)) sessionCid = stored;
         } catch {}
-        return generateClientCid();
-      })();
+
+        const isReload = (() => {
+          try { return performance.getEntriesByType?.("navigation")?.[0]?.type === "reload"; }
+          catch { return false; }
+        })();
+
+        // 1. Reuse this tab's persistent sessionStorage cid across reloads/navigations (brief lock grace window on reload).
+        if (sessionCid) {
+          let ok = await tryAcquireCidLock(sessionCid, 0);
+          if (!ok && (justUnloaded || isReload)) ok = await tryAcquireCidLock(sessionCid, 180);
+          if (ok) return commitClientCid(sessionCid, isReload || sameRoomUnload);
+        } else if (navigator.locks?.request) {
+          // 2. Fresh tab: reclaim an unlocked cid from a recently-closed tab so any lingering server socket is evicted.
+          for (const entry of readTrackedRoomCids()) {
+            if (await tryAcquireCidLock(entry.cid, 0)) return commitClientCid(entry.cid, false);
+          }
+        }
+
+        // 3. Independent live tab (or duplicated tab whose lock is held): mint a distinct cid.
+        const fresh = generateClientCid();
+        await tryAcquireCidLock(fresh, 0);
+        return commitClientCid(fresh, false);
+      }
+
+      function rotateClientCidForDuplicateTab() {
+        releaseCidLock();
+        const fresh = commitClientCid(generateClientCid(), false);
+        tryAcquireCidLock(fresh, 0);
+      }
+
+      let clientCidReady = resolveClientCid();
 
       let socket = null;
       let isConnected = false;
@@ -6128,7 +6233,7 @@
       function syncTextInputAccess() {
         nameInput.disabled = !populationReady;
         chatInput.disabled = !populationReady;
-        if (nameBtn) nameBtn.disabled = !populationReady || !nameInput.value.trim();
+        syncNameDirty();
         if (sendBtn) sendBtn.disabled = !populationReady || !isConnected;
       }
 
@@ -8392,11 +8497,13 @@
         isPageUnloading = true;
         clearReconnectTimers();
         stopClientHeartbeat();
+        releaseCidLock();
         try {
-          sessionStorage.setItem(
-            RELOAD_CID_STORAGE_KEY,
-            JSON.stringify({ cid: clientCid, ts: Date.now() })
-          );
+          if (isValidCid(clientCid)) {
+            sessionStorage.setItem(TAB_CID_KEY, clientCid);
+            sessionStorage.setItem(UNLOAD_MARK_KEY, JSON.stringify({ room: roomName, ts: Date.now() }));
+            recordTrackedRoomCid(clientCid);
+          }
         } catch {}
         const ws = socket;
         socket = null;
@@ -8447,7 +8554,8 @@
       window.addEventListener("pageshow", (e) => {
         if (e.persisted) {
           isPageUnloading = false;
-          connect(false);
+          clientCidReady = resolveClientCid();
+          connect(true);
         }
       });
       document.addEventListener("visibilitychange", () => {
@@ -8573,15 +8681,21 @@
       async function handleServerPayload(data) {
         if (!data || data.type === "pong") return;
         if (data.type === "identity") {
+          const prevSaved = savedUsername;
           savedUsername = data.username;
-          nameInput.value = data.username;
-          if (!preferredUsername || pendingExplicitRename) {
-            if (!preferredUsername || !/-\d+$/.test(data.username)) {
-              preferredUsername = data.username;
-              localStorage.setItem("det_username", data.username);
-            }
-            pendingExplicitRename = false;
+          if (
+            pendingExplicitRename ||
+            document.activeElement !== nameInput ||
+            nameInput.value.trim() === prevSaved ||
+            !nameInput.value.trim()
+          ) {
+            nameInput.value = data.username;
           }
+          if (!preferredUsername || (pendingExplicitRename && data.username.toLowerCase() === preferredUsername.toLowerCase())) {
+            preferredUsername = data.username;
+            try { localStorage.setItem(PREFERRED_USERNAME_KEY, data.username); } catch {}
+          }
+          pendingExplicitRename = false;
           canEvolveNow = Boolean(data.canEvolveNow && evolveToken);
           syncNameDirty();
           for (const g of goalsByName.values()) syncMyVotesFromGoal(g);
@@ -8856,14 +8970,33 @@
               removeCursor(username);
             }
           }
+          maybeReclaimPreferredUsername(users);
         }
       }
 
-      function connect(isReconnect = false) {
-        if (isPageUnloading) return;
-        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-          return;
+      function maybeReclaimPreferredUsername(users) {
+        if (!isConnected || socket?.readyState !== WebSocket.OPEN || pendingExplicitRename) return;
+        if (!isDisambiguatedVariantOf(savedUsername, preferredUsername)) return;
+        if (nameInput.value.trim() !== savedUsername || Date.now() - lastAutoReclaimAt <= 2000) return;
+        const target = preferredUsername.toLowerCase();
+        if (users.some((u) => String(u || "").toLowerCase() === target)) return;
+        lastAutoReclaimAt = Date.now();
+        socket.send(JSON.stringify({ type: "rename", username: preferredUsername }));
+      }
+
+      function canOpenSocket() {
+        return !isPageUnloading && (!socket || (socket.readyState !== WebSocket.OPEN && socket.readyState !== WebSocket.CONNECTING));
+      }
+
+      async function connect(isReconnect = false) {
+        if (connectInFlight || !canOpenSocket()) return;
+        connectInFlight = true;
+        try {
+          await clientCidReady;
+        } finally {
+          connectInFlight = false;
         }
+        if (!canOpenSocket()) return;
         const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
         const configuredHost = "{{ ws_host|default:'127.0.0.1' }}";
         const wsHost = configuredHost === "0.0.0.0" ? window.location.hostname : configuredHost;
@@ -8933,6 +9066,15 @@
           if (socket !== ws || isPageUnloading) return;
           lastServerMsgAt = performance.now();
           const raw = event.data;
+          if (typeof raw === "string" && raw.includes('"replaced"')) {
+            try {
+              const quick = JSON.parse(raw);
+              if (quick && quick.type === "replaced") {
+                rotateClientCidForDuplicateTab();
+                return;
+              }
+            } catch {}
+          }
           inboundQueue = inboundQueue
             .then(async () => {
               if (socket !== ws || isPageUnloading) return;
@@ -9686,16 +9828,17 @@
 
       nameForm.addEventListener("submit", (e) => {
         e.preventDefault();
-        const newName = nameInput.value.trim();
-        if (!newName) return;
+        const newName = nameInput.value.trim().slice(0, 24);
+        if (!newName || newName === savedUsername) return;
         preferredUsername = newName;
-        savedUsername = newName;
-        pendingExplicitRename = true;
-        localStorage.setItem("det_username", newName);
-        syncNameDirty();
+        try { localStorage.setItem(PREFERRED_USERNAME_KEY, newName); } catch {}
         if (socket && socket.readyState === WebSocket.OPEN) {
+          pendingExplicitRename = true;
           socket.send(JSON.stringify({ type: "rename", username: newName }));
+        } else {
+          savedUsername = newName;
         }
+        syncNameDirty();
       });
 
       const fullscreenModalEl = document.getElementById("fullscreen-modal");

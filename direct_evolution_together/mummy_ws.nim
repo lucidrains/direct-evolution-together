@@ -91,6 +91,7 @@ type
     room: string
     username: string
     cid: string
+    upgrade_seq: uint64
     is_reconnect: bool
     initial_goal: string
     initial_task: string
@@ -110,6 +111,7 @@ type
     room: string
     username: string
     cid: string
+    upgrade_seq: uint64
     last_seen_ms: int64
     last_ping_ms: int64
     vote_timestamps_ms: seq[int64]
@@ -261,6 +263,7 @@ var
   task_configs = default_task_configs()
   clients: Table[WebSocket, ClientInfo]
   pending_upgrades: Table[WebSocket, PendingClient]
+  next_upgrade_seq: uint64 = 0
   rooms: Table[string, HashSet[WebSocket]]
   room_history: Table[string, seq[string]]
   room_evolution: Table[string, RoomEvolution]
@@ -313,6 +316,25 @@ func is_valid_room(room: string): bool =
     if ch notin {'a'..'z', 'A'..'Z', '0'..'9', '_', '-'}:
       return false
   true
+
+func is_auto_anon(name: string): bool {.inline.} =
+  name.len == 9 and name.toLowerAscii().startsWith("anon-") and
+    name[5 .. ^1].allCharsInSet(HexDigits)
+
+func strip_collision_suffixes(raw: string): string =
+  ## Strip trailing disambiguation counters (`-2`..`-99`) so collisions increment
+  ## (`-2` -> `-3`) instead of stacking (`-2` -> `-2-2`).
+  result = raw
+  while not is_auto_anon(result):
+    let dash = result.rfind('-')
+    if dash <= 0:
+      break
+    let head = result[0 ..< dash]
+    let tail = result[dash + 1 .. ^1]
+    if head.toLowerAscii() == "anon" or tail.len notin 1..2 or tail[0] == '0' or
+       not tail.allCharsInSet(Digits) or parseInt(tail) < 2:
+      break
+    result = head
 
 proc sanitize_username(raw: string): string {.gcsafe.} =
   var cleaned = raw.strip()
@@ -425,13 +447,14 @@ proc make_unique_username(
   if desired.toLowerAscii() notin taken:
     return desired
 
+  let stem = strip_collision_suffixes(desired)
   var suffix = 2
   while true:
     let suffix_str = "-" & $suffix
     let max_base = max_username_len - suffix_str.len
     let base =
-      if desired.len > max_base: desired[0 ..< max_base]
-      else: desired
+      if stem.len > max_base: stem[0 ..< max_base]
+      else: stem
     let candidate = base & suffix_str
     if candidate.toLowerAscii() notin taken:
       return candidate
@@ -1347,10 +1370,13 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
 
   with_state_lock:
     let ws = request.upgradeToWebSocket()
+    inc next_upgrade_seq
+    let seq_num = next_upgrade_seq
     pending_upgrades[ws] = PendingClient(
       room: room,
       username: username,
       cid: cid,
+      upgrade_seq: seq_num,
       is_reconnect: is_reconnect,
       initial_goal: initial_goal,
       initial_task: initial_task,
@@ -1428,11 +1454,14 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
     stale_sockets: seq[WebSocket] = @[]
     extra_outbox: seq[PendingBroadcast] = @[]
     found = false
+    superseded = false
     has_evolution_ready = false
     prioritize_evolution = false
 
   with_state_lock:
-    if ws in pending_upgrades:
+    block open_locked:
+      if ws notin pending_upgrades:
+        break open_locked
       let info = pending_upgrades[ws]
       pending_upgrades.del(ws)
       let now = now_ms()
@@ -1443,8 +1472,12 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
       if info.cid.len >= 8:
         var matching_old: seq[WebSocket] = @[]
         for existing_ws, existing_info in clients:
-          if existing_ws != ws and existing_info.cid == info.cid:
-            matching_old.add(existing_ws)
+          if existing_ws == ws or existing_info.cid != info.cid:
+            continue
+          if existing_info.upgrade_seq > info.upgrade_seq:
+            superseded = true
+            break open_locked
+          matching_old.add(existing_ws)
         for old_ws in matching_old:
           let old_info = clients[old_ws]
           stale_sockets.add(old_ws)
@@ -1467,6 +1500,7 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
         room: info.room,
         username: unique_name,
         cid: info.cid,
+        upgrade_seq: info.upgrade_seq,
         last_seen_ms: now,
         last_ping_ms: now,
         gzip: info.gzip,
@@ -1571,7 +1605,13 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
       targets = room_targets(info.room)
       found = true
 
+  if superseded:
+    send_payload(ws, """{"type":"replaced"}""")
+    ws.close()
+    return
+
   for sws in stale_sockets:
+    send_payload(sws, """{"type":"replaced"}""")
     sws.close()
   for item in extra_outbox:
     broadcast(item.targets, item.payload)
@@ -1601,10 +1641,12 @@ proc handle_rename(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
     vote_payloads: seq[string] = @[]
     other_targets: seq[WebSocket]
     targets: seq[WebSocket]
+    found = false
     changed = false
 
   with_state_lock:
     if ws in clients:
+      found = true
       old_name = clients[ws].username
       can_evolve = clients[ws].can_evolve_now
       let room = clients[ws].room
@@ -1632,12 +1674,13 @@ proc handle_rename(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
         other_targets = room_targets(room, ws, has_exclude = true)
         changed = true
 
-  if changed:
+  if found:
     send_payload(ws, $(%*{
       "type": "identity",
       "username": assigned_name,
       "canEvolveNow": can_evolve,
     }))
+  if changed:
     broadcast(other_targets, cursor_leave_payload)
     broadcast(targets, presence_payload)
     broadcast(targets, rename_payload)
@@ -2633,6 +2676,7 @@ proc stop_server*() {.exportpy.} =
     server_ptr = nil
     clients.clear()
     pending_upgrades.clear()
+    next_upgrade_seq = 0
     rooms.clear()
 
 proc set_round_config*(min_votes, countdown_ms: int; override_min_votes: bool = false) {.exportpy.} =
@@ -3226,6 +3270,7 @@ proc clear_state*() {.exportpy.} =
     evolve_token = ""
     clients.clear()
     pending_upgrades.clear()
+    next_upgrade_seq = 0
     rooms.clear()
     room_history.clear()
     room_evolution.clear()
