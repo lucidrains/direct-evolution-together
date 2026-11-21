@@ -11,9 +11,10 @@ from typing import Iterable, Sequence
 import zipfile
 
 from populora.operators import parent_select_tournament
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from torch.nn.functional import leaky_relu
 from torch_einops_utils.save_load import save_load
 
 LAYER_DIMS = (4, 12, 12, 12, 3)
@@ -23,7 +24,8 @@ NUM_HIDDEN = sum(LAYER_DIMS[1:-1])  # 36
 NUM_ACTIVATIONS = 5  # 0=tanh, 1=sin, 2=gauss, 3=abs, 4=leaky_relu
 POPULATION_SIZE = 30
 MIN_POPULATION_SIZE = 3
-MAX_POPULATION_SIZE = 128
+MAX_POPULATION_SIZE = 1024
+SYSTEM_MAX_POPULATION_SIZE = 10_000
 MAX_CHECKPOINT_BYTES = 128 * 1024  # 128 KB (~4.5 KB typical CPPN .pt)
 MAX_CHECKPOINT_UNCOMPRESSED_BYTES = 256 * 1024  # 256 KB max internal .pt zip payload
 MAX_PT_ARCHIVE_ENTRIES = 64
@@ -31,7 +33,7 @@ MAX_ARCHIVE_BYTES = 2 * 1024 * 1024  # 2 MB max .zip upload
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 4 * 1024 * 1024  # 4 MB max extracted .pt bytes per .zip
 MAX_ZIP_ENTRIES = 256
 MAX_TOTAL_UPLOAD_BYTES = 4 * 1024 * 1024  # 4 MB max total HTTP upload body
-MAX_UPLOAD_FILES = MAX_POPULATION_SIZE
+MAX_UPLOAD_FILES = 256
 DEFAULT_MUT_SIGMA = 0.30
 DEFAULT_ELITE_FRAC = 0.20
 DEFAULT_CROSSOVER_RATE = 0.75
@@ -101,7 +103,7 @@ def _apply_mixed_activations(z: torch.Tensor, act_codes: torch.Tensor) -> torch.
     if mask3.any():
         out[..., mask3] = torch.abs(z[..., mask3]) - 0.5
     if mask4.any():
-        out[..., mask4] = F.leaky_relu(z[..., mask4], negative_slope=0.1)
+        out[..., mask4] = leaky_relu(z[..., mask4], negative_slope=0.1)
     return out
 
 
@@ -246,16 +248,13 @@ class CPPN(nn.Module):
         rgb = self(coords)
         return (rgb * 255.0).round().clamp(0, 255).to(torch.uint8)
 
-    def to_dict(self) -> dict:
-        weights: list[float | int] = []
-        biases: list[float | int] = []
-        for layer in self.layers:
-            for v in layer.weight.detach().flatten().tolist():
-                rv = round(v, 4)
-                weights.append(0 if rv == 0.0 else rv)
-            for v in layer.bias.detach().flatten().tolist():
-                rv = round(v, 4)
-                biases.append(0 if rv == 0.0 else rv)
+    def to_dict(self, *, digits: int = 4) -> dict:
+        def _round_params(tensors: Iterable[torch.Tensor]) -> list[float | int]:
+            vals = np.round(np.concatenate([t.detach().cpu().numpy().astype(np.float64).ravel() for t in tensors]), digits).tolist()
+            return [0 if v == 0.0 else v for v in vals]
+
+        weights = _round_params(layer.weight for layer in self.layers)
+        biases = _round_params(layer.bias for layer in self.layers)
         return {
             "id": self.genome_id,
             "uuid": self.uuid,
@@ -303,23 +302,44 @@ def create_random_population(pop_size: int = POPULATION_SIZE) -> list[dict]:
     return [CPPN.random().to_dict() for _ in range(pop_size)]
 
 
+def _sample_parents_batch(
+    pool: list[int],
+    scores: list[int],
+    num_children: int,
+    crossover_rate: float = DEFAULT_CROSSOVER_RATE,
+    *,
+    num_parents_per_child: int = 2,
+    max_tournament_size: int = 3,
+) -> list[tuple[int, int, bool]]:
+    """Sample `(idx_a, idx_b, use_crossover)` for `num_children` in one vectorized tournament call."""
+    if num_children <= 0:
+        return []
+    if len(pool) == 1:
+        only = pool[0]
+        return [(only, only, False) for _ in range(num_children)]
+    fitnesses = torch.tensor([float(scores[i]) for i in pool], dtype=torch.float32)
+    picked = parent_select_tournament(
+        fitnesses,
+        num_children=num_children,
+        num_parents_per_child=num_parents_per_child,
+        tournament_size=min(max_tournament_size, len(pool)),
+    )
+    clamped_rate = max(0.0, min(1.0, float(crossover_rate)))
+    cross_flags = (torch.rand(num_children) < clamped_rate).tolist()
+    pairs = picked.tolist()
+    return [
+        (pool[int(pair[0])], pool[int(pair[1])], bool(use_c))
+        for pair, use_c in zip(pairs, cross_flags)
+    ]
+
+
 def _sample_parents(
     pool: list[int],
     scores: list[int],
     crossover_rate: float = DEFAULT_CROSSOVER_RATE,
 ) -> tuple[int, int, bool]:
     """Sample parent indices using PopuLoRA's tournament parent selector."""
-    if len(pool) == 1:
-        return pool[0], pool[0], False
-    fitnesses = torch.tensor([float(scores[i]) for i in pool], dtype=torch.float32)
-    picked = parent_select_tournament(
-        fitnesses,
-        num_children=1,
-        num_parents_per_child=2,
-        tournament_size=min(3, len(pool)),
-    )
-    use_cross = bool(torch.rand(1).item() < max(0.0, min(1.0, float(crossover_rate))))
-    return pool[int(picked[0, 0].item())], pool[int(picked[0, 1].item())], use_cross
+    return _sample_parents_batch(pool, scores, 1, crossover_rate=crossover_rate)[0]
 
 
 def evolve_population(
@@ -330,6 +350,22 @@ def evolve_population(
     pop_size: int = POPULATION_SIZE,
     elite_frac: float = DEFAULT_ELITE_FRAC,
     crossover_rate: float = DEFAULT_CROSSOVER_RATE,
+    *,
+    max_elite_frac: float = 0.5,
+    liked_immigrant_divisor: int = 10,
+    max_liked_immigrants: int = 2,
+    fine_sigma_scale: float = 0.42,
+    broad_sigma_scale: float = 0.90,
+    fine_mut_rate: float = 0.14,
+    broad_mut_rate: float = 0.28,
+    fine_act_flip_rate: float = 0.02,
+    broad_act_flip_rate: float = 0.06,
+    neutral_seed_sigma_scale: float = 0.75,
+    neutral_seed_mut_rate: float = 0.22,
+    neutral_seed_act_flip_rate: float = 0.05,
+    neutral_immigrant_divisor: int = 8,
+    max_neutral_immigrants: int = 3,
+    neutral_breed_mut_rate: float = 0.26,
 ) -> tuple[list[dict], int]:
     """Evolve a PyTorch CPPN population using thumbs-up/down scores.
 
@@ -345,7 +381,7 @@ def evolve_population(
 
     liked = [i for i in ranked if scores[i] > 0]
     neutral_or_better = [i for i in ranked if scores[i] >= 0]
-    clamped_elite_frac = max(0.0, min(0.5, float(elite_frac)))
+    clamped_elite_frac = max(0.0, min(max_elite_frac, float(elite_frac)))
     clamped_crossover = max(0.0, min(1.0, float(crossover_rate)))
 
     next_gen: list[CPPN] = []
@@ -375,16 +411,16 @@ def evolve_population(
         for e_idx in range(num_elites):
             next_gen.append(_clone_elite(parents[liked[e_idx]]))
 
-        num_immigrants = min(2, max(0, (pop_size - num_elites) // 10))
+        num_immigrants = min(max_liked_immigrants, max(0, (pop_size - num_elites) // liked_immigrant_divisor))
         num_breed = max(0, pop_size - num_elites - num_immigrants)
+        sampled_liked = _sample_parents_batch(liked, scores, num_breed, crossover_rate=clamped_crossover)
 
-        for slot in range(num_breed):
-            idx_a, idx_b, use_cross = _sample_parents(liked, scores, crossover_rate=clamped_crossover)
+        for slot, (idx_a, idx_b, use_cross) in enumerate(sampled_liked):
             # Alternate between fine local polishers (keep silhouette) and broader explorers
             is_fine = (slot % 2 == 0)
-            eff_sigma = mut_sigma * (0.42 if is_fine else 0.9)
-            eff_rate = 0.14 if is_fine else 0.28
-            eff_flip = 0.02 if is_fine else 0.06
+            eff_sigma = mut_sigma * (fine_sigma_scale if is_fine else broad_sigma_scale)
+            eff_rate = fine_mut_rate if is_fine else broad_mut_rate
+            eff_flip = fine_act_flip_rate if is_fine else broad_act_flip_rate
             next_gen.append(
                 CPPN.crossover_and_mutate(
                     parents[idx_a],
@@ -406,9 +442,9 @@ def evolve_population(
                         seed_parent,
                         seed_parent,
                         use_crossover=False,
-                        mut_sigma=mut_sigma * 0.75,
-                        mut_rate=0.22,
-                        act_flip_rate=0.05,
+                        mut_sigma=mut_sigma * neutral_seed_sigma_scale,
+                        mut_rate=neutral_seed_mut_rate,
+                        act_flip_rate=neutral_seed_act_flip_rate,
                     )
                 )
             else:
@@ -418,21 +454,22 @@ def evolve_population(
         num_elites = min(len(neutral_or_better), target_elites) if target_elites > 0 else 0
         for e_idx in range(num_elites):
             next_gen.append(_clone_elite(parents[neutral_or_better[e_idx]]))
-        num_immigrants = min(3, max(0, (pop_size - num_elites) // 8))
+        num_immigrants = min(max_neutral_immigrants, max(0, (pop_size - num_elites) // neutral_immigrant_divisor))
         num_breed = max(0, pop_size - num_elites - num_immigrants)
-        for _ in range(num_breed):
-            idx_a, idx_b, use_cross = _sample_parents(
-                neutral_or_better,
-                scores,
-                crossover_rate=clamped_crossover,
-            )
+        sampled_neutral = _sample_parents_batch(
+            neutral_or_better,
+            scores,
+            num_breed,
+            crossover_rate=clamped_crossover,
+        )
+        for idx_a, idx_b, use_cross in sampled_neutral:
             next_gen.append(
                 CPPN.crossover_and_mutate(
                     parents[idx_a],
                     parents[idx_b],
                     use_crossover=use_cross,
                     mut_sigma=mut_sigma,
-                    mut_rate=0.26,
+                    mut_rate=neutral_breed_mut_rate,
                 )
             )
         while len(next_gen) < pop_size:
@@ -464,10 +501,10 @@ def resize_population(
     liked = [i for i in ranked if scores[i] > 0]
     pool = liked or [i for i in ranked if scores[i] >= 0]
 
+    need_extra = target_size - len(existing)
     extra: list[dict] = []
-    for _ in range(target_size - len(existing)):
-        if pool:
-            idx_a, idx_b, use_cross = _sample_parents(pool, scores)
+    if pool:
+        for idx_a, idx_b, use_cross in _sample_parents_batch(pool, scores, need_extra):
             child = CPPN.crossover_and_mutate(
                 parents[idx_a],
                 parents[idx_b],
@@ -475,8 +512,8 @@ def resize_population(
                 mut_sigma=mut_sigma,
             )
             extra.append(child.to_dict())
-        else:
-            extra.append(CPPN.random().to_dict())
+    else:
+        extra = [CPPN.random().to_dict() for _ in range(need_extra)]
     return existing + extra
 
 
@@ -788,9 +825,9 @@ def create_seeded_population(
     seed the population without exceeding `pop_size`.
     """
     pop_size = int(pop_size)
-    if pop_size < MIN_POPULATION_SIZE or pop_size > MAX_POPULATION_SIZE:
+    if pop_size < MIN_POPULATION_SIZE or pop_size > SYSTEM_MAX_POPULATION_SIZE:
         raise ValueError(
-            f"Population size must be between {MIN_POPULATION_SIZE} and {MAX_POPULATION_SIZE}."
+            f"Population size must be between {MIN_POPULATION_SIZE} and {SYSTEM_MAX_POPULATION_SIZE}."
         )
     if not seed_genomes:
         raise ValueError("At least one seed strain is required to seed a population.")
@@ -827,14 +864,16 @@ def create_seeded_population(
 def build_uv_script_header(extra_deps: Sequence[str] = ()) -> list[str]:
     """Build PEP 723 uv inline script header referencing this package."""
     repo_root = Path(__file__).resolve().parent.parent
-    pkg_spec = (
-        f"direct-evolution-together @ {repo_root.as_uri()}"
-        if (repo_root / "pyproject.toml").exists()
-        else "direct-evolution-together"
-    )
-    deps = ["torch-einops-utils", "numpy", "packaging", "pillow", *extra_deps, pkg_spec]
+    deps = ["torch-einops-utils", "numpy", "packaging", "pillow", *extra_deps, "direct-evolution-together"]
     deps_json = ", ".join(f'"{d}"' for d in deps)
-    return ["# /// script", f"# dependencies = [{deps_json}]", "# ///"]
+    lines = ["# /// script", f"# dependencies = [{deps_json}]"]
+    if (repo_root / "pyproject.toml").exists():
+        lines.extend([
+            "# [tool.uv.sources]",
+            f'# direct-evolution-together = {{ path = "{repo_root.as_posix()}", editable = true }}',
+        ])
+    lines.append("# ///")
+    return lines
 
 
 def build_runner_script(

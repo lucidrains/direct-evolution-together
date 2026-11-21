@@ -226,7 +226,7 @@ TASK_SPECS: dict[str, TaskSpec] = {
         eval_seeds=CARTPOLE_EVAL_SEEDS,
         obs_labels=("x", "vx", "theta", "omega"),
         action_labels=("force",),
-        primary_metric="meanSteps",
+        primary_metric="mean_steps",
         sort_label="Steps",
         solved_label="all 10 unseen initial states >= 490/500",
         telemetry_fields=(
@@ -260,7 +260,7 @@ TASK_SPECS: dict[str, TaskSpec] = {
         obs_labels=HALFCHEETAH_OBS_LABELS,
         action_labels=HALFCHEETAH_ACTION_LABELS,
         mjcf_asset="half_cheetah.xml",
-        primary_metric="meanDistance",
+        primary_metric="mean_distance",
         sort_label="Distance",
         solved_label="mean >= 8.0m upright sprint across 10 seeds",
         telemetry_fields=(
@@ -289,7 +289,7 @@ TASK_SPECS: dict[str, TaskSpec] = {
         max_steps=200,
         dt=0.05,
         eval_seeds=(0,),
-        primary_metric="primaryValue",
+        primary_metric="primary_value",
         sort_label="Score",
         solved_label="Evaluated by researcher script",
         telemetry_fields=(

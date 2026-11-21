@@ -31,15 +31,15 @@
   function isControlTaskSpec(taskSpec) {
     if (!taskSpec) return false;
     if (taskSpec.kind) return taskSpec.kind === "control";
-    return Boolean(readSpecField(taskSpec, "isControl", "is_control"));
+    return Boolean(readSpecField(taskSpec, "is_control", "is_control"));
   }
 
   function readSpecDims(taskSpec) {
     const explicit = readSpecField(taskSpec, "substrateDims", "substrate_dims");
     if (Array.isArray(explicit) && explicit.length >= 2) return explicit;
-    const obsDim = Number(readSpecField(taskSpec, "obsDim", "obs_dim") || 0);
-    const actDim = Number(readSpecField(taskSpec, "actionDim", "action_dim") || 0);
-    const hidden = readSpecField(taskSpec, "hiddenDims", "hidden_dims");
+    const obsDim = Number(readSpecField(taskSpec, "obs_dim", "obs_dim") || 0);
+    const actDim = Number(readSpecField(taskSpec, "action_dim", "action_dim") || 0);
+    const hidden = readSpecField(taskSpec, "hidden_dims", "hidden_dims");
     if (obsDim > 0 && actDim > 0) {
       return [obsDim, ...(Array.isArray(hidden) ? hidden : []), actDim];
     }
@@ -83,9 +83,9 @@
 
   function buildSubstrateGraph(genome, taskSpec) {
     const dims = readSpecDims(taskSpec) || [4, 8, 1];
-    const layerCoords = readSpecField(taskSpec, "layerCoords", "layer_coords") || null;
-    const obsLabels = readSpecField(taskSpec, "obsLabels", "obs_labels") || [];
-    const actionLabels = readSpecField(taskSpec, "actionLabels", "action_labels") || [];
+    const layerCoords = readSpecField(taskSpec, "layer_coords", "layer_coords") || null;
+    const obsLabels = readSpecField(taskSpec, "obs_labels", "obs_labels") || [];
+    const actionLabels = readSpecField(taskSpec, "action_labels", "action_labels") || [];
 
     const decoded = decodeHyperNeatWeights(genome, dims, layerCoords);
     const numLayers = decoded.dims.length;
@@ -104,7 +104,7 @@
         else label = numLayers === 3 ? `h${i}` : `h${l}.${i}`;
 
         const bias = l > 0 ? decoded.layers[l - 1].b[i] : 0.0;
-        const coord = decoded.layerCoords[l] ? decoded.layerCoords[l][i] : 0.0;
+        const coord = decoded.layer_coords[l] ? decoded.layer_coords[l][i] : 0.0;
         const node = {
           id: `L${l}_${i}`,
           layer: l,
@@ -300,7 +300,7 @@
       edges,
       matrices,
       actCounts,
-      isControl,
+      is_control: isControl,
       genome,
       maxAbsWeight: maxAbsWeight || 1.0,
       paramCount: edges.length + 39,
@@ -318,8 +318,8 @@
       : Array.isArray(neatGenome?.connections)
         ? neatGenome.connections
         : [];
-    const obsLabels = readSpecField(taskSpec, "obsLabels", "obs_labels") || [];
-    const actionLabels = readSpecField(taskSpec, "actionLabels", "action_labels") || [];
+    const obsLabels = readSpecField(taskSpec, "obs_labels", "obs_labels") || [];
+    const actionLabels = readSpecField(taskSpec, "action_labels", "action_labels") || [];
 
     const nodes = [];
     const nodeMap = new Map();
@@ -622,20 +622,20 @@
   }
 
   function buildPopuloraGraph(genome, taskSpec) {
-    const policySpec = readSpecField(taskSpec, "policySpec", "policy_spec") || {};
-    const r = Math.max(1, Number(genome.lowRank || policySpec.lowRank || 8));
+    const policySpec = taskSpec?.policy_spec || {};
+    const r = Math.max(1, Number(genome.low_rank || policySpec.low_rank || 8));
     const adapters = (genome.adapters && typeof genome.adapters === "object") ? genome.adapters : {};
     const hasAdapters = Object.keys(adapters).length > 0;
-    const actLabelsRaw = readSpecField(taskSpec, "actionLabels", "action_labels");
-    const obsLabelsRaw = readSpecField(taskSpec, "obsLabels", "obs_labels");
+    const actLabelsRaw = readSpecField(taskSpec, "action_labels", "action_labels");
+    const obsLabelsRaw = readSpecField(taskSpec, "obs_labels", "obs_labels");
     const actLabels = Array.isArray(actLabelsRaw) ? actLabelsRaw : [];
     const obsLabels = Array.isArray(obsLabelsRaw) ? obsLabelsRaw : [];
-    const obsDim = Number(readSpecField(taskSpec, "obsDim", "obs_dim") || policySpec.obsDim || 0);
+    const obsDim = Number(readSpecField(taskSpec, "obs_dim", "obs_dim") || policySpec.obs_dim || 0);
     const actDim = Number(
-      readSpecField(taskSpec, "actionDim", "action_dim") ||
-      policySpec.actionDim ||
-      adapters.net_decoder_2?.outDim ||
-      adapters.head?.outDim ||
+      readSpecField(taskSpec, "action_dim", "action_dim") ||
+      policySpec.action_dim ||
+      adapters.net_decoder_2?.out_dim ||
+      adapters.head?.out_dim ||
       actLabels.length ||
       14
     );
@@ -694,7 +694,7 @@
 
     for (const [, ad] of Object.entries(adapters)) {
       if (!ad || typeof ad !== "object") continue;
-      totalParams += (Number(ad.inDim || 0) + Number(ad.outDim || 0)) * r;
+      totalParams += (Number(ad.in_dim || 0) + Number(ad.out_dim || 0)) * r;
     }
 
     const stageKeys = isMlpArch
@@ -1281,8 +1281,8 @@
         const pCanvas = document.createElement("canvas");
         pCanvas.width = 68;
         pCanvas.height = 68;
-        this._drawCppnSlice(m.genome, m.isControl, pCanvas);
-        const pCap = elHtml("span", "det-nv-cppn-cap", m.isControl ? "CPPN ch0 Field" : "CPPN RGB (68px)");
+        this._drawCppnSlice(m.genome, m.is_control, pCanvas);
+        const pCap = elHtml("span", "det-nv-cppn-cap", m.is_control ? "CPPN ch0 Field" : "CPPN RGB (68px)");
         previewCard.appendChild(pCanvas);
         previewCard.appendChild(pCap);
         wrap.appendChild(previewCard);

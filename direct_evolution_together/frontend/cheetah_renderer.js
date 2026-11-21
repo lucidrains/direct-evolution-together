@@ -133,7 +133,7 @@
       return;
     }
 
-    const meanDx = summary && typeof summary.meanDistance === "number" ? summary.meanDistance : 0;
+    const meanDx = summary && typeof summary.mean_distance === "number" ? summary.mean_distance : 0;
     const solved = Boolean(summary && summary.solved);
     const accent = solved ? "#34d399" : (meanDx >= 2.5 ? "#f5c451" : "#fb7185");
 

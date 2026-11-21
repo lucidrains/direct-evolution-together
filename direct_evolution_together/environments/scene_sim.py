@@ -9,6 +9,8 @@ population, simulate & rank it locally with native ``mujoco``, and submit attest
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
+import copy
 import math
 import threading
 from typing import Any, Mapping, Sequence
@@ -58,7 +60,8 @@ def _signed(val: float, fmt: str = ".0f") -> str:
     return f"{clean:+{fmt}}"
 
 _SCENE_LOCK = threading.Lock()
-_SCENE_XML_CACHE: dict[str, tuple[str, dict[str, bytes]]] = {}
+_SCENE_MODEL_CACHE: dict[str, mujoco.MjModel] = {}
+_DECODED_BASE_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 def _decode_f16_np(b64_str: str) -> np.ndarray:
@@ -74,20 +77,19 @@ def _decode_f32_np(b64_str: str) -> np.ndarray:
 def _load_scene_model(scene_id: str) -> mujoco.MjModel:
     clean = str(scene_id).strip().lower()
     with _SCENE_LOCK:
-        cached = _SCENE_XML_CACHE.get(clean)
-        if cached is None:
+        proto = _SCENE_MODEL_CACHE.get(clean)
+        if proto is None:
             manifest = get_scene_manifest(clean)
             if not manifest:
                 raise ValueError(f"Unknown MuJoCo scene '{scene_id}'.")
-            phys_path = ASSETS_DIR / str(manifest["physicsAsset"])
+            phys_path = ASSETS_DIR / str(manifest["physics_asset"])
             vfs_files = unpack_vfs_entries(phys_path.read_bytes())
-            entry_name = str(manifest["entryXml"])
+            entry_name = str(manifest["entry_xml"])
             entry_xml = vfs_files[entry_name].decode("utf-8")
             assets = {k: v for k, v in vfs_files.items() if k != entry_name}
-            cached = (entry_xml, assets)
-            _SCENE_XML_CACHE[clean] = cached
-    entry_xml, assets = cached
-    return mujoco.MjModel.from_xml_string(entry_xml, assets=assets)
+            proto = mujoco.MjModel.from_xml_string(entry_xml, assets=assets)
+            _SCENE_MODEL_CACHE[clean] = proto
+    return copy.copy(proto)
 
 
 def _parse_base_model_tensors(
@@ -95,6 +97,17 @@ def _parse_base_model_tensors(
     genome: Mapping[str, Any],
     supplied_payload: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    req_hash = str(
+        (supplied_payload.get("base_hash") if supplied_payload else None)
+        or genome.get("base_hash")
+        or ""
+    )
+    if req_hash:
+        with _SCENE_LOCK:
+            cached_bm = _DECODED_BASE_CACHE.get((task_id, req_hash))
+        if cached_bm is not None:
+            return cached_bm
+
     if supplied_payload and isinstance(supplied_payload.get("tensors"), Mapping):
         raw: Mapping[str, Any] = supplied_payload
     else:
@@ -103,8 +116,8 @@ def _parse_base_model_tensors(
             raise ValueError(f"Task '{task_id}' has no PopuLoRA policy_spec.")
         _, _, raw = get_or_create_base_model(
             spec.policy_spec,
-            base_seed=int(genome.get("baseSeed", 1) or 1),
-            base_hash=str(genome.get("baseHash") or "") or None,
+            base_seed=int(genome.get("base_seed", 1) or 1),
+            base_hash=str(genome.get("base_hash") or "") or None,
         )
     tensors_raw = raw.get("tensors") or {}
     decoded: dict[str, np.ndarray] = {}
@@ -115,15 +128,22 @@ def _parse_base_model_tensors(
                 decoded[str(tname)] = (
                     _decode_f32_np(b64) if entry.get("dtype") == "f32" else _decode_f16_np(b64)
                 )
-    return {
+    out_bm = {
         "arch": str(raw.get("arch") or "gru_mlp"),
-        "obsDim": int(raw["obsDim"]),
-        "actionDim": int(raw["actionDim"]),
-        "hiddenDim": int(raw.get("hiddenDim") or 128),
-        "headDim": int(raw.get("headDim") or 128),
-        "lowRank": int(raw.get("lowRank") or 8),
+        "obs_dim": int(raw["obs_dim"]),
+        "action_dim": int(raw["action_dim"]),
+        "hidden_dim": int(raw.get("hidden_dim") or 128),
+        "head_dim": int(raw.get("head_dim") or 128),
+        "low_rank": int(raw.get("low_rank") or 8),
         "tensors": decoded,
     }
+    resolved_h = str(raw.get("base_hash") or req_hash)
+    if resolved_h:
+        with _SCENE_LOCK:
+            if len(_DECODED_BASE_CACHE) > 32:
+                _DECODED_BASE_CACHE.clear()
+            _DECODED_BASE_CACHE[(task_id, resolved_h)] = out_bm
+    return out_bm
 
 
 class _CompiledPopuloraPolicy:
@@ -131,11 +151,11 @@ class _CompiledPopuloraPolicy:
 
     def __init__(self, base_model: Mapping[str, Any], genome: Mapping[str, Any]) -> None:
         self.arch = str(base_model["arch"])
-        obs_dim = int(base_model["obsDim"])
-        act_dim = int(base_model["actionDim"])
-        hidden_dim = int(base_model["hiddenDim"])
-        head_dim = int(base_model["headDim"])
-        r = int(genome.get("lowRank") or base_model.get("lowRank") or 8)
+        obs_dim = int(base_model["obs_dim"])
+        act_dim = int(base_model["action_dim"])
+        hidden_dim = int(base_model["hidden_dim"])
+        head_dim = int(base_model["head_dim"])
+        r = int(genome.get("low_rank") or base_model.get("low_rank") or 8)
         tensors: Mapping[str, np.ndarray] = base_model["tensors"]
         adapters = genome.get("adapters") if isinstance(genome.get("adapters"), Mapping) else {}
 
@@ -182,13 +202,13 @@ class _CompiledPopuloraPolicy:
             h = _linear_tanh(self.enc2, h)
             return _linear_tanh(self.head, h)
 
-        H = self.hidden_dim
+        h_dim = self.hidden_dim
         enc = _linear_tanh(self.enc2, _linear_tanh(self.enc0, x))
         g_ih = _linear(self.ih, enc)
         g_hh = _linear(self.hh, self.mem)
-        r_gate = _sigmoid(g_ih[:H] + g_hh[:H])
-        z_gate = _sigmoid(g_ih[H : 2 * H] + g_hh[H : 2 * H])
-        n_cand = np.tanh(g_ih[2 * H :] + r_gate * g_hh[2 * H :])
+        r_gate = _sigmoid(g_ih[:h_dim] + g_hh[:h_dim])
+        z_gate = _sigmoid(g_ih[h_dim : 2 * h_dim] + g_hh[h_dim : 2 * h_dim])
+        n_cand = np.tanh(g_ih[2 * h_dim :] + r_gate * g_hh[2 * h_dim :])
         self.mem = (1.0 - z_gate) * n_cand + z_gate * self.mem
         return _linear_tanh(self.dec2, _linear_tanh(self.dec0, self.mem))
 
@@ -260,8 +280,8 @@ def microduck_rollout(
     model = _load_scene_model("microduck")
     data = mujoco.MjData(model)
 
-    physics_dt = float(p.get("physicsDt", 0.004))
-    kp_mult = float(p.get("kpMult", 3.0))
+    physics_dt = float(p.get("physics_dt", 0.004))
+    kp_mult = float(p.get("kp_mult", 3.0))
     kv = float(p.get("kv", 0.1))
     model.opt.timestep = physics_dt
     for a in range(int(model.nu)):
@@ -288,27 +308,27 @@ def microduck_rollout(
     policy = _CompiledPopuloraPolicy(bm, genome)
     policy.reset()
 
-    n_substeps = int(p.get("nSubsteps", 5))
-    ctrl_dt = float(p.get("ctrlDt", 0.02))
-    action_scale = float(p.get("actionScale", 0.5))
+    n_substeps = int(p.get("n_substeps", 5))
+    ctrl_dt = float(p.get("ctrl_dt", 0.02))
+    action_scale = float(p.get("action_scale", 0.5))
     cmd = list(p.get("command") or [0.15, 0.0])
     cmd_speed = math.hypot(float(cmd[0]), float(cmd[1]))
     has_cmd = cmd_speed > 0.01
     cmd_dir_x = float(cmd[0]) / cmd_speed if has_cmd else 1.0
     cmd_dir_y = float(cmd[1]) / cmd_speed if has_cmd else 0.0
 
-    progress_w = float(p.get("progressWeight", 350.0))
-    clearance_w = float(p.get("clearanceWeight", 900.0))
-    clearance_target = float(p.get("clearanceTarget", 0.008))
-    foot_drag_w = float(p.get("footDragWeight", 160.0))
-    alt_step_bonus = float(p.get("altStepBonus", 400.0))
-    sway_w = float(p.get("swayWeight", 20.0))
-    body_ang_w = float(p.get("bodyAngVelWeight", 0.04))
-    action_rate_w = float(p.get("actionRateWeight", 0.10))
-    fall_penalty = float(p.get("fallPenalty", 3500.0))
-    min_trunk_z = float(p.get("minTrunkZ", 0.04))
-    min_upright = float(p.get("minUprightness", 0.35))
-    leg_joints = [int(x) for x in (p.get("legJoints") or [0, 1, 2, 3, 4, 9, 10, 11, 12, 13])]
+    progress_w = float(p.get("progress_weight", 350.0))
+    clearance_w = float(p.get("clearance_weight", 900.0))
+    clearance_target = float(p.get("clearance_target", 0.008))
+    foot_drag_w = float(p.get("foot_drag_weight", 160.0))
+    alt_step_bonus = float(p.get("alt_step_bonus", 400.0))
+    sway_w = float(p.get("sway_weight", 20.0))
+    body_ang_w = float(p.get("body_ang_vel_weight", 0.04))
+    action_rate_w = float(p.get("action_rate_weight", 0.10))
+    fall_penalty = float(p.get("fall_penalty", 3500.0))
+    min_trunk_z = float(p.get("min_trunk_z", 0.04))
+    min_upright = float(p.get("min_uprightness", 0.35))
+    leg_joints = [int(x) for x in (p.get("leg_joints") or [0, 1, 2, 3, 4, 9, 10, 11, 12, 13])]
 
     mujoco.mj_resetData(model, data)
     rng = mulberry32(seed)
@@ -539,10 +559,10 @@ def microduck_rollout(
         "min_lr_mm": min_lr_mm,
         "ssup_pct": ssup_pct,
         "return": total_return,
-        "poseStride": max(1, pose_stride),
-        "bodyPoses": body_poses,
+        "pose_stride": max(1, pose_stride),
+        "body_poses": body_poses,
         "vx_trace": vx_trace,
-        "trajSample": _subsample_trajectory(raw_gait_rows, 16),
+        "traj_sample": _subsample_trajectory(raw_gait_rows, 16),
     }
 
 
@@ -560,7 +580,7 @@ def unitree_go2_rollout(
     p: dict[str, Any] = spec.resolve_env_params(env_params)
     model = _load_scene_model("unitree_go2")
     data = mujoco.MjData(model)
-    model.opt.timestep = float(p.get("physicsDt", 0.004))
+    model.opt.timestep = float(p.get("physics_dt", 0.004))
 
     home_idx = max(0, mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home"))
     home_qpos = model.key_qpos[home_idx].copy()
@@ -576,18 +596,18 @@ def unitree_go2_rollout(
     policy = _CompiledPopuloraPolicy(bm, genome)
     policy.reset()
 
-    n_substeps = int(p.get("nSubsteps", 5))
-    ctrl_dt = float(p.get("ctrlDt", 0.02))
-    action_scale = float(p.get("actionScale", 0.42))
-    ang_vel_scale = float(p.get("angVelObsScale", 0.25))
-    jnt_vel_scale = float(p.get("jointVelObsScale", 0.05))
+    n_substeps = int(p.get("n_substeps", 5))
+    ctrl_dt = float(p.get("ctrl_dt", 0.02))
+    action_scale = float(p.get("action_scale", 0.42))
+    ang_vel_scale = float(p.get("ang_vel_obs_scale", 0.25))
+    jnt_vel_scale = float(p.get("joint_vel_obs_scale", 0.05))
     cmd = list(p.get("command") or [0.65, 0.0])
     cmd_vx = float(cmd[0])
-    foot_radius = float(p.get("footRadius", 0.022))
-    nominal_z = float(p.get("nominalBaseZ", 0.268))
-    min_base_z = float(p.get("minBaseZ", 0.145))
-    min_upright = float(p.get("minUprightness", 0.45))
-    hip_joints = [int(x) for x in (p.get("hipJoints") or [0, 3, 6, 9])]
+    foot_radius = float(p.get("foot_radius", 0.022))
+    nominal_z = float(p.get("nominal_base_z", 0.268))
+    min_base_z = float(p.get("min_base_z", 0.145))
+    min_upright = float(p.get("min_uprightness", 0.45))
+    hip_joints = [int(x) for x in (p.get("hip_joints") or [0, 3, 6, 9])]
 
     mujoco.mj_resetData(model, data)
     rng = mulberry32(seed)
@@ -770,10 +790,10 @@ def unitree_go2_rollout(
         "clear_mm": clear_mm,
         "trot_pct": trot_pct,
         "return": total_return,
-        "poseStride": max(1, pose_stride),
-        "bodyPoses": body_poses,
+        "pose_stride": max(1, pose_stride),
+        "body_poses": body_poses,
         "vx_trace": vx_trace,
-        "trajSample": _subsample_trajectory(raw_gait_rows, 16),
+        "traj_sample": _subsample_trajectory(raw_gait_rows, 16),
     }
 
 
@@ -790,12 +810,12 @@ def so101_rollout(
     """Run SO-101 (angular jaw) or SO-ARM102 (parallel 2-jaw slide gripper) pick & lift rollout."""
     spec = get_task_spec("so101")
     p: dict[str, Any] = spec.resolve_env_params(env_params)
-    scene_id = str(p.get("sceneId") or spec.scene_id or "")
+    scene_id = str(p.get("scene_id") or spec.scene_id or "")
     arm_model = str(p.get("arm_model") or scene_id)
 
     model = _load_scene_model(scene_id)
     data = mujoco.MjData(model)
-    model.opt.timestep = float(p.get("physicsDt", 0.004))
+    model.opt.timestep = float(p.get("physics_dt", 0.004))
 
     home_idx = max(0, mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_KEY, "home"))
     home_qpos = model.key_qpos[home_idx].copy()
@@ -825,22 +845,22 @@ def so101_rollout(
     policy = _CompiledPopuloraPolicy(bm, genome)
     policy.reset()
 
-    n_substeps = int(p.get("nSubsteps", 5))
-    ctrl_dt = float(p.get("ctrlDt", 0.02))
-    action_scales = [float(x) for x in (p.get("actionScales") or [0.65, 0.65, 0.65, 0.65, 0.55, 0.95])]
-    goal_pos = [float(x) for x in (p.get("goalPos") or [0.23, 0.012, 0.14])]
-    cube_rest_z = float(p.get("cubeRestZ", 0.016))
-    reach_w = float(p.get("reachWeight", 12.0))
-    reach_prog_w = float(p.get("reachProgressWeight", 45.0))
-    pre_grasp_w = float(p.get("preGraspAlignWeight", 5.0))
-    single_touch_w = float(p.get("singleTouchWeight", 2.5))
-    pinch_grasp_w = float(p.get("pinchGraspWeight", 16.0))
-    lift_w = float(p.get("liftWeight", 220.0))
-    lift_hw_w = float(p.get("liftHighWaterWeight", 650.0))
-    goal_hold_w = float(p.get("goalHoldWeight", 24.0))
-    knock_pen_w = float(p.get("knockPenaltyWeight", 15.0))
-    floor_scrape_w = float(p.get("floorScrapeWeight", 8.0))
-    action_rate_w = float(p.get("actionRateWeight", 0.04))
+    n_substeps = int(p.get("n_substeps", 5))
+    ctrl_dt = float(p.get("ctrl_dt", 0.02))
+    action_scales = [float(x) for x in (p.get("action_scales") or [0.65, 0.65, 0.65, 0.65, 0.55, 0.95])]
+    goal_pos = [float(x) for x in (p.get("goal_pos") or [0.23, 0.012, 0.14])]
+    cube_rest_z = float(p.get("cube_rest_z", 0.016))
+    reach_w = float(p.get("reach_weight", 12.0))
+    reach_prog_w = float(p.get("reach_progress_weight", 45.0))
+    pre_grasp_w = float(p.get("pre_grasp_align_weight", 5.0))
+    single_touch_w = float(p.get("single_touch_weight", 2.5))
+    pinch_grasp_w = float(p.get("pinch_grasp_weight", 16.0))
+    lift_w = float(p.get("lift_weight", 220.0))
+    lift_hw_w = float(p.get("lift_high_water_weight", 650.0))
+    goal_hold_w = float(p.get("goal_hold_weight", 24.0))
+    knock_pen_w = float(p.get("knock_penalty_weight", 15.0))
+    floor_scrape_w = float(p.get("floor_scrape_weight", 8.0))
+    action_rate_w = float(p.get("action_rate_weight", 0.04))
 
     mujoco.mj_resetData(model, data)
     rng = mulberry32(seed)
@@ -1000,7 +1020,7 @@ def so101_rollout(
     return {
         "seed": seed,
         "arm_model": arm_model,
-        "sceneId": scene_id,
+        "scene_id": scene_id,
         "steps": steps,
         "terminated": False,
         "distance": max_lift_m,
@@ -1009,10 +1029,10 @@ def so101_rollout(
         "final_dist_cm": final_dist_cm,
         "pinch_pct": (100.0 * pinch_steps) / max(1, steps),
         "return": total_return,
-        "poseStride": max(1, pose_stride),
-        "bodyPoses": body_poses,
+        "pose_stride": max(1, pose_stride),
+        "body_poses": body_poses,
         "vx_trace": vx_trace,
-        "trajSample": _subsample_trajectory(raw_traj_rows, 16),
+        "traj_sample": _subsample_trajectory(raw_traj_rows, 16),
     }
 
 
@@ -1075,20 +1095,20 @@ def evaluate_populora_genome(
             "task": "microduck",
             "seeds": eff_seeds,
             "return": mean_ret,
-            "meanDistance": mean_x,
-            "meanSteps": mean_steps,
-            "minSteps": min_steps,
-            "clearMm": clear_mm,
-            "minLrMm": min_lr_mm,
-            "ssupPct": ssup_pct,
-            "rollDeg": roll_deg,
-            "absY": abs_y,
+            "mean_distance": mean_x,
+            "mean_steps": mean_steps,
+            "min_steps": min_steps,
+            "clear_mm": clear_mm,
+            "min_lr_mm": min_lr_mm,
+            "ssup_pct": ssup_pct,
+            "roll_deg": roll_deg,
+            "abs_y": abs_y,
             "solved": solved,
-            "primaryValue": mean_ret,
-            "primaryDisplay": f"{disp} ({dx_txt})",
-            "badgeText": f"{disp} · {dx_txt}",
+            "primary_value": mean_ret,
+            "primary_display": f"{disp} ({dx_txt})",
+            "badge_text": f"{disp} · {dx_txt}",
             "tier": tier,
-            "secondaryText": f"steps {min_steps}/{eff_steps} · clr {clear_mm:.1f}mm · ssup {ssup_pct}%",
+            "secondary_text": f"steps {min_steps}/{eff_steps} · clr {clear_mm:.1f}mm · ssup {ssup_pct}%",
         }
     elif spec.task_id == "unitree_go2":
         mean_x = round(sum(float(r["distance"]) for r in rollouts) / n, 3)
@@ -1103,18 +1123,18 @@ def evaluate_populora_genome(
             "task": "unitree_go2",
             "seeds": eff_seeds,
             "return": mean_ret,
-            "meanDistance": mean_x,
-            "meanVx": mean_vx,
-            "meanSteps": mean_steps,
-            "minSteps": min_steps,
-            "clearMm": clear_mm,
-            "trotPct": trot_pct,
+            "mean_distance": mean_x,
+            "mean_vx": mean_vx,
+            "mean_steps": mean_steps,
+            "min_steps": min_steps,
+            "clear_mm": clear_mm,
+            "trot_pct": trot_pct,
             "solved": solved,
-            "primaryValue": mean_ret,
-            "primaryDisplay": f"{disp} ({dx_txt})",
-            "badgeText": f"{disp} · {dx_txt}",
+            "primary_value": mean_ret,
+            "primary_display": f"{disp} ({dx_txt})",
+            "badge_text": f"{disp} · {dx_txt}",
             "tier": tier,
-            "secondaryText": f"steps {min_steps}/{eff_steps} · vx {_signed(mean_vx, '.2f')}m/s · clr {clear_mm:.1f}mm",
+            "secondary_text": f"steps {min_steps}/{eff_steps} · vx {_signed(mean_vx, '.2f')}m/s · clr {clear_mm:.1f}mm",
         }
     else:
         lift_mm = round(sum(float(r["lift_mm"]) for r in rollouts) / n, 1)
@@ -1125,45 +1145,49 @@ def evaluate_populora_genome(
         lift_cm_txt = f"{lift_mm / 10.0:.1f}cm"
         summary = {
             "task": "so101",
-            "armModel": str(rollouts[0].get("arm_model") or "so101"),
+            "arm_model": str(rollouts[0].get("arm_model") or "so101"),
             "seeds": eff_seeds,
             "return": mean_ret,
-            "liftMm": lift_mm,
-            "minDistCm": min_dist_cm,
-            "pinchPct": pinch_pct,
-            "minSteps": min_steps,
+            "lift_mm": lift_mm,
+            "min_dist_cm": min_dist_cm,
+            "pinch_pct": pinch_pct,
+            "min_steps": min_steps,
             "solved": solved,
-            "primaryValue": mean_ret,
-            "primaryDisplay": f"{disp} (lift {lift_cm_txt})",
-            "badgeText": f"{disp} · ↑{lift_cm_txt}",
+            "primary_value": mean_ret,
+            "primary_display": f"{disp} (lift {lift_cm_txt})",
+            "badge_text": f"{disp} · ↑{lift_cm_txt}",
             "tier": tier,
-            "secondaryText": f"min dist {min_dist_cm:.1f}cm · grip {pinch_pct}% · lift {lift_mm:.1f}mm",
+            "secondary_text": f"min dist {min_dist_cm:.1f}cm · grip {pinch_pct}% · lift {lift_mm:.1f}mm",
         }
 
     primary = rollouts[0]
     replay = (
         {
-            "bodyPoses": primary["bodyPoses"],
-            "poseStride": primary["poseStride"],
+            "body_poses": primary["body_poses"],
+            "pose_stride": primary["pose_stride"],
             "vx_trace": primary["vx_trace"],
             "steps": primary["steps"],
         }
-        if include_replay and exists(primary.get("bodyPoses"))
+        if include_replay and exists(primary.get("body_poses"))
         else None
     )
     return {
         "summary": summary,
-        "trajSample": primary.get("trajSample"),
+        "traj_sample": primary.get("traj_sample"),
         "replay": replay,
     }
 
 
-def rank_eval_items(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def rank_eval_items(
+    items: Sequence[Mapping[str, Any]],
+    *,
+    value_digits: int = 4,
+) -> list[dict[str, Any]]:
     """Deterministically rank evaluated candidates by descending ``primaryValue``."""
     scored: list[tuple[float, int, dict[str, Any]]] = []
     for idx, item in enumerate(items):
         summ = item.get("summary") if isinstance(item.get("summary"), Mapping) else {}
-        raw_val = summ.get("primaryValue", item.get("primaryValue", 0.0))
+        raw_val = summ.get("primary_value", item.get("primary_value", 0.0))
         try:
             pval = float(raw_val)
         except (TypeError, ValueError):
@@ -1180,8 +1204,8 @@ def rank_eval_items(items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
                     "id": item.get("id"),
                     "uuid": str(item.get("uuid") or ""),
                     "hash": str(item.get("hash") or ""),
-                    "primaryValue": round(pval, 4) if math.isfinite(pval) else 0.0,
-                    "badgeText": str(summ.get("badgeText") or ""),
+                    "primary_value": round(pval, value_digits) if math.isfinite(pval) else 0.0,
+                    "badge_text": str(summ.get("badge_text") or ""),
                 },
             )
         )
@@ -1198,12 +1222,18 @@ def evaluate_populora_shard(
     env_params: Mapping[str, Any] | None = None,
     base_model_payload: Mapping[str, Any] | None = None,
     include_replay: bool = True,
+    max_workers: int = 1,
+    max_worker_cap: int = 32,
+    hash_length: int = 20,
+    value_digits: int = 4,
 ) -> dict[str, Any]:
-    """Simulate a claimed shard of PopuLoRA individuals locally and rank them."""
-    results: list[dict[str, Any]] = []
-    for item in shard_items:
+    """Simulate a claimed shard of PopuLoRA individuals locally (optionally multi-threaded) and rank them."""
+    if not shard_items:
+        return {"results": [], "shard_ranking": []}
+
+    def _eval_one(item: Mapping[str, Any]) -> dict[str, Any]:
         genome = item.get("genome") if isinstance(item.get("genome"), Mapping) else item
-        gh = str(item.get("hash") or genome.get("hash") or populora_genome_hash(dict(genome), length=20))
+        gh = str(item.get("hash") or genome.get("hash") or populora_genome_hash(dict(genome), length=hash_length))
         ev = evaluate_populora_genome(
             task_id,
             genome,
@@ -1219,12 +1249,23 @@ def evaluate_populora_shard(
             "id": item.get("id", genome.get("id")),
             "uuid": str(item.get("uuid") or genome.get("uuid") or ""),
             "summary": ev["summary"],
-            "trajSample": ev["trajSample"],
+            "traj_sample": ev["traj_sample"],
         }
         if exists(ev.get("replay")):
             entry["replay"] = ev["replay"]
-        results.append(entry)
+        return entry
+
+    eff_workers = max(1, min(int(max_workers), len(shard_items), max_worker_cap))
+    if eff_workers > 1:
+        # Warm scene model + base model caches once before spawning worker threads
+        first_g = shard_items[0].get("genome") if isinstance(shard_items[0].get("genome"), Mapping) else shard_items[0]
+        _parse_base_model_tensors(task_id, first_g, base_model_payload)
+        with ThreadPoolExecutor(max_workers=eff_workers) as pool:
+            results = list(pool.map(_eval_one, shard_items))
+    else:
+        results = [_eval_one(it) for it in shard_items]
+
     return {
         "results": results,
-        "shardRanking": rank_eval_items(results),
+        "shard_ranking": rank_eval_items(results, value_digits=value_digits),
     }

@@ -878,51 +878,108 @@
 }
 
 .worker-banner {
+  position: relative;
+  overflow: hidden;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.65rem;
-  padding: 0.65rem 0.85rem;
-  border-radius: 10px;
-  background: rgba(56, 189, 248, 0.06);
-  border: 1px solid rgba(56, 189, 248, 0.24);
-  font-size: 0.78rem;
+  gap: 0.6rem 0.9rem;
+  padding: 0.62rem 0.85rem;
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.065), rgba(56, 189, 248, 0.02));
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  font-size: 0.76rem;
 }
 .worker-banner[hidden] { display: none; }
 .worker-banner-info {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 0.32rem;
   min-width: 0;
+  flex: 1 1 320px;
 }
 .worker-banner-title {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-weight: 600;
-  color: #e0f2fe;
-}
-.worker-banner-code {
-  font-family: var(--mono);
-  font-size: 0.7rem;
-  color: var(--muted);
-  word-break: break-all;
-}
-.worker-banner-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #e0f2fe;
+}
+.worker-banner-code {
+  font-family: var(--mono);
+  font-size: 0.69rem;
+  line-height: 1.35;
+  color: #d4d4d8;
+  background: rgba(9, 9, 11, 0.72);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.26rem 0.55rem;
+  white-space: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  max-width: 100%;
+}
+.worker-banner-code::-webkit-scrollbar { display: none; }
+.worker-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.38rem;
+  flex-shrink: 0;
+}
+.worker-banner-actions button.ghost {
+  height: 28px;
+  padding: 0 0.58rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.worker-banner-actions button.is-primary-action:not(:disabled) {
+  border-color: rgba(56, 189, 248, 0.42);
+  background: rgba(56, 189, 248, 0.14);
+  color: #bae6fd;
+}
+.worker-banner-actions button.is-primary-action:hover:not(:disabled) {
+  border-color: rgba(56, 189, 248, 0.65);
+  background: rgba(56, 189, 248, 0.22);
+  color: #e0f2fe;
+}
+.worker-banner-actions button.active:not(:disabled) {
+  border-color: rgba(52, 211, 153, 0.48);
+  background: rgba(52, 211, 153, 0.15);
+  color: #6ee7b7;
+}
+.shard-progress-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.05);
+  pointer-events: none;
+}
+.shard-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #38bdf8, #34d399);
+  transition: width 0.2s ease;
 }
 .worker-token-row {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
   font-family: var(--mono);
-  font-size: 0.7rem;
-  padding: 0.28rem 0.55rem;
-  border-radius: 7px;
+  font-size: 0.69rem;
+  height: 28px;
+  padding: 0 0.55rem;
+  border-radius: 6px;
   background: #09090b;
   border: 1px solid var(--border);
   color: #fde68a;

@@ -281,14 +281,18 @@ function forwardPolicy(decoded, obs, recordActs = false) {
 // --- PopuLoRA Policy Runtime (GRUMLPPolicy & MLPPolicy) ---
 
 async function ensurePopuLoraBaseModel(taskId, genome, suppliedBaseModel = null) {
-  const baseHash = (genome && genome.baseHash) || (suppliedBaseModel && suppliedBaseModel.baseHash) || "default";
+  const baseHash =
+    (genome && (genome.base_hash || genome.baseHash))
+    || (suppliedBaseModel && (suppliedBaseModel.base_hash || suppliedBaseModel.baseHash))
+    || "default";
   const cacheKey = `${taskId}:${baseHash}`;
   if (baseModelCache.has(cacheKey)) return baseModelCache.get(cacheKey);
 
   let raw = suppliedBaseModel;
   if (!raw || !raw.tensors) {
-    const qs = new URLSearchParams({ task: taskId, seed: String(genome?.baseSeed || 1) });
-    if (genome?.baseHash) qs.set("hash", genome.baseHash);
+    const qs = new URLSearchParams({ task: taskId, seed: String(genome?.base_seed || genome?.baseSeed || 1) });
+    const reqHash = genome?.base_hash || genome?.baseHash;
+    if (reqHash) qs.set("hash", reqHash);
     const url = new URL(`${basePath}/api/sim/base-model/?${qs.toString()}`, self.location.href).href;
     const resp = await fetch(url, { cache: "force-cache" });
     if (!resp.ok) throw new Error(`Failed to fetch PopuLoRA base model (${resp.status})`);
@@ -299,14 +303,19 @@ async function ensurePopuLoraBaseModel(taskId, genome, suppliedBaseModel = null)
   for (const [tname, entry] of Object.entries(raw.tensors || {})) {
     decodedTensors[tname] = entry.dtype === "f32" ? decodeF32B64(entry.b64) : decodeF16B64(entry.b64);
   }
+  const obsDim = Number(raw.obs_dim ?? raw.obsDim);
+  const actionDim = Number(raw.action_dim ?? raw.actionDim);
+  if (!Number.isFinite(obsDim) || obsDim <= 0 || !Number.isFinite(actionDim) || actionDim <= 0) {
+    throw new Error(`Invalid PopuLoRA base model dimensions (obs_dim=${obsDim}, action_dim=${actionDim})`);
+  }
   const parsed = {
     arch: raw.arch || "gru_mlp",
-    obsDim: Number(raw.obsDim),
-    actionDim: Number(raw.actionDim),
-    hiddenDim: Number(raw.hiddenDim || 128),
-    headDim: Number(raw.headDim || 128),
-    lowRank: Number(raw.lowRank || 8),
-    loraTargets: raw.loraTargets || [],
+    obs_dim: obsDim,
+    action_dim: actionDim,
+    hidden_dim: Number(raw.hidden_dim ?? raw.hiddenDim ?? 128),
+    head_dim: Number(raw.head_dim ?? raw.headDim ?? 128),
+    low_rank: Number(raw.low_rank ?? raw.lowRank ?? 8),
+    lora_targets: raw.lora_targets || raw.loraTargets || [],
     tensors: decodedTensors,
   };
   baseModelCache.set(cacheKey, parsed);
@@ -320,7 +329,7 @@ function compilePopuLoraIndividual(baseModel, genome) {
   const cacheKey = `${baseModel.arch}:${fp}`;
   if (mergedPopuLoraCache.has(cacheKey)) return mergedPopuLoraCache.get(cacheKey);
 
-  const r = Number(genome.lowRank || baseModel.lowRank || 8);
+  const r = Number(genome.low_rank ?? genome.lowRank ?? baseModel.low_rank ?? 8);
   const adapters = genome.adapters || {};
 
   // Merge W_eff[o, i] = W_base[o, i] + sum_k(up[o, k] * down[i, k]) (row-major [outDim, inDim])
@@ -344,38 +353,38 @@ function compilePopuLoraIndividual(baseModel, genome) {
         }
       }
     }
-    return { w, b: baseB, inDim, outDim };
+    return { w, b: baseB, in_dim: inDim, out_dim: outDim };
   }
 
   let compiled;
   if (baseModel.arch === "mlp") {
-    const H = baseModel.hiddenDim;
-    const D = baseModel.headDim;
+    const H = baseModel.hidden_dim;
+    const D = baseModel.head_dim;
     compiled = {
       arch: "mlp",
-      obsDim: baseModel.obsDim,
-      actionDim: baseModel.actionDim,
-      enc0: mergeLinear("encoder.0", H, baseModel.obsDim, true),
+      obs_dim: baseModel.obs_dim,
+      action_dim: baseModel.action_dim,
+      enc0: mergeLinear("encoder.0", H, baseModel.obs_dim, true),
       enc2: mergeLinear("encoder.2", D, H, true),
-      head: mergeLinear("head", baseModel.actionDim, D, true),
+      head: mergeLinear("head", baseModel.action_dim, D, true),
     };
   } else {
-    const H = baseModel.hiddenDim;
-    const D = baseModel.headDim;
+    const H = baseModel.hidden_dim;
+    const D = baseModel.head_dim;
     const initMem = baseModel.tensors["init_memory"] || new Float32Array(H);
     compiled = {
       arch: "gru_mlp",
-      obsDim: baseModel.obsDim,
-      actionDim: baseModel.actionDim,
-      hiddenDim: H,
-      headDim: D,
+      obs_dim: baseModel.obs_dim,
+      action_dim: baseModel.action_dim,
+      hidden_dim: H,
+      head_dim: D,
       initMem,
-      enc0: mergeLinear("net.encoder.0", H, baseModel.obsDim, true),
+      enc0: mergeLinear("net.encoder.0", H, baseModel.obs_dim, true),
       enc2: mergeLinear("net.encoder.2", H, H, true),
       ih: mergeLinear("net.cell.linear_ih", 3 * H, H, true),
       hh: mergeLinear("net.cell.linear_hh", 3 * H, H, false),
       dec0: mergeLinear("net.decoder.0", D, H, true),
-      dec2: mergeLinear("net.decoder.2", baseModel.actionDim, D, true),
+      dec2: mergeLinear("net.decoder.2", baseModel.action_dim, D, true),
     };
   }
 
@@ -385,7 +394,7 @@ function compilePopuLoraIndividual(baseModel, genome) {
 }
 
 function matVecLinear(layer, x, out, applyTanh) {
-  const { w, b, inDim, outDim } = layer;
+  const { w, b, in_dim: inDim, out_dim: outDim } = layer;
   for (let o = 0; o < outDim; o++) {
     let acc = b ? b[o] : 0.0;
     const row = o * inDim;
@@ -396,9 +405,9 @@ function matVecLinear(layer, x, out, applyTanh) {
 
 function createPopuLoraRunner(compiled) {
   if (compiled.arch === "mlp") {
-    const h0 = new Float32Array(compiled.enc0.outDim);
-    const h1 = new Float32Array(compiled.enc2.outDim);
-    const act = new Float32Array(compiled.actionDim);
+    const h0 = new Float32Array(compiled.enc0.out_dim);
+    const h1 = new Float32Array(compiled.enc2.out_dim);
+    const act = new Float32Array(compiled.action_dim);
     return {
       reset() {},
       step(obs, recordActs = false) {
@@ -418,14 +427,14 @@ function createPopuLoraRunner(compiled) {
     };
   }
 
-  const H = compiled.hiddenDim;
+  const H = compiled.hidden_dim;
   const mem = new Float32Array(H);
   const e0 = new Float32Array(H);
   const e1 = new Float32Array(H);
   const gIh = new Float32Array(3 * H);
   const gHh = new Float32Array(3 * H);
-  const d0 = new Float32Array(compiled.headDim);
-  const act = new Float32Array(compiled.actionDim);
+  const d0 = new Float32Array(compiled.head_dim);
+  const act = new Float32Array(compiled.action_dim);
 
   return {
     reset() {
@@ -511,7 +520,7 @@ async function ensureMujocoScene(sceneId, manifest, suppliedPhysicsBuf = null) {
     const cached = mountedScenes.get(sceneId);
     return { mujoco: await ensureMujocoWasm(), ...cached };
   }
-  if (!manifest || !manifest.physicsAsset || !manifest.entryXml) {
+  if (!manifest || !manifest.physics_asset || !manifest.entry_xml) {
     throw new Error(`Missing scene manifest for '${sceneId}'.`);
   }
   if (suppliedPhysicsBuf instanceof ArrayBuffer && suppliedPhysicsBuf.byteLength > 0) {
@@ -520,8 +529,8 @@ async function ensureMujocoScene(sceneId, manifest, suppliedPhysicsBuf = null) {
   let bufPromise = physicsBufCache.has(sceneId)
     ? Promise.resolve(physicsBufCache.get(sceneId))
     : (async () => {
-        const ver = (manifest.physicsSha256 || "").slice(0, 12);
-        const relUrl = `${basePath}/assets/${manifest.physicsAsset}${ver ? `?v=${ver}` : ""}`;
+        const ver = (manifest.physics_sha256 || "").slice(0, 12);
+        const relUrl = `${basePath}/assets/${manifest.physics_asset}${ver ? `?v=${ver}` : ""}`;
         const absUrl = new URL(relUrl, self.location.href).href;
         const resp = await fetch(absUrl, { cache: "force-cache" });
         if (!resp.ok) throw new Error(`Failed to load ${sceneId} physics pack (${resp.status})`);
@@ -533,7 +542,7 @@ async function ensureMujocoScene(sceneId, manifest, suppliedPhysicsBuf = null) {
   const [mujoco, physBuf] = await Promise.all([ensureMujocoWasm(), bufPromise]);
   if (!mountedScenes.has(sceneId)) {
     const rootDir = mountDetVfsArchive(mujoco, sceneId, physBuf);
-    const model = mujoco.MjModel.from_xml_path(`${rootDir}/${manifest.entryXml}`);
+    const model = mujoco.MjModel.from_xml_path(`${rootDir}/${manifest.entry_xml}`);
     const data = new mujoco.MjData(model);
     mountedScenes.set(sceneId, { model, data, initialized: false, meta: {} });
   }
@@ -607,8 +616,8 @@ function ensureMicroduckSceneMeta(mujoco, entry, envParams) {
   if (entry.initialized) return entry.meta;
   const { model } = entry;
   const p = envParams || {};
-  const physicsDt = p.physicsDt || 0.004;
-  const kpMult = p.kpMult ?? 3.0;
+  const physicsDt = p.physics_dt || 0.004;
+  const kpMult = p.kp_mult ?? 3.0;
   const kv = p.kv ?? 0.1;
 
   model.opt.timestep = physicsDt;
@@ -668,9 +677,9 @@ function matchWorkerHyperparamOption(hSpec, rawVal) {
 
 function resolveSceneTaskConfig(taskId, envParamsOverride = null) {
   const spec = taskSpecs[taskId] || {};
-  let merged = spec.envParams ? { ...spec.envParams } : {};
+  let merged = spec.env_params ? { ...spec.env_params } : {};
   const ov = envParamsOverride && typeof envParamsOverride === "object" ? envParamsOverride : {};
-  const hSpecs = Array.isArray(spec.hyperparamSpecs) ? spec.hyperparamSpecs : [];
+  const hSpecs = Array.isArray(spec.hyperparam_specs) ? spec.hyperparam_specs : [];
   let selectedVariant = "";
   let variantManifest = null;
 
@@ -684,8 +693,8 @@ function resolveSceneTaskConfig(taskId, envParamsOverride = null) {
       if (matched && spec.variants[matched]) {
         selectedVariant = matched;
         const vObj = { ...spec.variants[matched] };
-        variantManifest = vObj.sceneManifest || null;
-        delete vObj.sceneManifest;
+        variantManifest = vObj.scene_manifest || null;
+        delete vObj.scene_manifest;
         merged = { ...merged, ...vObj };
         break;
       }
@@ -712,9 +721,9 @@ function resolveSceneTaskConfig(taskId, envParamsOverride = null) {
     }
   }
 
-  const sceneId = String(merged.sceneId || spec.sceneId || taskId);
-  const manifest = variantManifest || spec.sceneManifest || null;
-  return { variant: selectedVariant, sceneId, manifest, envParams: merged };
+  const sceneId = String(merged.scene_id || spec.scene_id || taskId);
+  const manifest = variantManifest || spec.scene_manifest || null;
+  return { variant: selectedVariant, scene_id: sceneId, manifest, env_params: merged };
 }
 
 async function microduckRollout(
@@ -729,7 +738,7 @@ async function microduckRollout(
   suppliedPhysicsBuf = null,
   envParamsOverride = null
 ) {
-  const { sceneId, manifest, envParams } = resolveSceneTaskConfig("microduck", envParamsOverride);
+  const { scene_id: sceneId, manifest, env_params: envParams } = resolveSceneTaskConfig("microduck", envParamsOverride);
 
   const [{ mujoco, model, data }, baseModel] = await Promise.all([
     ensureMujocoScene(sceneId, manifest, suppliedPhysicsBuf),
@@ -741,27 +750,27 @@ async function microduckRollout(
   const policyRunner = createPopuLoraRunner(compiledPolicy);
   policyRunner.reset();
 
-  const nSubsteps = envParams.nSubsteps || 5;
-  const ctrlDt = envParams.ctrlDt || 0.02;
-  const actionScale = envParams.actionScale ?? 0.5;
+  const nSubsteps = envParams.n_substeps || 5;
+  const ctrlDt = envParams.ctrl_dt || 0.02;
+  const actionScale = envParams.action_scale ?? 0.5;
   const cmd = envParams.command || [0.15, 0.0];
   const cmdSpeed = Math.hypot(cmd[0], cmd[1]);
   const hasCmd = cmdSpeed > 0.01;
   const cmdDirX = hasCmd ? cmd[0] / cmdSpeed : 1.0;
   const cmdDirY = hasCmd ? cmd[1] / cmdSpeed : 0.0;
 
-  const progressWeight = envParams.progressWeight ?? 350.0;
-  const clearanceWeight = envParams.clearanceWeight ?? 900.0;
-  const clearanceTarget = envParams.clearanceTarget ?? 0.008;
-  const footDragWeight = envParams.footDragWeight ?? 160.0;
-  const altStepBonus = envParams.altStepBonus ?? 400.0;
-  const swayWeight = envParams.swayWeight ?? 20.0;
-  const bodyAngVelWeight = envParams.bodyAngVelWeight ?? 0.04;
-  const actionRateWeight = envParams.actionRateWeight ?? 0.10;
-  const fallPenalty = envParams.fallPenalty ?? 3500.0;
-  const minTrunkZ = envParams.minTrunkZ ?? 0.04;
-  const minUpright = envParams.minUprightness ?? 0.35;
-  const legJoints = envParams.legJoints || [0, 1, 2, 3, 4, 9, 10, 11, 12, 13];
+  const progressWeight = envParams.progress_weight ?? 350.0;
+  const clearanceWeight = envParams.clearance_weight ?? 900.0;
+  const clearanceTarget = envParams.clearance_target ?? 0.008;
+  const footDragWeight = envParams.foot_drag_weight ?? 160.0;
+  const altStepBonus = envParams.alt_step_bonus ?? 400.0;
+  const swayWeight = envParams.sway_weight ?? 20.0;
+  const bodyAngVelWeight = envParams.body_ang_vel_weight ?? 0.04;
+  const actionRateWeight = envParams.action_rate_weight ?? 0.10;
+  const fallPenalty = envParams.fall_penalty ?? 3500.0;
+  const minTrunkZ = envParams.min_trunk_z ?? 0.04;
+  const minUpright = envParams.min_uprightness ?? 0.35;
+  const legJoints = envParams.leg_joints || [0, 1, 2, 3, 4, 9, 10, 11, 12, 13];
 
   mujoco.mj_resetData(model, data);
   let qpos = data.qpos;
@@ -1063,18 +1072,18 @@ async function microduckRollout(
     min_lr_mm: minLrMm,
     ssup_pct: ssupPct,
     return: totalReturn,
-    poseStride: Math.max(1, poseStride),
-    bodyPoses,
+    pose_stride: Math.max(1, poseStride),
+    body_poses: bodyPoses,
     vx_trace: vxTrace,
     stepTrace,
     stepActivations: stepActs,
-    trajSample,
+    traj_sample: trajSample,
   };
 }
 
 async function evaluateMicroduck(genome, seeds, baseModel = null, physicsBuf = null, envParams = null) {
-  const spec = taskSpecs.microduck || { maxSteps: 400 };
-  const maxSteps = spec.maxSteps || 400;
+  const spec = taskSpecs.microduck || { max_steps: 400 };
+  const maxSteps = spec.max_steps || 400;
   let sumRet = 0.0;
   let sumSteps = 0.0;
   let minSteps = maxSteps;
@@ -1130,23 +1139,23 @@ async function evaluateMicroduck(genome, seeds, baseModel = null, physicsBuf = n
       task: "microduck",
       seeds,
       return: meanRet,
-      meanDistance: meanX,
-      meanSteps,
-      minSteps,
-      clearMm,
-      minLrMm,
-      ssupPct,
-      rollDeg,
-      absY,
+      mean_distance: meanX,
+      mean_steps: meanSteps,
+      min_steps: minSteps,
+      clear_mm: clearMm,
+      min_lr_mm: minLrMm,
+      ssup_pct: ssupPct,
+      roll_deg: rollDeg,
+      abs_y: absY,
       solved,
-      primaryValue: meanRet,
-      primaryDisplay: `${dispTxt} (${meanX >= 0 ? "+" : ""}${meanX.toFixed(2)}m)`,
-      badgeText: `${dispTxt} · ${meanX >= 0 ? "+" : ""}${meanX.toFixed(2)}m`,
+      primary_value: meanRet,
+      primary_display: `${dispTxt} (${meanX >= 0 ? "+" : ""}${meanX.toFixed(2)}m)`,
+      badge_text: `${dispTxt} · ${meanX >= 0 ? "+" : ""}${meanX.toFixed(2)}m`,
       tier,
-      secondaryText: `steps ${minSteps}/${maxSteps} · clr ${clearMm.toFixed(1)}mm · ssup ${ssupPct}%`,
+      secondary_text: `steps ${minSteps}/${maxSteps} · clr ${clearMm.toFixed(1)}mm · ssup ${ssupPct}%`,
     },
-    trajSample: primaryRollout ? primaryRollout.trajSample : null,
-    primaryRollout,
+    traj_sample: primaryRollout ? primaryRollout.traj_sample : null,
+    primary_rollout: primaryRollout,
   };
 }
 
@@ -1156,7 +1165,7 @@ function ensureUnitreeGo2SceneMeta(mujoco, entry, envParams) {
   if (entry.initialized) return entry.meta;
   const { model } = entry;
   const p = envParams || {};
-  model.opt.timestep = p.physicsDt || 0.004;
+  model.opt.timestep = p.physics_dt || 0.004;
 
   const objKey = mujoco.mjtObj.mjOBJ_KEY.value ?? mujoco.mjtObj.mjOBJ_KEY;
   const objGeom = mujoco.mjtObj.mjOBJ_GEOM.value ?? mujoco.mjtObj.mjOBJ_GEOM;
@@ -1209,7 +1218,7 @@ async function unitreeGo2Rollout(
   suppliedPhysicsBuf = null,
   envParamsOverride = null
 ) {
-  const { sceneId, manifest, envParams } = resolveSceneTaskConfig("unitree_go2", envParamsOverride);
+  const { scene_id: sceneId, manifest, env_params: envParams } = resolveSceneTaskConfig("unitree_go2", envParamsOverride);
 
   const [{ mujoco, model, data }, baseModel] = await Promise.all([
     ensureMujocoScene(sceneId, manifest, suppliedPhysicsBuf),
@@ -1221,35 +1230,35 @@ async function unitreeGo2Rollout(
   const policyRunner = createPopuLoraRunner(compiledPolicy);
   policyRunner.reset();
 
-  const nSubsteps = envParams.nSubsteps || 5;
-  const ctrlDt = envParams.ctrlDt || 0.02;
-  const actionScale = envParams.actionScale ?? 0.42;
-  const angVelObsScale = envParams.angVelObsScale ?? 0.25;
-  const jointVelObsScale = envParams.jointVelObsScale ?? 0.05;
+  const nSubsteps = envParams.n_substeps || 5;
+  const ctrlDt = envParams.ctrl_dt || 0.02;
+  const actionScale = envParams.action_scale ?? 0.42;
+  const angVelObsScale = envParams.ang_vel_obs_scale ?? 0.25;
+  const jointVelObsScale = envParams.joint_vel_obs_scale ?? 0.05;
   const cmd = envParams.command || [0.65, 0.0];
   const cmdVx = cmd[0];
-  const footRadius = envParams.footRadius ?? 0.022;
-  const nominalBaseZ = envParams.nominalBaseZ ?? 0.268;
-  const minBaseZ = envParams.minBaseZ ?? 0.145;
-  const minUpright = envParams.minUprightness ?? 0.45;
+  const footRadius = envParams.foot_radius ?? 0.022;
+  const nominalBaseZ = envParams.nominal_base_z ?? 0.268;
+  const minBaseZ = envParams.min_base_z ?? 0.145;
+  const minUpright = envParams.min_uprightness ?? 0.45;
 
-  const signedProgressW = envParams.signedProgressWeight ?? 140.0;
-  const highWaterW = envParams.highWaterWeight ?? 60.0;
-  const velTrackW = envParams.velTrackWeight ?? 16.0;
-  const clearanceW = envParams.clearanceWeight ?? 24.0;
-  const clearanceTarget = envParams.clearanceTarget ?? 0.055;
-  const stepStrideW = envParams.stepStrideWeight ?? 35.0;
-  const footSlipW = envParams.footSlipWeight ?? 1.2;
-  const trotBonusW = envParams.trotBonusWeight ?? 8.0;
-  const orientW = envParams.orientWeight ?? 8.0;
-  const lateralDriftW = envParams.lateralDriftWeight ?? 12.0;
-  const heightW = envParams.heightWeight ?? 20.0;
-  const bodyAngVelW = envParams.bodyAngVelWeight ?? 0.35;
-  const vertVelW = envParams.vertVelWeight ?? 1.5;
-  const hipPoseW = envParams.hipPoseWeight ?? 3.0;
-  const actionRateW = envParams.actionRateWeight ?? 0.08;
-  const fallPenalty = envParams.fallPenalty ?? 120.0;
-  const hipJoints = envParams.hipJoints || [0, 3, 6, 9];
+  const signedProgressW = envParams.signed_progress_weight ?? 140.0;
+  const highWaterW = envParams.high_water_weight ?? 60.0;
+  const velTrackW = envParams.vel_track_weight ?? 16.0;
+  const clearanceW = envParams.clearance_weight ?? 24.0;
+  const clearanceTarget = envParams.clearance_target ?? 0.055;
+  const stepStrideW = envParams.step_stride_weight ?? 35.0;
+  const footSlipW = envParams.foot_slip_weight ?? 1.2;
+  const trotBonusW = envParams.trot_bonus_weight ?? 8.0;
+  const orientW = envParams.orient_weight ?? 8.0;
+  const lateralDriftW = envParams.lateral_drift_weight ?? 12.0;
+  const heightW = envParams.height_weight ?? 20.0;
+  const bodyAngVelW = envParams.body_ang_vel_weight ?? 0.35;
+  const vertVelW = envParams.vert_vel_weight ?? 1.5;
+  const hipPoseW = envParams.hip_pose_weight ?? 3.0;
+  const actionRateW = envParams.action_rate_weight ?? 0.08;
+  const fallPenalty = envParams.fall_penalty ?? 120.0;
+  const hipJoints = envParams.hip_joints || [0, 3, 6, 9];
 
   mujoco.mj_resetData(model, data);
   let qpos = data.qpos;
@@ -1534,18 +1543,18 @@ async function unitreeGo2Rollout(
     clear_mm: clearMm,
     trot_pct: trotPct,
     return: totalReturn,
-    poseStride: Math.max(1, poseStride),
-    bodyPoses,
+    pose_stride: Math.max(1, poseStride),
+    body_poses: bodyPoses,
     vx_trace: vxTrace,
     stepTrace,
     stepActivations: stepActs,
-    trajSample,
+    traj_sample: trajSample,
   };
 }
 
 async function evaluateUnitreeGo2(genome, seeds, baseModel = null, physicsBuf = null, envParams = null) {
-  const spec = taskSpecs.unitree_go2 || { maxSteps: 400 };
-  const maxSteps = spec.maxSteps || 400;
+  const spec = taskSpecs.unitree_go2 || { max_steps: 400 };
+  const maxSteps = spec.max_steps || 400;
   let sumRet = 0.0;
   let sumSteps = 0.0;
   let minSteps = maxSteps;
@@ -1595,37 +1604,37 @@ async function evaluateUnitreeGo2(genome, seeds, baseModel = null, physicsBuf = 
       task: "unitree_go2",
       seeds,
       return: meanRet,
-      meanDistance: meanX,
-      meanVx,
-      meanSteps,
-      minSteps,
-      clearMm,
-      trotPct,
+      mean_distance: meanX,
+      mean_vx: meanVx,
+      mean_steps: meanSteps,
+      min_steps: minSteps,
+      clear_mm: clearMm,
+      trot_pct: trotPct,
       solved,
-      primaryValue: meanRet,
-      primaryDisplay: `${dispTxt} (${meanX >= 0 ? "+" : ""}${meanX.toFixed(2)}m)`,
-      badgeText: `${dispTxt} \u00b7 ${meanX >= 0 ? "+" : ""}${meanX.toFixed(2)}m`,
+      primary_value: meanRet,
+      primary_display: `${dispTxt} (${meanX >= 0 ? "+" : ""}${meanX.toFixed(2)}m)`,
+      badge_text: `${dispTxt} \u00b7 ${meanX >= 0 ? "+" : ""}${meanX.toFixed(2)}m`,
       tier,
-      secondaryText: `steps ${minSteps}/${maxSteps} \u00b7 vx ${meanVx >= 0 ? "+" : ""}${meanVx.toFixed(2)}m/s \u00b7 clr ${clearMm.toFixed(1)}mm`,
+      secondary_text: `steps ${minSteps}/${maxSteps} \u00b7 vx ${meanVx >= 0 ? "+" : ""}${meanVx.toFixed(2)}m/s \u00b7 clr ${clearMm.toFixed(1)}mm`,
     },
-    trajSample: primaryRollout ? primaryRollout.trajSample : null,
-    primaryRollout,
+    traj_sample: primaryRollout ? primaryRollout.traj_sample : null,
+    primary_rollout: primaryRollout,
   };
 }
 
 // --- SO-101 / SO-ARM102 6-DOF Robotic Arm Cube Pick & Lift Environment (PopuLoRA + MuJoCo WASM) ---
 
 function resolveSo101Variant(envParamsOverride = null) {
-  const { variant, sceneId, manifest, envParams } = resolveSceneTaskConfig("so101", envParamsOverride);
+  const { variant, scene_id: sceneId, manifest, env_params: envParams } = resolveSceneTaskConfig("so101", envParamsOverride);
   const armModel = String(variant || envParams.arm_model || sceneId || "so102");
-  return { armModel, sceneId, manifest, envParams };
+  return { arm_model: armModel, scene_id: sceneId, manifest, env_params: envParams };
 }
 
 function ensureSo101SceneMeta(mujoco, entry, envParams) {
   if (entry.initialized) return entry.meta;
   const { model } = entry;
   const p = envParams || {};
-  model.opt.timestep = p.physicsDt || 0.004;
+  model.opt.timestep = p.physics_dt || 0.004;
 
   const objKey = mujoco.mjtObj.mjOBJ_KEY.value ?? mujoco.mjtObj.mjOBJ_KEY;
   const objGeom = mujoco.mjtObj.mjOBJ_GEOM.value ?? mujoco.mjtObj.mjOBJ_GEOM;
@@ -1691,7 +1700,7 @@ async function so101Rollout(
   suppliedPhysicsBuf = null,
   envParamsOverride = null
 ) {
-  const { armModel, sceneId, manifest, envParams } = resolveSo101Variant(envParamsOverride);
+  const { arm_model: armModel, scene_id: sceneId, manifest, env_params: envParams } = resolveSo101Variant(envParamsOverride);
 
   const [{ mujoco, model, data }, baseModel] = await Promise.all([
     ensureMujocoScene(sceneId, manifest, suppliedPhysicsBuf),
@@ -1703,25 +1712,25 @@ async function so101Rollout(
   const policyRunner = createPopuLoraRunner(compiledPolicy);
   policyRunner.reset();
 
-  const nSubsteps = envParams.nSubsteps || 5;
-  const ctrlDt = envParams.ctrlDt || 0.02;
+  const nSubsteps = envParams.n_substeps || 5;
+  const ctrlDt = envParams.ctrl_dt || 0.02;
   const actionScales =
-    envParams.actionScales ||
+    envParams.action_scales ||
     (meta.gripperIsSlide ? [0.65, 0.65, 0.65, 0.65, 0.55, 0.028] : [0.65, 0.65, 0.65, 0.65, 0.55, 0.95]);
-  const goalPos = envParams.goalPos || (meta.gripperIsSlide ? [0.238, 0.0, 0.14] : [0.23, 0.012, 0.14]);
-  const cubeRestZ = envParams.cubeRestZ ?? 0.016;
+  const goalPos = envParams.goal_pos || (meta.gripperIsSlide ? [0.238, 0.0, 0.14] : [0.23, 0.012, 0.14]);
+  const cubeRestZ = envParams.cube_rest_z ?? 0.016;
 
-  const reachW = envParams.reachWeight ?? 12.0;
-  const reachProgW = envParams.reachProgressWeight ?? 45.0;
-  const preGraspW = envParams.preGraspAlignWeight ?? 5.0;
-  const singleTouchW = envParams.singleTouchWeight ?? 2.5;
-  const pinchGraspW = envParams.pinchGraspWeight ?? 16.0;
-  const liftW = envParams.liftWeight ?? 220.0;
-  const liftHighWaterW = envParams.liftHighWaterWeight ?? 650.0;
-  const goalHoldW = envParams.goalHoldWeight ?? 24.0;
-  const knockPenW = envParams.knockPenaltyWeight ?? 15.0;
-  const floorScrapeW = envParams.floorScrapeWeight ?? 8.0;
-  const actionRateW = envParams.actionRateWeight ?? 0.04;
+  const reachW = envParams.reach_weight ?? 12.0;
+  const reachProgW = envParams.reach_progress_weight ?? 45.0;
+  const preGraspW = envParams.pre_grasp_align_weight ?? 5.0;
+  const singleTouchW = envParams.single_touch_weight ?? 2.5;
+  const pinchGraspW = envParams.pinch_grasp_weight ?? 16.0;
+  const liftW = envParams.lift_weight ?? 220.0;
+  const liftHighWaterW = envParams.lift_high_water_weight ?? 650.0;
+  const goalHoldW = envParams.goal_hold_weight ?? 24.0;
+  const knockPenW = envParams.knock_penalty_weight ?? 15.0;
+  const floorScrapeW = envParams.floor_scrape_weight ?? 8.0;
+  const actionRateW = envParams.action_rate_weight ?? 0.04;
 
   const cQ = meta.cubeQposAdr;
   const cV = meta.cubeDofAdr;
@@ -1937,8 +1946,8 @@ async function so101Rollout(
 
   return {
     seed,
-    armModel,
-    sceneId,
+    arm_model: armModel,
+    scene_id: sceneId,
     steps,
     terminated: false,
     distance: maxLiftM,
@@ -1947,19 +1956,19 @@ async function so101Rollout(
     final_dist_cm: finalDistCm,
     pinch_pct: (100.0 * pinchSteps) / Math.max(1, steps),
     return: totalReturn,
-    poseStride: Math.max(1, poseStride),
-    bodyPoses,
+    pose_stride: Math.max(1, poseStride),
+    body_poses: bodyPoses,
     vx_trace: vxTrace,
     stepTrace,
     stepActivations: stepActs,
-    trajSample,
+    traj_sample: trajSample,
   };
 }
 
 async function evaluateSo101(genome, seeds, baseModel = null, physicsBuf = null, envParams = null) {
-  const spec = taskSpecs.so101 || { maxSteps: 250 };
-  const maxSteps = spec.maxSteps || 250;
-  const { armModel } = resolveSo101Variant(envParams);
+  const spec = taskSpecs.so101 || { max_steps: 250 };
+  const maxSteps = spec.max_steps || 250;
+  const { arm_model: armModel } = resolveSo101Variant(envParams);
   let sumRet = 0.0;
   let sumLiftMm = 0.0;
   let sumMinDistCm = 0.0;
@@ -2002,22 +2011,22 @@ async function evaluateSo101(genome, seeds, baseModel = null, physicsBuf = null,
   return {
     summary: {
       task: "so101",
-      armModel,
+      arm_model: armModel,
       seeds,
       return: meanRet,
-      liftMm,
-      minDistCm,
-      pinchPct,
-      minSteps,
+      lift_mm: liftMm,
+      min_dist_cm: minDistCm,
+      pinch_pct: pinchPct,
+      min_steps: minSteps,
       solved,
-      primaryValue: meanRet,
-      primaryDisplay: `${dispTxt} (lift ${liftCmTxt})`,
-      badgeText: `${dispTxt} \u00b7 \u2191${liftCmTxt}`,
+      primary_value: meanRet,
+      primary_display: `${dispTxt} (lift ${liftCmTxt})`,
+      badge_text: `${dispTxt} \u00b7 \u2191${liftCmTxt}`,
       tier,
-      secondaryText: `min dist ${minDistCm.toFixed(1)}cm \u00b7 grip ${pinchPct}% \u00b7 lift ${liftMm.toFixed(1)}mm`,
+      secondary_text: `min dist ${minDistCm.toFixed(1)}cm \u00b7 grip ${pinchPct}% \u00b7 lift ${liftMm.toFixed(1)}mm`,
     },
-    trajSample: primaryRollout ? primaryRollout.trajSample : null,
-    primaryRollout,
+    traj_sample: primaryRollout ? primaryRollout.traj_sample : null,
+    primary_rollout: primaryRollout,
   };
 }
 
@@ -2063,9 +2072,9 @@ function cartpoleStep(state, uRaw) {
 }
 
 function cartpoleRollout(genome, seed = 0, maxSteps = 500, nudge = null, includeActs = false, captureFrames = true) {
-  const spec = taskSpecs.cartpole || { obsDim: 4, hiddenDims: [8], actionDim: 1, layerCoords: null };
-  const dims = [spec.obsDim || 4, ...(spec.hiddenDims || [8]), spec.actionDim || 1];
-  const decoded = decodeHyperNeat(genome, dims, spec.layerCoords);
+  const spec = taskSpecs.cartpole || { obs_dim: 4, hidden_dims: [8], action_dim: 1, layer_coords: null };
+  const dims = [spec.obs_dim || 4, ...(spec.hidden_dims || [8]), spec.action_dim || 1];
+  const decoded = decodeHyperNeat(genome, dims, spec.layer_coords);
   let state = cartpoleReset(seed);
   if (nudge === "left" || nudge === "right") {
     const sign = nudge === "left" ? -1 : 1;
@@ -2102,8 +2111,8 @@ function cartpoleRollout(genome, seed = 0, maxSteps = 500, nudge = null, include
 }
 
 function evaluateCartpole(genome, seeds) {
-  const spec = taskSpecs.cartpole || { maxSteps: 500 };
-  const maxSteps = spec.maxSteps || 500;
+  const spec = taskSpecs.cartpole || { max_steps: 500 };
+  const maxSteps = spec.max_steps || 500;
   let sumSteps = 0;
   let minSteps = maxSteps;
   let sumAbsX = 0;
@@ -2124,18 +2133,18 @@ function evaluateCartpole(genome, seeds) {
     summary: {
       task: "cartpole",
       seeds,
-      stepsPerSeed: perSeed,
-      meanSteps,
-      minSteps,
-      meanAbsX: Math.round((sumAbsX / Math.max(1, seeds.length)) * 1000) / 1000,
+      steps_per_seed: perSeed,
+      mean_steps: meanSteps,
+      min_steps: minSteps,
+      mean_abs_x: Math.round((sumAbsX / Math.max(1, seeds.length)) * 1000) / 1000,
       solved,
-      primaryValue: meanSteps,
-      primaryDisplay: `${valTxt}/${maxSteps}`,
-      badgeText: `${valTxt}/${maxSteps}`,
+      primary_value: meanSteps,
+      primary_display: `${valTxt}/${maxSteps}`,
+      badge_text: `${valTxt}/${maxSteps}`,
       tier: solved ? "solved" : (meanSteps >= 150 ? "mid" : ""),
-      secondaryText: `min ${minSteps}/${maxSteps}, |x|=${(sumAbsX / Math.max(1, seeds.length)).toFixed(2)}m`,
+      secondary_text: `min ${minSteps}/${maxSteps}, |x|=${(sumAbsX / Math.max(1, seeds.length)).toFixed(2)}m`,
     },
-    primaryRollout,
+    primary_rollout: primaryRollout,
   };
 }
 
@@ -2154,7 +2163,7 @@ async function ensureMujocoCheetah() {
       mujoco: await ensureMujocoWasm(),
       model: cheetahModel,
       data: cheetahData,
-      geomSpecs: cheetahGeomSpecs,
+      geom_specs: cheetahGeomSpecs,
       nonPlaneIds: cheetahNonPlaneIds,
     };
   }
@@ -2198,7 +2207,7 @@ async function ensureMujocoCheetah() {
     mujoco,
     model: cheetahModel,
     data: cheetahData,
-    geomSpecs: cheetahGeomSpecs,
+    geom_specs: cheetahGeomSpecs,
     nonPlaneIds: cheetahNonPlaneIds,
   };
 }
@@ -2227,15 +2236,15 @@ async function halfcheetahRollout(
   includeGeoms = false,
   captureFrames = true
 ) {
-  const { mujoco, model, data, geomSpecs, nonPlaneIds } = await ensureMujocoCheetah();
+  const { mujoco, model, data, geom_specs: geomSpecs, nonPlaneIds } = await ensureMujocoCheetah();
   const spec = taskSpecs.halfcheetah || {
-    obsDim: 21,
-    hiddenDims: [12],
-    actionDim: 6,
-    layerCoords: null,
+    obs_dim: 21,
+    hidden_dims: [12],
+    action_dim: 6,
+    layer_coords: null,
   };
-  const dims = [spec.obsDim || 21, ...(spec.hiddenDims || [12]), spec.actionDim || 6];
-  const decoded = decodeHyperNeat(genome, dims, spec.layerCoords);
+  const dims = [spec.obs_dim || 21, ...(spec.hidden_dims || [12]), spec.action_dim || 6];
+  const decoded = decodeHyperNeat(genome, dims, spec.layer_coords);
 
   mujoco.mj_resetData(model, data);
   let qpos = data.qpos;
@@ -2352,15 +2361,15 @@ async function halfcheetahRollout(
     stepActivations: stepActs,
   };
   if (includeGeoms) {
-    result.geomSpecs = geomSpecs;
-    result.geomPoses = geomPoses;
+    result.geom_specs = geomSpecs;
+    result.geom_poses = geomPoses;
   }
   return result;
 }
 
 async function evaluateHalfCheetah(genome, seeds) {
-  const spec = taskSpecs.halfcheetah || { maxSteps: 200 };
-  const maxSteps = spec.maxSteps || 200;
+  const spec = taskSpecs.halfcheetah || { max_steps: 200 };
+  const maxSteps = spec.max_steps || 200;
   const dists = [];
   let sumDx = 0.0;
   let minDx = Infinity;
@@ -2391,20 +2400,20 @@ async function evaluateHalfCheetah(genome, seeds) {
     summary: {
       task: "halfcheetah",
       seeds,
-      distancesPerSeed: dists,
-      meanDistance: meanDx,
-      minDistance: Math.round((minDx === Infinity ? 0 : minDx) * 100) / 100,
-      meanVx,
-      meanUpright: meanUp,
+      distances_per_seed: dists,
+      mean_distance: meanDx,
+      min_distance: Math.round((minDx === Infinity ? 0 : minDx) * 100) / 100,
+      mean_vx: meanVx,
+      mean_upright: meanUp,
       return: Math.round((sumRet / n) * 10) / 10,
       solved,
-      primaryValue: meanDx,
-      primaryDisplay: `${meanDx >= 0 ? "+" : ""}${meanDx.toFixed(1)}m`,
-      badgeText: `${meanDx >= 0 ? "+" : ""}${meanDx.toFixed(1)}m`,
+      primary_value: meanDx,
+      primary_display: `${meanDx >= 0 ? "+" : ""}${meanDx.toFixed(1)}m`,
+      badge_text: `${meanDx >= 0 ? "+" : ""}${meanDx.toFixed(1)}m`,
       tier,
-      secondaryText: `vx=${meanVx >= 0 ? "+" : ""}${meanVx.toFixed(2)}m/s, up=${meanUp >= 0 ? "+" : ""}${meanUp.toFixed(2)}`,
+      secondary_text: `vx=${meanVx >= 0 ? "+" : ""}${meanVx.toFixed(2)}m/s, up=${meanUp >= 0 ? "+" : ""}${meanUp.toFixed(2)}`,
     },
-    primaryRollout,
+    primary_rollout: primaryRollout,
   };
 }
 
@@ -2416,14 +2425,14 @@ const SIM_TASK_HANDLERS = {
       microduckRollout(
         msg.genome,
         msg.seed,
-        msg.maxSteps || 400,
+        msg.max_steps || 400,
         msg.nudge || null,
         Boolean(msg.includeActivations),
         true,
         1,
         msg.baseModel || null,
         msg.physicsBuffer || null,
-        msg.envParams || null
+        msg.env_params || null
       ),
   },
   unitree_go2: {
@@ -2433,14 +2442,14 @@ const SIM_TASK_HANDLERS = {
       unitreeGo2Rollout(
         msg.genome,
         msg.seed,
-        msg.maxSteps || 400,
+        msg.max_steps || 400,
         msg.nudge || null,
         Boolean(msg.includeActivations),
         true,
         1,
         msg.baseModel || null,
         msg.physicsBuffer || null,
-        msg.envParams || null
+        msg.env_params || null
       ),
   },
   so101: {
@@ -2450,14 +2459,14 @@ const SIM_TASK_HANDLERS = {
       so101Rollout(
         msg.genome,
         msg.seed,
-        msg.maxSteps || 250,
+        msg.max_steps || 250,
         msg.nudge || null,
         Boolean(msg.includeActivations),
         true,
         1,
         msg.baseModel || null,
         msg.physicsBuffer || null,
-        msg.envParams || null
+        msg.env_params || null
       ),
   },
   halfcheetah: {
@@ -2467,17 +2476,17 @@ const SIM_TASK_HANDLERS = {
       halfcheetahRollout(
         msg.genome,
         msg.seed,
-        msg.maxSteps || 200,
+        msg.max_steps || 200,
         msg.nudge || null,
         Boolean(msg.includeActivations),
-        msg.includeGeoms !== false
+        msg.include_geoms !== false
       ),
   },
   cartpole: {
     wasm: false,
     evaluate: (g, seeds) => evaluateCartpole(g, seeds),
     rollout: (msg) =>
-      cartpoleRollout(msg.genome, msg.seed, msg.maxSteps || 500, msg.nudge || null, Boolean(msg.includeActivations)),
+      cartpoleRollout(msg.genome, msg.seed, msg.max_steps || 500, msg.nudge || null, Boolean(msg.includeActivations)),
   },
 };
 
@@ -2488,7 +2497,7 @@ function getSimHandler(taskId) {
 function isWasmTask(taskId) {
   if (SIM_TASK_HANDLERS[taskId]?.wasm) return true;
   const spec = taskSpecs[taskId];
-  return Boolean(spec && (spec.sceneId || spec.mjcfAsset));
+  return Boolean(spec && (spec.scene_id || spec.mjcf_asset));
 }
 
 self.addEventListener("message", async (event) => {
@@ -2496,16 +2505,16 @@ self.addEventListener("message", async (event) => {
   const { reqId, type } = msg;
   try {
     if (type === "init") {
-      taskSpecs = msg.taskSpecs || {};
+      taskSpecs = msg.task_specs || {};
       basePath = msg.basePath || "";
-      mujocoWasmUrl = msg.mujocoWasmUrl || "";
+      mujocoWasmUrl = msg.mujoco_wasm_url || "";
       cheetahXmlUrl = msg.cheetahXmlUrl || "";
       if (msg.warmMujoco && mujocoWasmUrl) {
         const warmSpec = msg.warmTaskId ? taskSpecs[msg.warmTaskId] : null;
-        if (warmSpec && warmSpec.sceneManifest) {
+        if (warmSpec && warmSpec.scene_manifest) {
           if (msg.physicsBuffer) {
-            const vInfo = resolveSceneTaskConfig(msg.warmTaskId, msg.warmEnvParams || msg.envParams || null);
-            await ensureMujocoScene(vInfo.sceneId, vInfo.manifest, msg.physicsBuffer);
+            const vInfo = resolveSceneTaskConfig(msg.warmTaskId, msg.warmEnvParams || msg.env_params || null);
+            await ensureMujocoScene(vInfo.scene_id, vInfo.manifest, msg.physicsBuffer);
           } else {
             await ensureMujocoWasm();
           }
@@ -2520,7 +2529,7 @@ self.addEventListener("message", async (event) => {
     }
 
     if (type === "evalBatch") {
-      const { taskId, genomes, seeds, baseModel, physicsBuffer, envParams } = msg;
+      const { taskId, genomes, seeds, baseModel, physicsBuffer, env_params: envParams } = msg;
       const handler = getSimHandler(taskId);
       const items = [];
       for (let i = 0; i < genomes.length; i++) {
@@ -2530,8 +2539,8 @@ self.addEventListener("message", async (event) => {
           index: i,
           fp: genomeFingerprint(g),
           summary: ev.summary,
-          trajSample: ev.trajSample || null,
-          primaryRollout: ev.primaryRollout,
+          traj_sample: ev.traj_sample || null,
+          primary_rollout: ev.primary_rollout,
         });
       }
       self.postMessage({
@@ -2557,7 +2566,7 @@ self.addEventListener("message", async (event) => {
     }
 
     if (type === "evalSummary") {
-      const { taskId, genome, seeds, baseModel, physicsBuffer, envParams } = msg;
+      const { taskId, genome, seeds, baseModel, physicsBuffer, env_params: envParams } = msg;
       const ev = await getSimHandler(taskId).evaluate(genome, seeds, baseModel || null, physicsBuffer || null, envParams || null);
       self.postMessage({
         reqId,
@@ -2565,8 +2574,8 @@ self.addEventListener("message", async (event) => {
         type: "evalSummary",
         engine: isWasmTask(taskId) ? "client-wasm" : "client-js",
         summary: ev.summary,
-        trajSample: ev.trajSample || null,
-        primaryRollout: ev.primaryRollout,
+        traj_sample: ev.traj_sample || null,
+        primary_rollout: ev.primary_rollout,
       });
       return;
     }

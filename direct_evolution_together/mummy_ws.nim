@@ -15,16 +15,16 @@ const
   max_cid_len = 40
 
   min_population_size = 3
-  max_population_size = 128
-  control_max_population_size = 128
+  max_population_size = 10_000
+  control_max_population_size = 10_000
   default_population_size = 30
   default_control_population_size = 30
   default_control_min_votes = 20
   default_crowd_shard_threshold = 16
-  max_round_min_votes = 256
+  max_round_min_votes = 1024
 
   min_votes_per_user = 1
-  max_votes_per_user = 128
+  max_votes_per_user = 256
   default_max_votes_per_user = 20
 
   min_mut_sigma = 0.05
@@ -44,6 +44,9 @@ const
   vote_burst_window_ms = 1000'i64
   vote_burst_max_ops = 64
   max_lineage_nodes = 300
+  max_lineage_cap = 4096
+  lineage_cap_multiplier = 3
+  default_hydrate_max_items = 16
   ticker_sleep_ms = 40
   default_ping_interval_ms = 20_000'i64
   default_stale_timeout_ms = 60_000'i64
@@ -128,12 +131,15 @@ type
     username: string
     message: string
 
-  GoalPopulation = object
+  GoalPopulation = ref object
     name: string
     task: string
     generation: int
     genomes_json: string
     sharded_genomes_json: string
+    genome_items: seq[string]
+    uuid_to_idx: Table[string, int]
+    head_uuid: string
     env_params_json: string
     lineage_json: string
     lean_lineage_json: string
@@ -148,7 +154,7 @@ type
     evolving_started_at_ms: int64
     params: GoalParams
 
-  RoomEvolution = object
+  RoomEvolution = ref object
     goal_order: seq[string]
     goals: Table[string, GoalPopulation]
     pending_creates: HashSet[string]
@@ -203,7 +209,7 @@ func default_runtime_config(): RuntimeConfig {.inline.} =
 # Bootstrap fallbacks only. Python `register_task_configs` installs the authoritative
 # per-task policy (population, quorum, elite fraction) during server startup.
 func default_task_configs(): Table[string, TaskConfig] =
-  result = initTable[string, TaskConfig]()
+  result = init_table[string, TaskConfig]()
   result["image"] = TaskConfig(
     is_control: false,
     default_pop_size: default_population_size,
@@ -281,22 +287,22 @@ var
   ticker_thread: Thread[int]
   is_running = false
 
-initLock(state_lock)
-initLock(ready_lock)
-initCond(ready_cond)
+init_lock(state_lock)
+init_lock(ready_lock)
+init_cond(ready_cond)
 
 template with_state_lock(body: untyped) =
-  withLock state_lock:
+  with_lock state_lock:
     {.gcsafe.}:
       body
 
 proc quiet_logger(level: LogLevel; args: varargs[string]) {.gcsafe.} =
   if level == ErrorLevel:
-    echoLogger(level, args)
+    echo_logger(level, args)
 
 proc now_ms(): int64 {.gcsafe, inline.} =
-  let t = getTime()
-  t.toUnix * 1000 + int64(t.nanosecond div 1_000_000)
+  let t = get_time()
+  t.to_unix * 1000 + int64(t.nanosecond div 1_000_000)
 
 proc utc_time_str(): string {.gcsafe.} =
   now().utc.format("HH:mm:ss")
@@ -318,8 +324,8 @@ func is_valid_room(room: string): bool =
   true
 
 func is_auto_anon(name: string): bool {.inline.} =
-  name.len == 9 and name.toLowerAscii().startsWith("anon-") and
-    name[5 .. ^1].allCharsInSet(HexDigits)
+  name.len == 9 and name.to_lower_ascii().starts_with("anon-") and
+    name[5 .. ^1].all_chars_in_set(HexDigits)
 
 func strip_collision_suffixes(raw: string): string =
   ## Strip trailing disambiguation counters (`-2`..`-99`) so collisions increment
@@ -331,8 +337,8 @@ func strip_collision_suffixes(raw: string): string =
       break
     let head = result[0 ..< dash]
     let tail = result[dash + 1 .. ^1]
-    if head.toLowerAscii() == "anon" or tail.len notin 1..2 or tail[0] == '0' or
-       not tail.allCharsInSet(Digits) or parseInt(tail) < 2:
+    if head.to_lower_ascii() == "anon" or tail.len notin 1..2 or tail[0] == '0' or
+       not tail.all_chars_in_set(Digits) or parse_int(tail) < 2:
       break
     result = head
 
@@ -343,7 +349,7 @@ proc sanitize_username(raw: string): string {.gcsafe.} =
   if cleaned.len > 0:
     return cleaned
   let bytes = urandom(2)
-  "anon-" & toHex(bytes[0]).toLowerAscii() & toHex(bytes[1]).toLowerAscii()
+  "anon-" & to_hex(bytes[0]).to_lower_ascii() & to_hex(bytes[1]).to_lower_ascii()
 
 func sanitize_goal_name(raw: string): string =
   result = raw.strip()
@@ -354,7 +360,7 @@ func sanitize_cid(raw: string): string =
   let trimmed = raw.strip()
   if trimmed.len == 0:
     return ""
-  result = newStringOfCap(min(trimmed.len, max_cid_len))
+  result = new_string_of_cap(min(trimmed.len, max_cid_len))
   for ch in trimmed:
     if ch in {'a'..'z', 'A'..'Z', '0'..'9', '_', '-'}:
       result.add(ch)
@@ -362,7 +368,7 @@ func sanitize_cid(raw: string): string =
         break
 
 proc sanitize_task_name_locked(raw: string): string {.gcsafe.} =
-  let cleaned = raw.strip().toLowerAscii()
+  let cleaned = raw.strip().to_lower_ascii()
   {.gcsafe.}:
     if cleaned in task_configs:
       return cleaned
@@ -416,7 +422,7 @@ proc parse_clamped_int(raw: string; fallback, lo, hi: int): int {.gcsafe.} =
   if s.len == 0:
     return fallback
   try:
-    clamp(parseInt(s), lo, hi)
+    clamp(parse_int(s), lo, hi)
   except CatchableError:
     fallback
 
@@ -425,7 +431,7 @@ proc parse_clamped_float(raw: string; fallback, lo, hi: float): float {.gcsafe.}
   if s.len == 0:
     return fallback
   try:
-    clamp(parseFloat(s), lo, hi)
+    clamp(parse_float(s), lo, hi)
   except CatchableError:
     fallback
 
@@ -435,16 +441,16 @@ proc make_unique_username(
   has_exclude = false;
 ): string {.gcsafe.} =
   ## Ensure no two users in the same room share a username (case-insensitive).
-  var taken = initHashSet[string]()
+  var taken = init_hash_set[string]()
   {.gcsafe.}:
     if room in rooms:
       for ws in rooms[room]:
         if has_exclude and ws == exclude_ws:
           continue
         if ws in clients:
-          taken.incl(clients[ws].username.toLowerAscii())
+          taken.incl(clients[ws].username.to_lower_ascii())
 
-  if desired.toLowerAscii() notin taken:
+  if desired.to_lower_ascii() notin taken:
     return desired
 
   let stem = strip_collision_suffixes(desired)
@@ -456,14 +462,14 @@ proc make_unique_username(
       if stem.len > max_base: stem[0 ..< max_base]
       else: stem
     let candidate = base & suffix_str
-    if candidate.toLowerAscii() notin taken:
+    if candidate.to_lower_ascii() notin taken:
       return candidate
     inc suffix
 
 func empty_votes(n: int): seq[Table[WebSocket, int]] =
-  result = newSeq[Table[WebSocket, int]](n)
+  result = new_seq[Table[WebSocket, int]](n)
   for i in 0 ..< n:
-    result[i] = initTable[WebSocket, int]()
+    result[i] = init_table[WebSocket, int]()
 
 func count_goal_votes(
   goal: GoalPopulation
@@ -472,7 +478,7 @@ func count_goal_votes(
   result.total_votes = 0
   result.voted_candidates = 0
   result.liked_candidates = 0
-  result.stats = newSeq[VoteStats](n)
+  result.stats = new_seq[VoteStats](n)
   for i in 0 ..< n:
     var up = 0
     var down = 0
@@ -554,39 +560,205 @@ proc sync_goal_countdown(goal: var GoalPopulation; c: RuntimeConfig; now: int64)
   else:
     goal.countdown_ends_at_ms = 0
 
-proc build_sharded_genomes_json(genomes_json: string): string {.gcsafe.} =
-  ## Build a lightweight metadata-only genome array (omitting bulky LoRA `adapters`) for sharded WS broadcasts.
+{.push checks: off, stack_trace: off, line_trace: off, optimization: speed.}
+proc json_skip_ws(s: string; start_pos: int): int {.inline, gcsafe.} =
+  var i = start_pos
+  let n = s.len
+  while i < n and s[i] in {' ', '\t', '\r', '\n'}:
+    inc i
+  i
+
+proc c_memchr(s: pointer; c: cint; n: csize_t): pointer {.importc: "memchr", header: "<string.h>", nodecl.}
+
+proc json_skip_string(s: string; open_quote: int): int {.inline, gcsafe.} =
+  var pos = open_quote + 1
+  let n = s.len
+  while pos < n:
+    let found = c_memchr(unsafe_addr s[pos], cint('"'), csize_t(n - pos))
+    if found == nil: return -1
+    let q = pos + (cast[int](found) - cast[int](unsafe_addr s[pos]))
+    var bs = 0
+    var k = q - 1
+    while k >= pos and s[k] == '\\':
+      inc bs
+      dec k
+    if (bs and 1) == 0:
+      return q
+    pos = q + 1
+  -1
+
+proc json_find_value_end(s: string; start_pos: int): int {.gcsafe.} =
+  let n = s.len
+  var i = json_skip_ws(s, start_pos)
+  if i >= n:
+    return -1
+  let first = s[i]
+  if first == '"':
+    return json_skip_string(s, i)
+  elif first in {'{', '['}:
+    var depth = 1
+    inc i
+    while i < n:
+      let ch = s[i]
+      if ch == '"':
+        i = json_skip_string(s, i)
+        if i < 0: return -1
+      elif ch in {'{', '['}:
+        inc depth
+      elif ch in {'}', ']'}:
+        dec depth
+        if depth == 0:
+          return i
+      inc i
+    return -1
+  else:
+    while i < n and s[i] notin {',', '}', ']', ' ', '\t', '\r', '\n'}:
+      inc i
+    return i - 1
+
+iterator walk_json_fields(obj_json: string): tuple[key, span, val: Slice[int]] =
+  let n = obj_json.len
+  var i = json_skip_ws(obj_json, 0)
+  if i < n and obj_json[i] == '{':
+    inc i
+    while true:
+      i = json_skip_ws(obj_json, i)
+      if i >= n or obj_json[i] == '}': break
+      let k_end = json_find_value_end(obj_json, i)
+      if k_end <= i or obj_json[i] != '"': break
+      let colon = json_skip_ws(obj_json, k_end + 1)
+      if colon >= n or obj_json[colon] != ':': break
+      let v_start = json_skip_ws(obj_json, colon + 1)
+      let v_end = json_find_value_end(obj_json, v_start)
+      if v_end < v_start: break
+      yield (key: (i + 1) .. (k_end - 1), span: i .. v_end, val: v_start .. v_end)
+      i = json_skip_ws(obj_json, v_end + 1)
+      if i < n and obj_json[i] == ',': inc i
+
+proc json_split_array_items(arr_json: string): seq[string] {.gcsafe.} =
+  result = @[]
+  let n = arr_json.len
+  var i = json_skip_ws(arr_json, 0)
+  if i >= n or arr_json[i] != '[':
+    return
+  inc i
+  while true:
+    i = json_skip_ws(arr_json, i)
+    if i >= n or arr_json[i] == ']': break
+    let v_end = json_find_value_end(arr_json, i)
+    if v_end < i: break
+    result.add(arr_json[i .. v_end])
+    i = json_skip_ws(arr_json, v_end + 1)
+    if i < n and arr_json[i] == ',': inc i
+
+proc json_strip_object_field(obj_json, field_name: string): string {.gcsafe.} =
+  var kept: seq[Slice[int]] = @[]
+  var stripped = false
+  var cap = 2
+  for f in walk_json_fields(obj_json):
+    if obj_json[f.key] == field_name:
+      stripped = true
+    else:
+      kept.add(f.span)
+      cap += f.span.b - f.span.a + 2
+  if not stripped:
+    return obj_json
+  result = new_string_of_cap(cap)
+  result.add('{')
+  for idx, sl in kept:
+    if idx > 0: result.add(',')
+    result.add(obj_json[sl])
+  result.add('}')
+
+proc json_detach_goal_genomes(obj_json: string): tuple[lean_obj: string, genomes_raw: string] {.gcsafe.} =
+  result = (obj_json, "[]")
+  var parts: seq[string] = @[]
+  var found = false
+  for f in walk_json_fields(obj_json):
+    if obj_json[f.key] == "genomes":
+      result.genomes_raw = obj_json[f.val]
+      parts.add("\"genomes\":[]")
+      found = true
+    else:
+      parts.add(obj_json[f.span])
+  if found:
+    result.lean_obj = "{" & parts.join(",") & "}"
+
+proc json_detach_goals_array(goals_json: string): tuple[lean_arr: string, genomes_list: seq[string]] {.gcsafe.} =
+  let raw_goals = json_split_array_items(goals_json)
+  result.genomes_list = new_seq_of_cap[string](raw_goals.len)
+  var lean_goals = new_seq_of_cap[string](raw_goals.len)
+  for g_raw in raw_goals:
+    let det = json_detach_goal_genomes(g_raw)
+    lean_goals.add(det.lean_obj)
+    result.genomes_list.add(det.genomes_raw)
+  result.lean_arr = "[" & lean_goals.join(",") & "]"
+
+proc json_detach_state_doc(state_json: string): tuple[lean_doc: string, genomes_list: seq[string]] {.gcsafe.} =
+  result = (state_json, @[])
+  var parts: seq[string] = @[]
+  var found = false
+  for f in walk_json_fields(state_json):
+    if state_json[f.key] == "goals":
+      let sub = json_detach_goals_array(state_json[f.val])
+      result.genomes_list = sub.genomes_list
+      parts.add("\"goals\":" & sub.lean_arr)
+      found = true
+    else:
+      parts.add(state_json[f.span])
+  if found:
+    result.lean_doc = "{" & parts.join(",") & "}"
+{.pop.}
+
+proc index_goal_genomes(
+  genomes_json: string;
+  build_sharded: bool;
+): tuple[items: seq[string], sharded_json: string, uuid_map: Table[string, int], head_uuid: string, stubs_arr: JsonNode] {.gcsafe.} =
+  ## Single-pass indexer building O(1) per-slot raw JSON slices, UUID lookup map, and adapter-free stubs.
+  result.items = @[]
+  result.uuid_map = init_table[string, int]()
+  result.head_uuid = ""
+  result.stubs_arr = new_j_array()
   if genomes_json.len == 0:
-    return "[]"
-  let parsed = parseJson(genomes_json)
-  if parsed.kind != JArray:
-    return "[]"
-  var arr = newJArray()
-  for item in parsed:
+    result.sharded_json = if build_sharded: "[]" else: ""
+    return
+  result.items = json_split_array_items(genomes_json)
+  if result.items.len == 0:
+    result.sharded_json = if build_sharded: "[]" else: ""
+    return
+  var stub_parts = if build_sharded: new_seq_of_cap[string](result.items.len) else: @[]
+  for idx in 0 ..< result.items.len:
+    let stub_str = json_strip_object_field(result.items[idx], "adapters")
+    if build_sharded:
+      stub_parts.add(stub_str)
+    try:
+      let stub_node = parse_json(stub_str)
+      result.stubs_arr.add(stub_node)
+      if stub_node.kind == JObject:
+        let u = stub_node.get_or_default("uuid").get_str("").strip().to_lower_ascii()
+        if u.len == 8:
+          result.uuid_map[u] = idx
+          if idx == 0:
+            result.head_uuid = u
+    except CatchableError:
+      result.stubs_arr.add(new_j_object())
+  result.sharded_json = if build_sharded: "[" & stub_parts.join(",") & "]" else: ""
+
+proc extract_lineage_nodes_from_stubs(stubs_arr: JsonNode; gen: int): JsonNode {.gcsafe.} =
+  result = new_j_array()
+  if stubs_arr == nil or stubs_arr.kind != JArray:
+    return
+  for item in stubs_arr:
     if item.kind != JObject:
       continue
-    var stub = copy(item)
-    if "adapters" in stub:
-      stub.delete("adapters")
-    arr.add(stub)
-  $arr
-
-proc extract_lineage_nodes(genomes_json: string; gen: int): JsonNode {.gcsafe.} =
-  result = newJArray()
-  if genomes_json.len == 0:
-    return
-  let parsed = parseJson(genomes_json)
-  if parsed.kind != JArray:
-    return
-  for item in parsed:
-    let gid = item.getOrDefault("id").getInt(0)
-    let guuid = item.getOrDefault("uuid").getStr("")
-    let raw_parents = item.getOrDefault("parents")
+    let gid = item.get_or_default("id").get_int(0)
+    let guuid = item.get_or_default("uuid").get_str("")
+    let raw_parents = item.get_or_default("parents")
     let parents_node =
       if raw_parents != nil and raw_parents.kind == JArray: raw_parents
-      else: newJArray()
-    let op_str = item.getOrDefault("op").getStr(if gen == 0: "random" else: "mutation")
-    if item.getOrDefault("kind").getStr("") == "populora":
+      else: new_j_array()
+    let op_str = item.get_or_default("op").get_str(if gen == 0: "random" else: "mutation")
+    if item.get_or_default("kind").get_str("") == "populora":
       result.add(%*{
         "id": gid,
         "uuid": guuid,
@@ -594,8 +766,8 @@ proc extract_lineage_nodes(genomes_json: string; gen: int): JsonNode {.gcsafe.} 
         "parents": parents_node,
         "op": op_str,
         "kind": "populora",
-        "hash": item.getOrDefault("hash").getStr(""),
-        "baseHash": item.getOrDefault("baseHash").getStr(""),
+        "hash": item.get_or_default("hash").get_str(""),
+        "base_hash": item.get_or_default("base_hash").get_str(""),
       })
     else:
       result.add(%*{
@@ -604,29 +776,35 @@ proc extract_lineage_nodes(genomes_json: string; gen: int): JsonNode {.gcsafe.} 
         "gen": gen,
         "parents": parents_node,
         "op": op_str,
-        "weights": item.getOrDefault("weights"),
-        "biases": item.getOrDefault("biases"),
-        "activations": item.getOrDefault("activations"),
+        "weights": item.get_or_default("weights"),
+        "biases": item.get_or_default("biases"),
+        "activations": item.get_or_default("activations"),
       })
+
+proc extract_lineage_nodes(genomes_json: string; gen: int): JsonNode {.gcsafe.} =
+  if genomes_json.len == 0:
+    return new_j_array()
+  let indexed = index_goal_genomes(genomes_json, false)
+  extract_lineage_nodes_from_stubs(indexed.stubs_arr, gen)
 
 proc compute_lean_lineage(lineage_json, genomes_json: string; gen: int): tuple[lean_json: string, total: int] {.gcsafe.} =
   ## Precompute active-ancestry JSON (omitting live generation weights) once per generation change.
   let parsed =
-    if lineage_json.len > 0: parseJson(lineage_json)
+    if lineage_json.len > 0: parse_json(lineage_json)
     else: extract_lineage_nodes(genomes_json, gen)
   if parsed.kind != JArray:
     return ("[]", 0)
   result.total = parsed.len
 
-  var by_id = initTable[int, JsonNode]()
+  var by_id = init_table[int, JsonNode]()
   for node in parsed:
-    by_id[node.getOrDefault("id").getInt(0)] = node
+    by_id[node.get_or_default("id").get_int(0)] = node
 
-  var keep = initHashSet[int]()
+  var keep = init_hash_set[int]()
   var queue: seq[int] = @[]
   for node in parsed:
-    if node.getOrDefault("gen").getInt(-1) == gen:
-      let gid = node.getOrDefault("id").getInt(0)
+    if node.get_or_default("gen").get_int(-1) == gen:
+      let gid = node.get_or_default("id").get_int(0)
       if gid notin keep:
         keep.incl(gid)
         queue.add(gid)
@@ -636,18 +814,18 @@ proc compute_lean_lineage(lineage_json, genomes_json: string; gen: int): tuple[l
     let cur_id = queue[q_idx]
     inc q_idx
     if cur_id in by_id:
-      for p in by_id[cur_id].getOrDefault("parents"):
-        let pid = p.getInt(0)
+      for p in by_id[cur_id].get_or_default("parents"):
+        let pid = p.get_int(0)
         if pid notin keep and pid in by_id:
           keep.incl(pid)
           queue.add(pid)
 
-  var arr = newJArray()
+  var arr = new_j_array()
   for node in parsed:
-    let gid = node.getOrDefault("id").getInt(0)
+    let gid = node.get_or_default("id").get_int(0)
     if gid notin keep:
       continue
-    if node.getOrDefault("gen").getInt(-1) == gen:
+    if node.get_or_default("gen").get_int(-1) == gen:
       var lean = copy(node)
       if "weights" in lean: lean.delete("weights")
       if "biases" in lean: lean.delete("biases")
@@ -666,13 +844,13 @@ proc refresh_goal_lineage_cache(goal: var GoalPopulation) {.gcsafe.} =
 proc lineage_payload_node(goal: GoalPopulation; full: bool): tuple[lineage: JsonNode, total: int] {.gcsafe.} =
   ## Sends only the current generation's ancestry by default; the client asks
   ## for the archived `all` view on demand.
-  result.lineage = newJArray()
+  result.lineage = new_j_array()
   if not full and goal.lean_lineage_json.len > 0:
-    result.lineage = parseJson(goal.lean_lineage_json)
+    result.lineage = parse_json(goal.lean_lineage_json)
     result.total = goal.lineage_total
     return
   let parsed =
-    if goal.lineage_json.len > 0: parseJson(goal.lineage_json)
+    if goal.lineage_json.len > 0: parse_json(goal.lineage_json)
     else: extract_lineage_nodes(goal.genomes_json, goal.generation)
   if parsed.kind != JArray:
     return
@@ -682,46 +860,52 @@ proc lineage_payload_node(goal: GoalPopulation; full: bool): tuple[lineage: Json
       result.lineage.add(node)
     return
   let fallback = compute_lean_lineage(goal.lineage_json, goal.genomes_json, goal.generation)
-  result.lineage = parseJson(fallback.lean_json)
+  result.lineage = parse_json(fallback.lean_json)
   result.total = fallback.total
 
 proc merge_missing_lineage_json(prev_lineage_json, genomes_json: string; gen: int): string {.gcsafe.} =
   ## Append any newly added genomes (e.g. from population resize) without duplicating existing IDs.
   let fresh = extract_lineage_nodes(genomes_json, gen)
   var combined =
-    if prev_lineage_json.len > 0: parseJson(prev_lineage_json)
-    else: newJArray()
+    if prev_lineage_json.len > 0: parse_json(prev_lineage_json)
+    else: new_j_array()
   if combined.kind != JArray:
-    combined = newJArray()
-  var existing_ids = initHashSet[int]()
+    combined = new_j_array()
+  var existing_ids = init_hash_set[int]()
   for node in combined:
-    existing_ids.incl(node.getOrDefault("id").getInt(0))
+    existing_ids.incl(node.get_or_default("id").get_int(0))
   for node in fresh:
-    let gid = node.getOrDefault("id").getInt(0)
+    let gid = node.get_or_default("id").get_int(0)
     if gid notin existing_ids:
       existing_ids.incl(gid)
       combined.add(node)
   $combined
 
-proc merge_lineage_json(prev_lineage_json, genomes_json: string; gen: int): string {.gcsafe.} =
-  let fresh = extract_lineage_nodes(genomes_json, gen)
+proc merge_lineage_from_fresh(
+  prev_lineage_json: string;
+  fresh: JsonNode;
+  cap_mult: int = lineage_cap_multiplier;
+  min_cap: int = max_lineage_nodes;
+  max_cap: int = max_lineage_cap;
+): string {.gcsafe.} =
+  let eff_max_nodes = clamp(fresh.len * cap_mult, min_cap, max_cap)
   var combined =
-    if prev_lineage_json.len > 0: parseJson(prev_lineage_json)
-    else: newJArray()
+    if prev_lineage_json.len > 0: parse_json(prev_lineage_json)
+    else: new_j_array()
   if combined.kind != JArray:
-    combined = newJArray()
+    combined = new_j_array()
   for node in fresh:
     combined.add(node)
 
-  if combined.len > max_lineage_nodes:
-    ## Keep ancestor chain reachable from the latest generation, bounded to max_lineage_nodes.
-    var by_id = initTable[int, JsonNode]()
+  if combined.len > eff_max_nodes:
+    ## Keep ancestor chain reachable from the latest generation, bounded to eff_max_nodes.
+    var by_id = init_table[int, JsonNode]()
     for node in combined:
-      by_id[node["id"].getInt()] = node
-    var keep_ids = initHashSet[int]()
+      by_id[node["id"].get_int()] = node
+    var keep_ids = init_hash_set[int]()
     var queue: seq[int] = @[]
     for node in fresh:
-      let gid = node["id"].getInt()
+      let gid = node["id"].get_int()
       if gid notin keep_ids:
         keep_ids.incl(gid)
         queue.add(gid)
@@ -731,24 +915,27 @@ proc merge_lineage_json(prev_lineage_json, genomes_json: string; gen: int): stri
       let cur_id = queue[q_idx]
       inc q_idx
       if cur_id in by_id:
-        for p in by_id[cur_id].getOrDefault("parents"):
-          let pid = p.getInt()
+        for p in by_id[cur_id].get_or_default("parents"):
+          let pid = p.get_int()
           if pid notin keep_ids and pid in by_id:
             keep_ids.incl(pid)
             queue.add(pid)
 
-    var pruned = newJArray()
+    var pruned = new_j_array()
     for node in combined:
-      if node["id"].getInt() in keep_ids:
+      if node["id"].get_int() in keep_ids:
         pruned.add(node)
-    if pruned.len > max_lineage_nodes:
-      var trimmed = newJArray()
-      let start_idx = pruned.len - max_lineage_nodes
+    if pruned.len > eff_max_nodes:
+      var trimmed = new_j_array()
+      let start_idx = pruned.len - eff_max_nodes
       for i in start_idx ..< pruned.len:
         trimmed.add(pruned[i])
       pruned = trimmed
     combined = pruned
   $combined
+
+proc merge_lineage_json(prev_lineage_json, genomes_json: string; gen: int): string {.gcsafe.} =
+  merge_lineage_from_fresh(prev_lineage_json, extract_lineage_nodes(genomes_json, gen))
 
 proc build_votes_json(
   goal: GoalPopulation;
@@ -758,8 +945,18 @@ proc build_votes_json(
   result.total_votes = counted.total_votes
   result.voted_candidates = counted.voted_candidates
   result.liked_candidates = counted.liked_candidates
-  result.votes_arr = newJArray()
+  result.votes_arr = new_j_array()
   for i in 0 ..< goal.votes.len:
+    let s = counted.stats[i]
+    if goal.votes[i].len == 0:
+      result.votes_arr.add(%*{
+        "up": 0,
+        "down": 0,
+        "score": 0,
+        "up_users": new_j_array(),
+        "down_users": new_j_array(),
+      })
+      continue
     var up_users: seq[string] = @[]
     var down_users: seq[string] = @[]
     for ws, v in goal.votes[i]:
@@ -768,15 +965,16 @@ proc build_votes_json(
           up_users.add(client_map[ws].username)
         elif v < 0:
           down_users.add(client_map[ws].username)
-    up_users.sort(cmpIgnoreCase)
-    down_users.sort(cmpIgnoreCase)
-    let s = counted.stats[i]
+    if up_users.len > 1:
+      up_users.sort(cmp_ignore_case)
+    if down_users.len > 1:
+      down_users.sort(cmp_ignore_case)
     result.votes_arr.add(%*{
       "up": s.up,
       "down": s.down,
       "score": s.score,
-      "upUsers": up_users,
-      "downUsers": down_users,
+      "up_users": up_users,
+      "down_users": down_users,
     })
 
 proc attach_round_fields(
@@ -793,17 +991,17 @@ proc attach_round_fields(
   if include_votes:
     let vinfo = build_votes_json(goal, client_map)
     obj["votes"] = vinfo.votes_arr
-    obj["totalVotes"] = %vinfo.total_votes
-    obj["votedCandidates"] = %vinfo.voted_candidates
-    obj["likedCandidates"] = %vinfo.liked_candidates
+    obj["total_votes"] = %vinfo.total_votes
+    obj["voted_candidates"] = %vinfo.voted_candidates
+    obj["liked_candidates"] = %vinfo.liked_candidates
   else:
     let counted = count_goal_votes(goal)
-    obj["votes"] = newJArray()
-    obj["totalVotes"] = %counted.total_votes
-    obj["votedCandidates"] = %counted.voted_candidates
-    obj["likedCandidates"] = %counted.liked_candidates
-  obj["minVotes"] = %effective_min_votes(goal, c)
-  obj["maxVotesPerUser"] = %effective_max_votes(goal, c, is_pub_image)
+    obj["votes"] = new_j_array()
+    obj["total_votes"] = %counted.total_votes
+    obj["voted_candidates"] = %counted.voted_candidates
+    obj["liked_candidates"] = %counted.liked_candidates
+  obj["min_votes"] = %effective_min_votes(goal, c)
+  obj["max_votes_per_user"] = %effective_max_votes(goal, c, is_pub_image)
   let tc = task_cfg_locked(goal.task)
   let eff_phase =
     if goal.evolving: "evolving"
@@ -812,20 +1010,20 @@ proc attach_round_fields(
     else: "voting"
   let is_sharded = tc.sim_phase_enabled and goal.votes.len > max(3, tc.crowd_shard_threshold)
   obj["phase"] = %eff_phase
-  obj["simPhaseEnabled"] = %tc.sim_phase_enabled
-  obj["simCompleted"] = %goal.sim_completed
-  obj["simTotal"] = %max(1, goal.votes.len)
-  obj["autoEvolve"] = %goal.auto_evolve
-  obj["genomesSharded"] = %is_sharded
-  obj["crowdShardThreshold"] = %max(3, tc.crowd_shard_threshold)
-  obj["countdownMs"] = %remaining_countdown_ms(goal, now)
-  obj["countdownDurationMs"] = %c.countdown_ms
+  obj["sim_phase_enabled"] = %tc.sim_phase_enabled
+  obj["sim_completed"] = %goal.sim_completed
+  obj["sim_total"] = %max(1, goal.votes.len)
+  obj["auto_evolve"] = %goal.auto_evolve
+  obj["genomes_sharded"] = %is_sharded
+  obj["crowd_shard_threshold"] = %max(3, tc.crowd_shard_threshold)
+  obj["countdown_ms"] = %remaining_countdown_ms(goal, now)
+  obj["countdown_duration_ms"] = %c.countdown_ms
   obj["evolving"] = %goal.evolving
-  obj["mutationSigma"] = %goal.params.mut_sigma
-  obj["eliteFrac"] = %goal.params.elite_frac
-  obj["crossoverRate"] = %goal.params.crossover_rate
-  obj["populationSize"] = %goal.votes.len
-  obj["maxPopulationSize"] = %tc.max_pop_size
+  obj["mutation_sigma"] = %goal.params.mut_sigma
+  obj["elite_frac"] = %goal.params.elite_frac
+  obj["crossover_rate"] = %goal.params.crossover_rate
+  obj["population_size"] = %goal.votes.len
+  obj["max_population_size"] = %tc.max_pop_size
 
 proc goal_to_json_str(
   goal: GoalPopulation;
@@ -839,7 +1037,7 @@ proc goal_to_json_str(
   defer_lineage: bool = false;
 ): string {.gcsafe.} =
   ## Fast zero-reparse serializer: splices pre-serialized `genomes_json` (or `sharded_genomes_json`) directly.
-  let round_obj = newJObject()
+  let round_obj = new_j_object()
   round_obj.attach_round_fields(
     goal, c, client_map, now, room_user_count, is_public, include_votes = include_genomes
   )
@@ -860,26 +1058,26 @@ proc goal_to_json_str(
     else: "[]"
   let task_str = if goal.task.len > 0: goal.task else: "image"
 
-  result = newStringOfCap(genomes_str.len + lineage_str.len + env_params_str.len + round_str.len + 288)
+  result = new_string_of_cap(genomes_str.len + lineage_str.len + env_params_str.len + round_str.len + 288)
   result.add("{\"name\":")
-  result.add(escapeJson(goal.name))
+  result.add(escape_json(goal.name))
   result.add(",\"task\":")
-  result.add(escapeJson(task_str))
-  result.add(",\"envParams\":")
+  result.add(escape_json(task_str))
+  result.add(",\"env_params\":")
   result.add(env_params_str)
   result.add(",\"generation\":")
   result.add($goal.generation)
-  result.add(",\"genomesLoaded\":")
+  result.add(",\"genomes_loaded\":")
   result.add(if include_genomes: "true" else: "false")
-  result.add(",\"genomesAdaptersLoaded\":")
+  result.add(",\"genomes_adapters_loaded\":")
   result.add(if adapters_loaded: "true" else: "false")
   result.add(",\"genomes\":")
   result.add(genomes_str)
-  result.add(",\"lineageLoaded\":")
+  result.add(",\"lineage_loaded\":")
   result.add(if include_lineage: "true" else: "false")
   result.add(",\"lineage\":")
   result.add(lineage_str)
-  result.add(",\"lineageTotal\":")
+  result.add(",\"lineage_total\":")
   result.add($goal.lineage_total)
   result.add(",")
   result.add(round_str[1 .. ^1])
@@ -917,7 +1115,7 @@ proc build_goal_updated_payload(
     defer_adapters = defer_adapters,
     defer_lineage = defer_lineage,
   )
-  result = newStringOfCap(g_str.len + 32)
+  result = new_string_of_cap(g_str.len + 32)
   result.add("{\"type\":\"goal_updated\",\"goal\":")
   result.add(g_str)
   result.add("}")
@@ -958,7 +1156,7 @@ proc build_evolution_state_payload(
           )
           total_len += g_str.len + 1
           parts.add(g_str)
-    result = newStringOfCap(total_len)
+    result = new_string_of_cap(total_len)
     result.add("{\"type\":\"evolution_state\",\"goals\":[")
     for idx, p in parts:
       if idx > 0:
@@ -968,22 +1166,22 @@ proc build_evolution_state_payload(
 
 proc goal_params_json(p: GoalParams): JsonNode {.gcsafe.} =
   %*{
-    "maxVotesPerUser": p.max_votes_per_user,
-    "minVotes": p.min_votes,
-    "mutSigma": p.mut_sigma,
-    "eliteFrac": p.elite_frac,
-    "crossoverRate": p.crossover_rate,
+    "max_votes_per_user": p.max_votes_per_user,
+    "min_votes": p.min_votes,
+    "mut_sigma": p.mut_sigma,
+    "elite_frac": p.elite_frac,
+    "crossover_rate": p.crossover_rate,
   }
 
 proc parse_goal_params_json(node: JsonNode; fallback: GoalParams): GoalParams {.gcsafe.} =
   if node == nil or node.kind != JObject:
     return fallback
   clamp_goal_params(GoalParams(
-    max_votes_per_user: node.getOrDefault("maxVotesPerUser").getInt(fallback.max_votes_per_user),
-    min_votes: node.getOrDefault("minVotes").getInt(fallback.min_votes),
-    mut_sigma: node.getOrDefault("mutSigma").getFloat(fallback.mut_sigma),
-    elite_frac: node.getOrDefault("eliteFrac").getFloat(fallback.elite_frac),
-    crossover_rate: node.getOrDefault("crossoverRate").getFloat(fallback.crossover_rate),
+    max_votes_per_user: node.get_or_default("max_votes_per_user").get_int(fallback.max_votes_per_user),
+    min_votes: node.get_or_default("min_votes").get_int(fallback.min_votes),
+    mut_sigma: node.get_or_default("mut_sigma").get_float(fallback.mut_sigma),
+    elite_frac: node.get_or_default("elite_frac").get_float(fallback.elite_frac),
+    crossover_rate: node.get_or_default("crossover_rate").get_float(fallback.crossover_rate),
   ))
 
 proc serialize_room_evolution(evo: RoomEvolution): string {.gcsafe.} =
@@ -1001,12 +1199,12 @@ proc serialize_room_evolution(evo: RoomEvolution): string {.gcsafe.} =
     let gp_str = $goal_params_json(g.params)
     let env_p_str = if g.env_params_json.len > 0: g.env_params_json else: "{}"
     let task_str = if g.task.len > 0: g.task else: "image"
-    var item = newStringOfCap(g_genomes.len + g_lineage.len + gp_str.len + env_p_str.len + 148)
+    var item = new_string_of_cap(g_genomes.len + g_lineage.len + gp_str.len + env_p_str.len + 148)
     item.add("{\"name\":")
-    item.add(escapeJson(g.name))
+    item.add(escape_json(g.name))
     item.add(",\"task\":")
-    item.add(escapeJson(task_str))
-    item.add(",\"envParams\":")
+    item.add(escape_json(task_str))
+    item.add(",\"env_params\":")
     item.add(env_p_str)
     item.add(",\"generation\":")
     item.add($g.generation)
@@ -1017,16 +1215,16 @@ proc serialize_room_evolution(evo: RoomEvolution): string {.gcsafe.} =
     item.add(",\"params\":")
     item.add(gp_str)
     item.add(",\"phase\":")
-    item.add(escapeJson(if g.phase.len > 0: g.phase else: "voting"))
-    item.add(",\"simCompleted\":")
+    item.add(escape_json(if g.phase.len > 0: g.phase else: "voting"))
+    item.add(",\"sim_completed\":")
     item.add($g.sim_completed)
-    item.add(",\"autoEvolve\":")
+    item.add(",\"auto_evolve\":")
     item.add(if g.auto_evolve: "true" else: "false")
     item.add("}")
     total_len += item.len + 1
     parts.add(item)
-  result = newStringOfCap(total_len)
-  result.add("{\"defaultParams\":")
+  result = new_string_of_cap(total_len)
+  result.add("{\"default_params\":")
   result.add(dp_str)
   result.add(",\"goals\":[")
   for idx, p in parts:
@@ -1042,7 +1240,7 @@ proc build_presence_payload(room: string): string {.gcsafe.} =
       for ws in rooms[room]:
         if ws in clients:
           users.add(clients[ws].username)
-  users.sort(cmpIgnoreCase)
+  users.sort(cmp_ignore_case)
   $(%*{
     "type": "presence",
     "users": users,
@@ -1062,7 +1260,7 @@ proc build_history_payload(room: string; limit: int = history_limit): string {.g
     else: parts[start_idx .. ^1]
   let has_more = if start_idx > 0: "true" else: "false"
   "{\"type\":\"history\",\"total\":" & $total & ",\"offset\":" & $start_idx &
-    ",\"hasMore\":" & has_more & ",\"messages\":[" & slice.join(",") & "]}"
+    ",\"has_more\":" & has_more & ",\"messages\":[" & slice.join(",") & "]}"
 
 proc system_msg_payload(msg: string): string {.gcsafe.} =
   $(%*{
@@ -1090,7 +1288,7 @@ proc queue_evolution_state_outbox_locked(room: string; outbox: var seq[PendingBr
     if targets.len == 0:
       return
     type EvoBucketKey = tuple[lazy: bool, focus: string, defer_adap: bool, defer_lin: bool]
-    var buckets = initTable[EvoBucketKey, seq[WebSocket]]()
+    var buckets = init_table[EvoBucketKey, seq[WebSocket]]()
     let has_evo = room in room_evolution
     for ws in targets:
       if ws in clients:
@@ -1135,7 +1333,7 @@ proc queue_goal_updated_outbox_locked(
     let r_cnt = max(1, targets.len)
     let is_pub = room == "lobby"
     type GoalBucketKey = tuple[inc_genomes: bool, defer_adap: bool, defer_lin: bool]
-    var buckets = initTable[GoalBucketKey, seq[WebSocket]]()
+    var buckets = init_table[GoalBucketKey, seq[WebSocket]]()
     for ws in targets:
       if ws in clients:
         let cinfo = clients[ws]
@@ -1171,7 +1369,7 @@ proc client_uses_gzip(ws: WebSocket): bool {.gcsafe.} =
 
 proc compress_payload(payload: string): string {.gcsafe.} =
   try:
-    result = compress(payload, DefaultCompression, dfGzip)
+    result = compress(payload, DefaultCompression, df_gzip)
   except CatchableError:
     result = ""
 
@@ -1220,27 +1418,29 @@ proc init_goal_population_locked(
   let tc = task_cfg_locked(clean_task)
   var params = gp
   clamp_control_min_votes_locked(clean_task, params)
-  let l_json = merge_lineage_json("", genomes_json, 0)
+  let indexed = index_goal_genomes(genomes_json, tc.sim_phase_enabled)
+  let eff_pop_len = if pop_len > 0: pop_len else: max(1, indexed.items.len)
+  let l_json = merge_lineage_from_fresh("", extract_lineage_nodes_from_stubs(indexed.stubs_arr, 0))
   let lean = compute_lean_lineage(l_json, genomes_json, 0)
   let init_phase = if tc.sim_phase_enabled: "simulating" else: "voting"
   let init_auto =
     if auto_evolve_override >= 0: auto_evolve_override > 0
     else: tc.default_auto_evolve
-  let sharded_json =
-    if tc.sim_phase_enabled: build_sharded_genomes_json(genomes_json)
-    else: ""
   let eff_env_json = if env_params_json.len > 0: env_params_json else: "{}"
   GoalPopulation(
     name: name,
     task: clean_task,
     generation: 0,
     genomes_json: genomes_json,
-    sharded_genomes_json: sharded_json,
+    sharded_genomes_json: indexed.sharded_json,
+    genome_items: indexed.items,
+    uuid_to_idx: indexed.uuid_map,
+    head_uuid: indexed.head_uuid,
     env_params_json: eff_env_json,
     lineage_json: l_json,
     lean_lineage_json: lean.lean_json,
     lineage_total: lean.total,
-    votes: empty_votes(max(1, pop_len)),
+    votes: empty_votes(max(1, eff_pop_len)),
     phase: init_phase,
     sim_completed: 0,
     auto_evolve: init_auto,
@@ -1253,62 +1453,65 @@ proc init_goal_population_locked(
 proc populate_room_goals_locked(
   parsed: JsonNode;
   dp: GoalParams;
+  detached_genomes: seq[string] = @[];
 ): RoomEvolution {.gcsafe.} =
   result = RoomEvolution(
     goal_order: @[],
-    goals: initTable[string, GoalPopulation](),
-    pending_creates: initHashSet[string](),
-    pending_create_tasks: initTable[string, string](),
-    pending_create_params: initTable[string, GoalParams](),
-    pending_create_env_params: initTable[string, string](),
+    goals: init_table[string, GoalPopulation](),
+    pending_creates: init_hash_set[string](),
+    pending_create_tasks: init_table[string, string](),
+    pending_create_params: init_table[string, GoalParams](),
+    pending_create_env_params: init_table[string, string](),
     default_params: dp,
     initializing: false,
   )
-  for item in parsed:
-    let name = item["name"].getStr()
-    let task = sanitize_task_name_locked(item.getOrDefault("task").getStr("image"))
-    let g_arr = item["genomes"]
-    let g_json = $g_arr
+  for idx in 0 ..< parsed.len:
+    let item = parsed[idx]
+    let name = item["name"].get_str()
+    let task = sanitize_task_name_locked(item.get_or_default("task").get_str("image"))
+    let g_json =
+      if idx < detached_genomes.len: detached_genomes[idx]
+      else: $item["genomes"]
     var gp = dp
-    let item_mv = item.getOrDefault("minVotes").getInt(-1)
+    let item_mv = item.get_or_default("min_votes").get_int(-1)
     if item_mv > 0:
       gp.min_votes = clamp(item_mv, 1, max_round_min_votes)
     elif gp.min_votes <= 0:
       gp.min_votes = default_min_votes_for_task_locked(task)
-    if item.hasKey("eliteFrac") and item["eliteFrac"].kind in {JFloat, JInt}:
-      gp.elite_frac = clamp(item["eliteFrac"].getFloat(gp.elite_frac), min_elite_frac, max_elite_frac)
+    if item.has_key("elite_frac") and item["elite_frac"].kind in {JFloat, JInt}:
+      gp.elite_frac = clamp(item["elite_frac"].get_float(gp.elite_frac), min_elite_frac, max_elite_frac)
     elif task != "image":
       gp.elite_frac = default_elite_frac_for_task_locked(task, dp.elite_frac)
     let auto_override =
-      if item.hasKey("autoEvolve") and item["autoEvolve"].kind == JBool:
-        (if item["autoEvolve"].getBool(false): 1 else: 0)
+      if item.has_key("auto_evolve") and item["auto_evolve"].kind == JBool:
+        (if item["auto_evolve"].get_bool(false): 1 else: 0)
       else: -1
-    let env_node = item.getOrDefault("envParams")
+    let env_node = item.get_or_default("env_params")
     let env_json =
       if env_node != nil and env_node.kind == JObject: $env_node
       else: "{}"
     result.goal_order.add(name)
-    result.goals[name] = init_goal_population_locked(name, task, g_json, g_arr.len, gp, auto_override, env_json)
+    result.goals[name] = init_goal_population_locked(name, task, g_json, 0, gp, auto_override, env_json)
 
 proc upgrade_handler(request: Request) {.gcsafe.} =
-  let room = request.pathParams["room"]
+  let room = request.path_params["room"]
   if not is_valid_room(room):
     request.respond(400, body = "Invalid room name")
     return
 
-  let username = sanitize_username(request.queryParams["username"])
-  let cid = sanitize_cid(request.queryParams["cid"])
-  let is_reconnect = request.queryParams["reconnect"] == "1"
-  let initial_goal = sanitize_goal_name(request.queryParams["goal"])
-  let raw_focus_goal = sanitize_goal_name(request.queryParams["focus"])
+  let username = sanitize_username(request.query_params["username"])
+  let cid = sanitize_cid(request.query_params["cid"])
+  let is_reconnect = request.query_params["reconnect"] == "1"
+  let initial_goal = sanitize_goal_name(request.query_params["goal"])
+  let raw_focus_goal = sanitize_goal_name(request.query_params["focus"])
   let focus_goal = if raw_focus_goal.len > 0: raw_focus_goal else: initial_goal
-  let lazy_goals = request.queryParams["lazy"] == "1"
-  let defer_adapters = request.queryParams["defer_adapters"] == "1"
-  let defer_lineage = request.queryParams["defer_lineage"] == "1"
-  let chat_limit = parse_clamped_int(request.queryParams["chat_limit"], history_limit, 0, history_limit)
-  let raw_initial_task = request.queryParams["task"]
-  let wants_gzip = request.queryParams["gzip"] == "1"
-  let raw_evolve_token = request.queryParams["evolve_token"].strip()
+  let lazy_goals = request.query_params["lazy"] == "1"
+  let defer_adapters = request.query_params["defer_adapters"] == "1"
+  let defer_lineage = request.query_params["defer_lineage"] == "1"
+  let chat_limit = parse_clamped_int(request.query_params["chat_limit"], history_limit, 0, history_limit)
+  let raw_initial_task = request.query_params["task"]
+  let wants_gzip = request.query_params["gzip"] == "1"
+  let raw_evolve_token = request.query_params["evolve_token"].strip()
   var
     base_cfg: RuntimeConfig
     server_evolve_token: string
@@ -1330,10 +1533,10 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
     constant_time_eq(raw_evolve_token, server_evolve_token)
 
   let req_pop = parse_clamped_int(
-    request.queryParams["pop"],
+    request.query_params["pop"],
     task_default_pop, min_population_size, task_max_pop,
   )
-  let raw_min_votes = request.queryParams["min_votes"]
+  let raw_min_votes = request.query_params["min_votes"]
   let req_min_votes =
     if raw_min_votes.strip().len > 0:
       parse_clamped_int(raw_min_votes, task_default_min_votes, 1, max_round_min_votes)
@@ -1341,35 +1544,35 @@ proc upgrade_handler(request: Request) {.gcsafe.} =
       task_default_min_votes
   let req_params = GoalParams(
     max_votes_per_user: parse_clamped_int(
-      request.queryParams["max_votes"],
+      request.query_params["max_votes"],
       base_cfg.params.max_votes_per_user, min_votes_per_user, max_votes_per_user,
     ),
     min_votes: req_min_votes,
     mut_sigma: parse_clamped_float(
-      request.queryParams["sigma"],
+      request.query_params["sigma"],
       base_cfg.params.mut_sigma, min_mut_sigma, max_mut_sigma,
     ),
     elite_frac: parse_clamped_float(
-      request.queryParams["elite_frac"],
+      request.query_params["elite_frac"],
       task_default_elite, min_elite_frac, max_elite_frac,
     ),
     crossover_rate: parse_clamped_float(
-      request.queryParams["crossover"],
+      request.query_params["crossover"],
       base_cfg.params.crossover_rate, min_crossover_rate, max_crossover_rate,
     ),
   )
-  let raw_env_q = request.queryParams["env_params"].strip()
+  let raw_env_q = request.query_params["env_params"].strip()
   var req_env_params_json = "{}"
   if raw_env_q.len > 0 and raw_env_q.len <= 1024:
     try:
-      let parsed_env = parseJson(raw_env_q)
+      let parsed_env = parse_json(raw_env_q)
       if parsed_env.kind == JObject:
         req_env_params_json = $parsed_env
     except CatchableError:
       discard
 
   with_state_lock:
-    let ws = request.upgradeToWebSocket()
+    let ws = request.upgrade_to_web_socket()
     inc next_upgrade_seq
     let seq_num = next_upgrade_seq
     pending_upgrades[ws] = PendingClient(
@@ -1512,7 +1715,7 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
         active_goal: resolved_active_goal,
       )
       if info.room notin rooms:
-        rooms[info.room] = initHashSet[WebSocket]()
+        rooms[info.room] = init_hash_set[WebSocket]()
       rooms[info.room].incl(ws)
 
       if same_room_old_sockets.len > 0 and info.room in room_evolution:
@@ -1556,7 +1759,7 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
       identity_payload = $(%*{
         "type": "identity",
         "username": unique_name,
-        "canEvolveNow": info.can_evolve_now,
+        "can_evolve_now": info.can_evolve_now,
       })
       history_payload = build_history_payload(info.room, info.chat_limit)
       prioritize_evolution = info.defer_adapters
@@ -1580,11 +1783,11 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
           else: cfg.population_size
         room_evolution[info.room] = RoomEvolution(
           goal_order: @[],
-          goals: initTable[string, GoalPopulation](),
-          pending_creates: initHashSet[string](),
-          pending_create_tasks: initTable[string, string](),
-          pending_create_params: initTable[string, GoalParams](),
-          pending_create_env_params: initTable[string, string](),
+          goals: init_table[string, GoalPopulation](),
+          pending_creates: init_hash_set[string](),
+          pending_create_tasks: init_table[string, string](),
+          pending_create_params: init_table[string, GoalParams](),
+          pending_create_env_params: init_table[string, string](),
           default_params: room_params,
           initializing: true,
         )
@@ -1630,7 +1833,7 @@ proc on_open(ws: WebSocket) {.gcsafe.} =
       broadcast(targets, join_payload)
 
 proc handle_rename(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
-  let desired_name = sanitize_username(payload.getOrDefault("username").getStr(""))
+  let desired_name = sanitize_username(payload.get_or_default("username").get_str(""))
   var
     old_name = ""
     assigned_name = ""
@@ -1678,7 +1881,7 @@ proc handle_rename(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
     send_payload(ws, $(%*{
       "type": "identity",
       "username": assigned_name,
-      "canEvolveNow": can_evolve,
+      "can_evolve_now": can_evolve,
     }))
   if changed:
     broadcast(other_targets, cursor_leave_payload)
@@ -1688,10 +1891,10 @@ proc handle_rename(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
       broadcast(targets, vp)
 
 proc handle_cursor(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
-  let x = clamp(payload.getOrDefault("x").getFloat(0.0), -0.05, 1.05)
-  let y = clamp(payload.getOrDefault("y").getFloat(0.0), -0.05, 1.05)
-  let visible = payload.getOrDefault("visible").getBool(true)
-  let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
+  let x = clamp(payload.get_or_default("x").get_float(0.0), -0.05, 1.05)
+  let y = clamp(payload.get_or_default("y").get_float(0.0), -0.05, 1.05)
+  let visible = payload.get_or_default("visible").get_bool(true)
+  let goal_name = sanitize_goal_name(payload.get_or_default("goal").get_str(""))
   var
     cursor_payload = ""
     other_targets: seq[WebSocket]
@@ -1715,7 +1918,7 @@ proc handle_cursor(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
     broadcast(other_targets, cursor_payload)
 
 proc handle_chat(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
-  var text = payload.getOrDefault("message").getStr("").strip()
+  var text = payload.get_or_default("message").get_str("").strip()
   if text.len == 0:
     return
   if text.len > max_message_len:
@@ -1760,10 +1963,10 @@ proc handle_chat(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
     broadcast(targets, chat_payload)
 
 proc handle_create_goal(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
-  let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
+  let goal_name = sanitize_goal_name(payload.get_or_default("goal").get_str(""))
   if goal_name.len == 0:
     return
-  let raw_task = payload.getOrDefault("task").getStr("image")
+  let raw_task = payload.get_or_default("task").get_str("image")
 
   with_state_lock:
     let task_name = sanitize_task_name_locked(raw_task)
@@ -1776,20 +1979,20 @@ proc handle_create_goal(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
         let d = room_evolution[info.room].default_params
         let default_pop = default_pop_for_task_locked(task_name, cfg.population_size)
         let req_pop = clamp(
-          payload.getOrDefault("population_size").getInt(default_pop),
+          payload.get_or_default("population_size").get_int(default_pop),
           min_population_size, max_pop_for_task_locked(task_name),
         )
-        let req_min_votes = payload.getOrDefault("min_votes").getInt(default_min_votes_for_task_locked(task_name))
+        let req_min_votes = payload.get_or_default("min_votes").get_int(default_min_votes_for_task_locked(task_name))
         let task_default_elite = default_elite_frac_for_task_locked(task_name, d.elite_frac)
         let g_params = clamp_goal_params(GoalParams(
-          max_votes_per_user: payload.getOrDefault("max_votes_per_user").getInt(d.max_votes_per_user),
+          max_votes_per_user: payload.get_or_default("max_votes_per_user").get_int(d.max_votes_per_user),
           min_votes: req_min_votes,
-          mut_sigma: payload.getOrDefault("mutation_sigma").getFloat(d.mut_sigma),
-          elite_frac: payload.getOrDefault("elite_frac").getFloat(task_default_elite),
-          crossover_rate: payload.getOrDefault("crossover_rate").getFloat(d.crossover_rate),
+          mut_sigma: payload.get_or_default("mutation_sigma").get_float(d.mut_sigma),
+          elite_frac: payload.get_or_default("elite_frac").get_float(task_default_elite),
+          crossover_rate: payload.get_or_default("crossover_rate").get_float(d.crossover_rate),
         ))
-        let env_node = payload.getOrDefault("env_params")
-        let alt_env_node = payload.getOrDefault("envParams")
+        let env_node = payload.get_or_default("env_params")
+        let alt_env_node = payload.get_or_default("env_params")
         var req_env_json = "{}"
         if env_node != nil and env_node.kind == JObject:
           req_env_json = $env_node
@@ -1812,11 +2015,11 @@ proc handle_create_goal(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
         ))
 
 proc handle_cast_vote(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
-  let goal_name = payload.getOrDefault("goal").getStr("")
-  let idx = payload.getOrDefault("index").getInt(-1)
-  let req_vote = payload.getOrDefault("vote").getInt(0)
-  let has_req_gen = payload.hasKey("generation")
-  let req_gen = if has_req_gen: payload.getOrDefault("generation").getInt(-1) else: -1
+  let goal_name = payload.get_or_default("goal").get_str("")
+  let idx = payload.get_or_default("index").get_int(-1)
+  let req_vote = payload.get_or_default("vote").get_int(0)
+  let has_req_gen = payload.has_key("generation")
+  let req_gen = if has_req_gen: payload.get_or_default("generation").get_int(-1) else: -1
   if idx < 0 or req_vote notin [-1, 0, 1]:
     return
 
@@ -1836,12 +2039,12 @@ proc handle_cast_vote(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
             "type": "vote_throttled",
             "goal": goal_name,
             "index": idx,
-            "maxVotesPerUser": effective_max_votes(goal, cfg, is_public_image_room(client_info.room, goal)),
+            "max_votes_per_user": effective_max_votes(goal, cfg, is_public_image_room(client_info.room, goal)),
             "message": "Simulations still running — voting unlocks once all candidates are evaluated",
           })
         elif not goal.evolving and idx < goal.votes.len and (not has_req_gen or req_gen == goal.generation):
           let now = now_ms()
-          let prev_vote = goal.votes[idx].getOrDefault(ws, 0)
+          let prev_vote = goal.votes[idx].get_or_default(ws, 0)
           let next_vote = if prev_vote == req_vote: 0 else: req_vote
           let cap = effective_max_votes(
             goal, cfg, is_public_image_room(client_info.room, goal)
@@ -1851,7 +2054,7 @@ proc handle_cast_vote(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
               "type": "vote_throttled",
               "goal": goal_name,
               "index": idx,
-              "maxVotesPerUser": cap,
+              "max_votes_per_user": cap,
               "message": "Vote limit reached (" & $cap & " active votes per round — unvote one to switch)",
             })
           elif not allow_vote_burst(client_info, now):
@@ -1860,7 +2063,7 @@ proc handle_cast_vote(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
               "type": "vote_throttled",
               "goal": goal_name,
               "index": idx,
-              "maxVotesPerUser": cap,
+              "max_votes_per_user": cap,
               "message": "Vote rate limit reached — pause a moment before clicking again",
             })
           else:
@@ -1901,7 +2104,7 @@ proc on_close(ws: WebSocket) {.gcsafe.} =
     broadcast(item.targets, item.payload)
 
 proc handle_lineage_all(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
-  let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
+  let goal_name = sanitize_goal_name(payload.get_or_default("goal").get_str(""))
   var response = ""
   with_state_lock:
     if ws in clients:
@@ -1914,13 +2117,13 @@ proc handle_lineage_all(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
           "goal": goal_name,
           "generation": goal.generation,
           "lineage": lineage_payload.lineage,
-          "lineageTotal": lineage_payload.total,
+          "lineage_total": lineage_payload.total,
         })
   if response.len > 0:
     send_payload(ws, response)
 
 proc handle_lineage_active(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
-  let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
+  let goal_name = sanitize_goal_name(payload.get_or_default("goal").get_str(""))
   var response = ""
   with_state_lock:
     if ws in clients:
@@ -1933,59 +2136,83 @@ proc handle_lineage_active(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
           "goal": goal_name,
           "generation": goal.generation,
           "lineage": lineage_payload.lineage,
-          "lineageTotal": lineage_payload.total,
+          "lineage_total": lineage_payload.total,
         })
   if response.len > 0:
     send_payload(ws, response)
 
-proc handle_hydrate_genomes(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
-  let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
+proc collect_genome_slice(
+  items: seq[string];
+  indices_node: JsonNode;
+  max_items: int = 0;
+): seq[tuple[idx: int, raw: string]] {.gcsafe.} =
+  result = @[]
+  let n_items = items.len
+  if n_items == 0:
+    return
+  let cap = if max_items > 0: max_items else: n_items
+  if indices_node != nil and indices_node.kind == JArray and indices_node.len > 0:
+    var seen = init_hash_set[int]()
+    for node in indices_node:
+      if node.kind == JInt:
+        let idx = node.get_int(-1)
+        if idx >= 0 and idx < n_items and idx notin seen:
+          seen.incl(idx)
+          result.add((idx: idx, raw: items[idx]))
+          if result.len >= cap: break
+  elif max_items > 0:
+    for idx in 0 ..< min(n_items, cap):
+      result.add((idx: idx, raw: items[idx]))
+
+proc append_indexed_genome_items(dst: var string; pairs: seq[tuple[idx: int, raw: string]]) {.gcsafe.} =
+  dst.add("[")
+  for i, p in pairs:
+    if i > 0: dst.add(",")
+    dst.add("{\"index\":")
+    dst.add($p.idx)
+    dst.add(",\"genome\":")
+    dst.add(p.raw)
+    dst.add("}")
+  dst.add("]")
+
+proc handle_hydrate_genomes(
+  ws: WebSocket;
+  payload: JsonNode;
+  max_items: int = default_hydrate_max_items;
+) {.gcsafe.} =
+  let goal_name = sanitize_goal_name(payload.get_or_default("goal").get_str(""))
   if goal_name.len == 0:
     return
-  let req_gen = payload.getOrDefault("generation").getInt(-1)
-  let indices_node = payload.getOrDefault("indices")
+  let req_gen = payload.get_or_default("generation").get_int(-1)
+  let indices_node = payload.get_or_default("indices")
   var
-    genomes_raw = ""
+    selected_pairs: seq[tuple[idx: int, raw: string]] = @[]
     actual_gen = -1
   with_state_lock:
     if ws in clients:
       let room = clients[ws].room
       if room in room_evolution and goal_name in room_evolution[room].goals:
         let goal = room_evolution[room].goals[goal_name]
-        if req_gen < 0 or goal.generation == req_gen:
-          genomes_raw = goal.genomes_json
+        if (req_gen < 0 or goal.generation == req_gen) and goal.genome_items.len > 0:
           actual_gen = goal.generation
-  if actual_gen < 0 or genomes_raw.len == 0:
+          selected_pairs = collect_genome_slice(goal.genome_items, indices_node, max_items = max_items)
+  if actual_gen < 0 or selected_pairs.len == 0:
     return
-  var parsed: JsonNode
-  try:
-    parsed = parseJson(genomes_raw)
-  except CatchableError:
-    return
-  if parsed.kind != JArray:
-    return
-  var items = newJArray()
-  if indices_node != nil and indices_node.kind == JArray and indices_node.len > 0:
-    var seen = initHashSet[int]()
-    for idx_n in indices_node:
-      if idx_n.kind == JInt:
-        let idx = idx_n.getInt(-1)
-        if idx >= 0 and idx < parsed.len and idx notin seen:
-          seen.incl(idx)
-          items.add(%*{"index": idx, "genome": parsed[idx]})
-  else:
-    for idx in 0 ..< parsed.len:
-      items.add(%*{"index": idx, "genome": parsed[idx]})
-  send_payload(ws, $(%*{
-    "type": "genomes_hydrated",
-    "goal": goal_name,
-    "generation": actual_gen,
-    "items": items,
-  }))
+  var total_len = goal_name.len + 64
+  for pair in selected_pairs: total_len += pair.raw.len + 28
+  var resp = new_string_of_cap(total_len)
+  resp.add("{\"type\":\"genomes_hydrated\",\"goal\":")
+  resp.add(escape_json(goal_name))
+  resp.add(",\"generation\":")
+  resp.add($actual_gen)
+  resp.add(",\"items\":")
+  append_indexed_genome_items(resp, selected_pairs)
+  resp.add("}")
+  send_payload(ws, resp)
 
 proc handle_history_more(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
-  let before_idx = payload.getOrDefault("before").getInt(0)
-  let req_limit = clamp(payload.getOrDefault("limit").getInt(50), 1, history_limit)
+  let before_idx = payload.get_or_default("before").get_int(0)
+  let req_limit = clamp(payload.get_or_default("limit").get_int(50), 1, history_limit)
   var response = ""
   with_state_lock:
     if ws in clients:
@@ -2002,7 +2229,7 @@ proc handle_history_more(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
       let has_more = if start_idx > 0: "true" else: "false"
       response =
         "{\"type\":\"history_more\",\"total\":" & $total & ",\"offset\":" & $start_idx &
-        ",\"hasMore\":" & has_more & ",\"messages\":[" & slice.join(",") & "]}"
+        ",\"has_more\":" & has_more & ",\"messages\":[" & slice.join(",") & "]}"
   if response.len > 0:
     send_payload(ws, response)
 
@@ -2021,8 +2248,8 @@ proc build_evolve_job_and_broadcast(
 
   let counted = count_goal_votes(goal)
   let pop_len = goal.votes.len
-  var scores = newSeq[int](pop_len)
-  var up_counts = newSeq[int](pop_len)
+  var scores = new_seq[int](pop_len)
+  var up_counts = new_seq[int](pop_len)
   for i in 0 ..< pop_len:
     scores[i] = counted.stats[i].score
     up_counts[i] = counted.stats[i].up
@@ -2048,10 +2275,10 @@ proc build_evolve_job_and_broadcast(
   )
 
 proc handle_set_auto_evolve(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
-  let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
+  let goal_name = sanitize_goal_name(payload.get_or_default("goal").get_str(""))
   if goal_name.len == 0:
     return
-  let enabled = payload.getOrDefault("enabled").getBool(false)
+  let enabled = payload.get_or_default("enabled").get_bool(false)
   let now = now_ms()
   var
     outbox: seq[PendingBroadcast] = @[]
@@ -2093,7 +2320,7 @@ proc handle_set_auto_evolve(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
     broadcast(targets, sys_msg)
 
 proc handle_evolve_now(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
-  let goal_name = payload.getOrDefault("goal").getStr("")
+  let goal_name = payload.get_or_default("goal").get_str("")
   if goal_name.len == 0:
     return
   let now = now_ms()
@@ -2132,10 +2359,10 @@ proc handle_evolve_now(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
     broadcast(targets, sys_msg)
 
 proc handle_select_goal(ws: WebSocket; payload: JsonNode) {.gcsafe.} =
-  let goal_name = sanitize_goal_name(payload.getOrDefault("goal").getStr(""))
+  let goal_name = sanitize_goal_name(payload.get_or_default("goal").get_str(""))
   if goal_name.len == 0:
     return
-  let need_genomes = payload.getOrDefault("needGenomes").getBool(true)
+  let need_genomes = payload.get_or_default("need_genomes").get_bool(true)
   var response = ""
   with_state_lock:
     if ws in clients:
@@ -2179,12 +2406,12 @@ proc websocket_handler(
       discard
     var payload: JsonNode
     try:
-      payload = parseJson(message.data)
+      payload = parse_json(message.data)
     except CatchableError:
       return
     if payload.kind != JObject:
       return
-    case payload.getOrDefault("type").getStr("chat")
+    case payload.get_or_default("type").get_str("chat")
     of "ping": send_payload(ws, """{"type":"pong"}""")
     of "leave": handle_leave(ws)
     of "rename": handle_rename(ws, payload)
@@ -2207,9 +2434,9 @@ proc websocket_handler(
 
 proc ticker_thread_proc(unused: int) {.thread.} =
   {.gcsafe.}:
-    while not stop_ticker.load(moAcquire):
+    while not stop_ticker.load(mo_acquire):
       sleep(ticker_sleep_ms)
-      if stop_ticker.load(moAcquire):
+      if stop_ticker.load(mo_acquire):
         break
 
       var outbox: seq[PendingBroadcast] = @[]
@@ -2279,11 +2506,11 @@ proc internal_room_goals_handler(request: Request) {.gcsafe.} =
   if not auth.ok:
     request.respond(auth.code, body = auth.msg)
     return
-  let room = request.pathParams["room"]
+  let room = request.path_params["room"]
   if not is_valid_room(room):
     request.respond(400, body = "Invalid room name")
     return
-  var obj = newJObject()
+  var obj = new_j_object()
   with_state_lock:
     if room in room_evolution:
       for g_name in room_evolution[room].goal_order:
@@ -2301,14 +2528,14 @@ proc internal_goal_reset_handler(request: Request) {.gcsafe.} =
     return
   var parsed: JsonNode
   try:
-    parsed = parseJson(request.body)
+    parsed = parse_json(request.body)
   except CatchableError:
     request.respond(400, body = "Invalid JSON")
     return
-  let room = parsed.getOrDefault("room").getStr("")
-  let goal_name = parsed.getOrDefault("goal").getStr("")
-  let username = parsed.getOrDefault("username").getStr("admin")
-  let genomes_node = parsed.getOrDefault("genomes")
+  let room = parsed.get_or_default("room").get_str("")
+  let goal_name = parsed.get_or_default("goal").get_str("")
+  let username = parsed.get_or_default("username").get_str("admin")
+  let genomes_node = parsed.get_or_default("genomes")
   if room.len == 0 or goal_name.len == 0 or genomes_node == nil or genomes_node.kind != JArray:
     request.respond(400, body = "Missing room, goal, or genomes")
     return
@@ -2322,21 +2549,27 @@ proc internal_room_clear_handler(request: Request) {.gcsafe.} =
     return
   var parsed: JsonNode
   try:
-    parsed = parseJson(request.body)
+    parsed = parse_json(request.body)
   except CatchableError:
     request.respond(400, body = "Invalid JSON")
     return
-  let room = parsed.getOrDefault("room").getStr("")
-  let goal_name = parsed.getOrDefault("goal").getStr("")
-  let username = parsed.getOrDefault("username").getStr("admin")
-  let goals_node = parsed.getOrDefault("goals")
+  let room = parsed.get_or_default("room").get_str("")
+  let goal_name = parsed.get_or_default("goal").get_str("")
+  let username = parsed.get_or_default("username").get_str("admin")
+  let goals_node = parsed.get_or_default("goals")
   if room.len == 0 or goals_node == nil or goals_node.kind != JArray:
     request.respond(400, body = "Missing room or goals")
     return
   clear_room_evolution(room, $goals_node, goal_name, username)
   request.respond(200, @[("Content-Type", "application/json")], """{"ok":true}""")
 
-proc build_room_snapshot_json(room: string; filter_goal: string = ""; include_lineage: bool = false): string {.gcsafe.} =
+proc build_room_snapshot_json(
+  room: string;
+  filter_goal: string = "";
+  include_lineage: bool = false;
+  stubs_only: bool = false;
+  include_genomes: bool = true;
+): string {.gcsafe.} =
   var parts: seq[string] = @[]
   var total_len = room.len + 36
   with_state_lock:
@@ -2347,26 +2580,35 @@ proc build_room_snapshot_json(room: string; filter_goal: string = ""; include_li
           continue
         if g_name in evo.goals:
           let g = evo.goals[g_name]
-          let g_genomes = if g.genomes_json.len > 0: g.genomes_json else: "[]"
+          let g_genomes =
+            if not include_genomes: "[]"
+            elif stubs_only and g.sharded_genomes_json.len > 0: g.sharded_genomes_json
+            elif g.genomes_json.len > 0: g.genomes_json
+            else: "[]"
           let env_p = if g.env_params_json.len > 0: g.env_params_json else: "{}"
+          let head_u = g.head_uuid
           let l_str =
             if include_lineage and g.lineage_json.len > 0: g.lineage_json
             else: ""
           let task_str = if g.task.len > 0: g.task else: "image"
-          var item = newStringOfCap(g_genomes.len + env_p.len + l_str.len + 128)
+          var item = new_string_of_cap(g_genomes.len + env_p.len + l_str.len + 184)
           item.add("{\"name\":")
-          item.add(escapeJson(g.name))
+          item.add(escape_json(g.name))
           item.add(",\"task\":")
-          item.add(escapeJson(task_str))
-          item.add(",\"envParams\":")
+          item.add(escape_json(task_str))
+          item.add(",\"env_params\":")
           item.add(env_p)
           item.add(",\"generation\":")
           item.add($g.generation)
+          item.add(",\"population_size\":")
+          item.add($g.votes.len)
+          item.add(",\"head_uuid\":")
+          item.add(escape_json(head_u))
           item.add(",\"phase\":")
-          item.add(escapeJson(if g.evolving: "evolving" elif g.phase.len > 0: g.phase else: "voting"))
-          item.add(",\"simCompleted\":")
+          item.add(escape_json(if g.evolving: "evolving" elif g.phase.len > 0: g.phase else: "voting"))
+          item.add(",\"sim_completed\":")
           item.add($g.sim_completed)
-          item.add(",\"autoEvolve\":")
+          item.add(",\"auto_evolve\":")
           item.add(if g.auto_evolve: "true" else: "false")
           item.add(",\"genomes\":")
           item.add(g_genomes)
@@ -2376,9 +2618,9 @@ proc build_room_snapshot_json(room: string; filter_goal: string = ""; include_li
           item.add("}")
           total_len += item.len + 1
           parts.add(item)
-  result = newStringOfCap(total_len)
+  result = new_string_of_cap(total_len)
   result.add("{\"room\":")
-  result.add(escapeJson(room))
+  result.add(escape_json(room))
   result.add(",\"goals\":[")
   for idx, p in parts:
     if idx > 0:
@@ -2396,7 +2638,7 @@ proc get_room_snapshot_with_lineage_json*(room: string): string {.exportpy, gcsa
 
 proc get_active_rooms_json*(): string {.exportpy, gcsafe.} =
   ## Return JSON array of room names currently loaded in memory.
-  var arr = newJArray()
+  var arr = new_j_array()
   with_state_lock:
     for r in room_evolution.keys:
       if not room_evolution[r].initializing:
@@ -2406,6 +2648,103 @@ proc get_active_rooms_json*(): string {.exportpy, gcsafe.} =
 proc get_room_goal_snapshot_json*(room, goal_name: string): string {.exportpy, gcsafe.} =
   ## Return snapshot for a single goal in `room` without serializing unrelated tabs.
   build_room_snapshot_json(room, sanitize_goal_name(goal_name))
+
+proc get_room_goal_stubs_json*(room, goal_name: string): string {.exportpy, gcsafe.} =
+  ## Return lightweight metadata-only genome stubs (omitting LoRA adapters) for shard scheduling & rankings.
+  build_room_snapshot_json(room, sanitize_goal_name(goal_name), stubs_only = true)
+
+proc get_room_goal_head_json*(room, goal_name: string): string {.exportpy, gcsafe.} =
+  ## Return O(1) ~200-byte goal header (generation, populationSize, phase, envParams) with zero genomes serialized.
+  build_room_snapshot_json(room, sanitize_goal_name(goal_name), include_genomes = false)
+
+proc get_room_goal_slice_json*(room, goal_name: string; generation: int; indices_json: string): string {.exportpy, gcsafe.} =
+  ## Return full genome payloads ONLY for requested `indices_json` in O(batch_size) without reparsing all P genomes.
+  let clean_goal = sanitize_goal_name(goal_name)
+  var req_indices: JsonNode
+  try:
+    req_indices = parse_json(indices_json)
+  except CatchableError:
+    return """{"ok":false,"items":[]}"""
+  if req_indices.kind != JArray:
+    return """{"ok":false,"items":[]}"""
+  var pairs: seq[tuple[idx: int, raw: string]] = @[]
+  var actual_gen = -1
+  with_state_lock:
+    if room in room_evolution and not room_evolution[room].initializing and clean_goal in room_evolution[room].goals:
+      let g = room_evolution[room].goals[clean_goal]
+      if generation < 0 or g.generation == generation:
+        actual_gen = g.generation
+        pairs = collect_genome_slice(g.genome_items, req_indices)
+  if actual_gen < 0:
+    return """{"ok":false,"items":[]}"""
+  var total_len = 48
+  for p in pairs: total_len += p.raw.len + 28
+  result = new_string_of_cap(total_len)
+  result.add("{\"ok\":true,\"generation\":")
+  result.add($actual_gen)
+  result.add(",\"items\":")
+  append_indexed_genome_items(result, pairs)
+  result.add("}")
+
+proc pack_uuid_hit_json(room, goal, task, env_json: string; gen, idx: int; is_live: bool; genome_raw: string): string {.gcsafe.} =
+  result = new_string_of_cap(genome_raw.len + env_json.len + 160)
+  result.add(if is_live: "{\"ok\":true,\"is_live\":true,\"room\":" else: "{\"ok\":true,\"is_live\":false,\"room\":")
+  result.add(escape_json(room))
+  result.add(",\"goal\":")
+  result.add(escape_json(goal))
+  result.add(",\"task\":")
+  result.add(escape_json(task))
+  result.add(",\"env_params\":")
+  result.add(env_json)
+  result.add(",\"generation\":")
+  result.add($gen)
+  result.add(",\"index\":")
+  result.add(if is_live: $idx else: "null")
+  result.add(",\"genome\":")
+  result.add(genome_raw)
+  result.add("}")
+
+proc get_room_individual_by_uuid_json*(room, ind_uuid: string): string {.exportpy, gcsafe.} =
+  ## O(1) lookup of a live individual by 8-char UUID in `room` (falling back to room lineage only on miss).
+  let clean_u = ind_uuid.strip().to_lower_ascii()
+  if clean_u.len != 8:
+    return ""
+  var
+    hit_goal = ""
+    hit_task = "image"
+    hit_env = "{}"
+    hit_gen = 0
+    hit_idx = -1
+    hit_raw = ""
+    lineage_candidates: seq[tuple[g_name, task_str, env_str, lin_json: string]] = @[]
+  with_state_lock:
+    if room in room_evolution and not room_evolution[room].initializing:
+      let evo = room_evolution[room]
+      for g_name in evo.goal_order:
+        if g_name notin evo.goals: continue
+        let g = evo.goals[g_name]
+        let t_str = if g.task.len > 0: g.task else: "image"
+        let e_str = if g.env_params_json.len > 0: g.env_params_json else: "{}"
+        if clean_u in g.uuid_to_idx:
+          let idx = g.uuid_to_idx[clean_u]
+          if idx >= 0 and idx < g.genome_items.len:
+            hit_goal = g.name; hit_task = t_str; hit_env = e_str
+            hit_gen = g.generation; hit_idx = idx; hit_raw = g.genome_items[idx]
+            break
+        if g.lineage_json.len > 0:
+          lineage_candidates.add((g.name, t_str, e_str, g.lineage_json))
+  if hit_raw.len > 0:
+    return pack_uuid_hit_json(room, hit_goal, hit_task, hit_env, hit_gen, hit_idx, true, hit_raw)
+  for cand in lineage_candidates:
+    try:
+      let parsed = parse_json(cand.lin_json)
+      if parsed.kind == JArray:
+        for node in parsed:
+          if node.kind == JObject and node.get_or_default("uuid").get_str("").strip().to_lower_ascii() == clean_u:
+            return pack_uuid_hit_json(room, cand.g_name, cand.task_str, cand.env_str, node.get_or_default("gen").get_int(0), -1, false, $node)
+    except CatchableError:
+      discard
+  ""
 
 proc broadcast_goal_payload*(room, goal_name, payload_json: string) {.exportpy, gcsafe.} =
   if room.len == 0 or payload_json.len == 0:
@@ -2429,12 +2768,38 @@ proc internal_room_snapshot_handler(request: Request) {.gcsafe.} =
   if not auth.ok:
     request.respond(auth.code, body = auth.msg)
     return
-  let room = request.pathParams["room"]
+  let room = request.path_params["room"]
   if not is_valid_room(room):
     request.respond(400, body = "Invalid room name")
     return
-  let goal_filter = sanitize_goal_name(request.queryParams["goal"])
-  request.respond(200, @[("Content-Type", "application/json")], build_room_snapshot_json(room, goal_filter))
+  let goal_filter = sanitize_goal_name(request.query_params["goal"])
+  let stubs_only = request.query_params["stubs"] == "1"
+  let head_only = request.query_params["head"] == "1"
+  request.respond(
+    200,
+    @[("Content-Type", "application/json")],
+    build_room_snapshot_json(room, goal_filter, stubs_only = stubs_only, include_genomes = not head_only),
+  )
+
+proc internal_room_slice_handler(request: Request) {.gcsafe.} =
+  let auth = verify_internal_admin(request)
+  if not auth.ok:
+    request.respond(auth.code, body = auth.msg)
+    return
+  var parsed: JsonNode
+  try:
+    parsed = parse_json(request.body)
+  except CatchableError:
+    request.respond(400, body = "Invalid JSON")
+    return
+  let room = parsed.get_or_default("room").get_str("")
+  let goal_name = parsed.get_or_default("goal").get_str("")
+  let generation = parsed.get_or_default("generation").get_int(-1)
+  let indices_node = parsed.get_or_default("indices")
+  if not is_valid_room(room) or goal_name.len == 0 or indices_node == nil or indices_node.kind != JArray:
+    request.respond(400, body = "Missing room, goal, or indices")
+    return
+  request.respond(200, @[("Content-Type", "application/json")], get_room_goal_slice_json(room, goal_name, generation, $indices_node))
 
 proc internal_room_broadcast_handler(request: Request) {.gcsafe.} =
   let auth = verify_internal_admin(request)
@@ -2443,13 +2808,13 @@ proc internal_room_broadcast_handler(request: Request) {.gcsafe.} =
     return
   var parsed: JsonNode
   try:
-    parsed = parseJson(request.body)
+    parsed = parse_json(request.body)
   except CatchableError:
     request.respond(400, body = "Invalid JSON")
     return
-  let room = parsed.getOrDefault("room").getStr("")
-  let goal_filter = sanitize_goal_name(parsed.getOrDefault("goal").getStr(""))
-  let payload_node = parsed.getOrDefault("payload")
+  let room = parsed.get_or_default("room").get_str("")
+  let goal_filter = sanitize_goal_name(parsed.get_or_default("goal").get_str(""))
+  let payload_node = parsed.get_or_default("payload")
   if room.len == 0 or payload_node == nil or payload_node.kind != JObject:
     request.respond(400, body = "Missing room or payload")
     return
@@ -2460,7 +2825,7 @@ proc get_room_peer_count*(room: string): int {.exportpy, gcsafe.} =
   ## Return number of unique active client sessions currently connected to `room`.
   with_state_lock:
     if room in rooms:
-      var uniq_cids = initHashSet[string]()
+      var uniq_cids = init_hash_set[string]()
       var anon_cnt = 0
       for ws in rooms[room]:
         if ws in clients:
@@ -2517,7 +2882,6 @@ proc notify_goal_sim_progress*(
               "Simulations complete for \"" & goal_name & "\" gen " & $generation & " (" & $pop_len & "/" & $pop_len & ") — voting open"
             )
         elif goal.sim_completed != prev_v:
-          dirty_rooms.incl(room)
           next_phase = goal.phase
           if targets.len > 0:
             outbox.add(PendingBroadcast(
@@ -2573,7 +2937,7 @@ proc internal_room_peers_handler(request: Request) {.gcsafe.} =
   if not auth.ok:
     request.respond(auth.code, body = auth.msg)
     return
-  let room = request.pathParams["room"]
+  let room = request.path_params["room"]
   if not is_valid_room(room):
     request.respond(400, body = "Invalid room name")
     return
@@ -2587,16 +2951,32 @@ proc internal_sim_progress_handler(request: Request) {.gcsafe.} =
     return
   var parsed: JsonNode
   try:
-    parsed = parseJson(request.body)
+    parsed = parse_json(request.body)
   except CatchableError:
     request.respond(400, body = "Invalid JSON")
     return
-  let room = parsed.getOrDefault("room").getStr("")
-  let goal_name = parsed.getOrDefault("goal").getStr("")
-  let generation = parsed.getOrDefault("generation").getInt(0)
-  let verified_count = parsed.getOrDefault("verifiedCount").getInt(0)
+  let room = parsed.get_or_default("room").get_str("")
+  let goal_name = parsed.get_or_default("goal").get_str("")
+  let generation = parsed.get_or_default("generation").get_int(0)
+  let verified_count = parsed.get_or_default("verified_count").get_int(0)
   let phase = notify_goal_sim_progress(room, goal_name, generation, verified_count)
   request.respond(200, @[("Content-Type", "application/json")], $(%*{"ok": true, "phase": phase}))
+
+proc internal_room_uuid_handler(request: Request) {.gcsafe.} =
+  let auth = verify_internal_admin(request)
+  if not auth.ok:
+    request.respond(auth.code, body = auth.msg)
+    return
+  let room = request.path_params["room"]
+  let ind_uuid = request.path_params["uuid"]
+  if not is_valid_room(room):
+    request.respond(400, body = "Invalid room name")
+    return
+  let found = get_room_individual_by_uuid_json(room, ind_uuid)
+  if found.len == 0:
+    request.respond(404, @[("Content-Type", "application/json")], """{"ok":false}""")
+    return
+  request.respond(200, @[("Content-Type", "application/json")], found)
 
 proc ws_health_handler(request: Request) {.gcsafe.} =
   request.respond(200, @[("Content-Type", "application/json")], """{"status":"ok","service":"ws"}""")
@@ -2612,21 +2992,23 @@ proc serve_thread_proc(args: tuple[host: string, port: int]) {.thread.} =
       router.get("/ws/chat/@room/", upgrade_handler)
       router.get("/internal/room-goals/@room", internal_room_goals_handler)
       router.get("/internal/room-snapshot/@room", internal_room_snapshot_handler)
+      router.post("/internal/room-slice", internal_room_slice_handler)
+      router.get("/internal/room-uuid/@room/@uuid", internal_room_uuid_handler)
       router.get("/internal/room-peers/@room", internal_room_peers_handler)
       router.post("/internal/room-broadcast", internal_room_broadcast_handler)
       router.post("/internal/sim-progress", internal_sim_progress_handler)
       router.post("/internal/goal-reset", internal_goal_reset_handler)
       router.post("/internal/room-clear", internal_room_clear_handler)
-      srv = newServer(router, websocket_handler, logHandler = quiet_logger)
-      withLock ready_lock:
+      srv = new_server(router, websocket_handler, log_handler = quiet_logger)
+      with_lock ready_lock:
         server_ptr = srv
-        server_ready.store(true, moRelease)
+        server_ready.store(true, mo_release)
       signal(ready_cond)
       srv.serve(Port(args.port), args.host)
     except CatchableError:
-      withLock ready_lock:
-        server_failed.store(true, moRelease)
-        server_ready.store(true, moRelease)
+      with_lock ready_lock:
+        server_failed.store(true, mo_release)
+        server_ready.store(true, mo_release)
       signal(ready_cond)
 
 # --- Python exports ---
@@ -2636,26 +3018,26 @@ proc start_server*(host: string; port: int) {.exportpy.} =
   with_state_lock:
     if is_running:
       return
-    server_ready.store(false, moRelease)
-    server_failed.store(false, moRelease)
-    stop_ticker.store(false, moRelease)
+    server_ready.store(false, mo_release)
+    server_failed.store(false, mo_release)
+    stop_ticker.store(false, mo_release)
     server_ptr = nil
     is_running = true
-    createThread(server_thread, serve_thread_proc, (host, port))
+    create_thread(server_thread, serve_thread_proc, (host, port))
 
-  withLock ready_lock:
-    while not server_ready.load(moAcquire):
+  with_lock ready_lock:
+    while not server_ready.load(mo_acquire):
       wait(ready_cond, ready_lock)
     srv = server_ptr
 
-  if server_failed.load(moAcquire) or srv == nil:
+  if server_failed.load(mo_acquire) or srv == nil:
     with_state_lock:
       is_running = false
-    joinThread(server_thread)
-    raise newException(CatchableError, "Failed to start Mummy WebSocket server")
+    join_thread(server_thread)
+    raise new_exception(CatchableError, "Failed to start Mummy WebSocket server")
 
-  srv.waitUntilReady()
-  createThread(ticker_thread, ticker_thread_proc, 0)
+  srv.wait_until_ready()
+  create_thread(ticker_thread, ticker_thread_proc, 0)
 
 proc stop_server*() {.exportpy.} =
   var srv: Server = nil
@@ -2666,12 +3048,12 @@ proc stop_server*() {.exportpy.} =
       is_running = false
       should_join = true
   if should_join:
-    stop_ticker.store(true, moRelease)
-    joinThread(ticker_thread)
+    stop_ticker.store(true, mo_release)
+    join_thread(ticker_thread)
   if srv != nil:
     srv.close()
   if should_join:
-    joinThread(server_thread)
+    join_thread(server_thread)
   with_state_lock:
     server_ptr = nil
     clients.clear()
@@ -2710,51 +3092,52 @@ proc set_default_ga_params*(mut_sigma, elite_frac, crossover_rate: float) {.expo
     cfg.params.crossover_rate = clamp(crossover_rate, min_crossover_rate, max_crossover_rate)
 
 proc register_task_configs*(configs_json: string) {.exportpy.} =
-  let parsed = parseJson(configs_json)
+  let parsed = parse_json(configs_json)
   if parsed.kind != JArray:
     return
   with_state_lock:
     for item in parsed:
       if item.kind != JObject:
         continue
-      let tid = item.getOrDefault("task").getStr("").strip().toLowerAscii()
+      let tid = item.get_or_default("task").get_str("").strip().to_lower_ascii()
       if tid.len == 0 or tid.len > max_task_name_len:
         continue
-      let has_elite = item.hasKey("defaultEliteFrac") and item["defaultEliteFrac"].kind in {JFloat, JInt}
+      let has_elite = item.has_key("default_elite_frac") and item["default_elite_frac"].kind in {JFloat, JInt}
       task_configs[tid] = TaskConfig(
-        is_control: item.getOrDefault("isControl").getBool(false),
-        sim_phase_enabled: item.getOrDefault("simPhaseEnabled").getBool(false),
-        default_auto_evolve: item.getOrDefault("defaultAutoEvolve").getBool(false),
+        is_control: item.get_or_default("is_control").get_bool(false),
+        sim_phase_enabled: item.get_or_default("sim_phase_enabled").get_bool(false),
+        default_auto_evolve: item.get_or_default("default_auto_evolve").get_bool(false),
         default_pop_size: clamp(
-          item.getOrDefault("defaultPopSize").getInt(default_control_population_size),
+          item.get_or_default("default_pop_size").get_int(default_control_population_size),
           min_population_size,
           max_population_size,
         ),
         max_pop_size: clamp(
-          item.getOrDefault("maxPopSize").getInt(control_max_population_size),
+          item.get_or_default("max_pop_size").get_int(control_max_population_size),
           min_population_size,
           max_population_size,
         ),
-        default_min_votes: max(0, min(max_round_min_votes, item.getOrDefault("defaultMinVotes").getInt(0))),
+        default_min_votes: max(0, min(max_round_min_votes, item.get_or_default("default_min_votes").get_int(0))),
         crowd_shard_threshold: clamp(
-          item.getOrDefault("crowdShardThreshold").getInt(default_crowd_shard_threshold),
+          item.get_or_default("crowd_shard_threshold").get_int(default_crowd_shard_threshold),
           min_population_size,
-          256,
+          1024,
         ),
         has_elite_override: has_elite,
         default_elite_frac: (
-          if has_elite: clamp(item["defaultEliteFrac"].getFloat(0.0), min_elite_frac, max_elite_frac)
+          if has_elite: clamp(item["default_elite_frac"].get_float(0.0), min_elite_frac, max_elite_frac)
           else: default_elite_frac
         ),
       )
 
 proc seed_room_goals*(room, goals_json: string) {.exportpy.} =
   ## Seed a room with initial PyTorch-generated goals JSON: [{"name": ..., "genomes": [...]}]
-  let parsed = parseJson(goals_json)
+  let det = json_detach_goals_array(goals_json)
+  let parsed = parse_json(det.lean_arr)
   if parsed.kind != JArray:
     return
   with_state_lock:
-    room_evolution[room] = populate_room_goals_locked(parsed, cfg.params)
+    room_evolution[room] = populate_room_goals_locked(parsed, cfg.params, det.genomes_list)
     dirty_rooms.incl(room)
 
 proc drain_evo_jobs*(): string {.exportpy.} =
@@ -2774,20 +3157,20 @@ proc drain_evo_jobs*(): string {.exportpy.} =
       "generation": job.generation,
       "username": job.username,
       "scores": job.scores,
-      "upCounts": job.up_counts,
-      "mutSigma": job.params.mut_sigma,
-      "eliteFrac": job.params.elite_frac,
-      "crossoverRate": job.params.crossover_rate,
-      "populationSize": job.population_size,
-      "maxVotesPerUser": job.params.max_votes_per_user,
-      "minVotes": job.params.min_votes,
+      "up_counts": job.up_counts,
+      "mut_sigma": job.params.mut_sigma,
+      "elite_frac": job.params.elite_frac,
+      "crossover_rate": job.params.crossover_rate,
+      "population_size": job.population_size,
+      "max_votes_per_user": job.params.max_votes_per_user,
+      "min_votes": job.params.min_votes,
     }
     let meta_str = $meta
     let g_str = if job.genomes_json.len > 0: job.genomes_json else: "[]"
     let ep_str = if job.env_params_json.len > 0: job.env_params_json else: "{}"
-    var item = newStringOfCap(meta_str.len + g_str.len + ep_str.len + 32)
+    var item = new_string_of_cap(meta_str.len + g_str.len + ep_str.len + 32)
     item.add(meta_str[0 ..< meta_str.len - 1])
-    item.add(",\"envParams\":")
+    item.add(",\"env_params\":")
     item.add(ep_str)
     item.add(",\"genomes\":")
     item.add(g_str)
@@ -2796,7 +3179,8 @@ proc drain_evo_jobs*(): string {.exportpy.} =
   "[" & parts.join(",") & "]"
 
 proc apply_room_init*(room, goals_json: string) {.exportpy.} =
-  let parsed = parseJson(goals_json)
+  let det = json_detach_goals_array(goals_json)
+  let parsed = parse_json(det.lean_arr)
   if parsed.kind != JArray:
     return
   var outbox: seq[PendingBroadcast] = @[]
@@ -2806,17 +3190,17 @@ proc apply_room_init*(room, goals_json: string) {.exportpy.} =
         room_evolution[room].default_params
       else:
         cfg.params
-    var carry_creates = initHashSet[string]()
-    var carry_tasks = initTable[string, string]()
-    var carry_params = initTable[string, GoalParams]()
-    var carry_env_params = initTable[string, string]()
+    var carry_creates = init_hash_set[string]()
+    var carry_tasks = init_table[string, string]()
+    var carry_params = init_table[string, GoalParams]()
+    var carry_env_params = init_table[string, string]()
     if room in room_evolution and room_evolution[room].initializing:
       # keep goals requested before the room finished booting
       carry_creates = room_evolution[room].pending_creates
       carry_tasks = room_evolution[room].pending_create_tasks
       carry_params = room_evolution[room].pending_create_params
       carry_env_params = room_evolution[room].pending_create_env_params
-    room_evolution[room] = populate_room_goals_locked(parsed, dp)
+    room_evolution[room] = populate_room_goals_locked(parsed, dp, det.genomes_list)
     room_evolution[room].pending_creates = carry_creates
     room_evolution[room].pending_create_tasks = carry_tasks
     room_evolution[room].pending_create_params = carry_params
@@ -2831,7 +3215,6 @@ proc apply_goal_create_impl(
   min_votes: int = -1;
   env_params_override: string = "";
 ) =
-  let g_arr = parseJson(genomes_json)
   var
     outbox: seq[PendingBroadcast] = @[]
     sys_payload: string
@@ -2863,7 +3246,7 @@ proc apply_goal_create_impl(
       if goal_name notin room_evolution[room].goals:
         room_evolution[room].goal_order.add(goal_name)
         room_evolution[room].goals[goal_name] = init_goal_population_locked(
-          goal_name, task_name, genomes_json, g_arr.len, gp, env_params_json = env_p_json
+          goal_name, task_name, genomes_json, 0, gp, env_params_json = env_p_json
         )
         dirty_rooms.incl(room)
         queue_evolution_state_outbox_locked(room, outbox)
@@ -2886,10 +3269,26 @@ proc apply_goal_create_with_task*(room, goal_name, task_name, username, genomes_
   apply_goal_create_impl(room, goal_name, task_name, username, genomes_json, min_votes)
 
 proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.exportpy, gcsafe.} =
-  let parsed = parseJson(goals_json)
-  if parsed.kind != JArray:
-    return
   let target_goal = goal_name.strip()
+  let single_goal_mode = target_goal.len > 0 and target_goal != "*"
+  var
+    parsed: JsonNode = new_j_array()
+    detached_genomes: seq[string] = @[]
+    single_items_len = 0
+  if single_goal_mode:
+    let trimmed = goals_json.strip()
+    if trimmed.len == 0 or not trimmed.starts_with("["):
+      return
+    single_items_len = json_split_array_items(trimmed).len
+  else:
+    let det = json_detach_goals_array(goals_json)
+    try:
+      parsed = parse_json(det.lean_arr)
+    except CatchableError:
+      return
+    if parsed.kind != JArray:
+      return
+    detached_genomes = det.genomes_list
   var
     outbox: seq[PendingBroadcast] = @[]
     sys_payload = ""
@@ -2900,14 +3299,14 @@ proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.expo
         room_evolution[room].default_params
       else:
         cfg.params
-    if target_goal.len > 0 and target_goal != "*":
+    if single_goal_mode:
       if room in room_evolution:
         var evo = room_evolution[room]
         evo.pending_creates.excl(target_goal)
         evo.pending_create_tasks.del(target_goal)
         evo.pending_create_params.del(target_goal)
         evo.pending_create_env_params.del(target_goal)
-        if parsed.len == 0:
+        if single_items_len == 0:
           evo.goals.del(target_goal)
           var next_order: seq[string] = @[]
           for gn in evo.goal_order:
@@ -2915,7 +3314,7 @@ proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.expo
               next_order.add(gn)
           evo.goal_order = next_order
           room_evolution[room] = evo
-          if room != "lobby" and evo.goal_order.len == 0 and rooms.getOrDefault(room).len == 0:
+          if room != "lobby" and evo.goal_order.len == 0 and rooms.get_or_default(room).len == 0:
             room_evolution.del(room)
             dirty_rooms.excl(room)
           else:
@@ -2934,7 +3333,7 @@ proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.expo
           else:
             evo.goal_order.add(target_goal)
           evo.goals[target_goal] = init_goal_population_locked(
-            target_goal, goal_task, $parsed, parsed.len, gp, env_params_json = goal_env_json
+            target_goal, goal_task, goals_json, single_items_len, gp, env_params_json = goal_env_json
           )
           room_evolution[room] = evo
           dirty_rooms.incl(room)
@@ -2944,16 +3343,16 @@ proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.expo
     else:
       if room != "lobby" and parsed.len == 0:
         dirty_rooms.excl(room)
-        if rooms.getOrDefault(room).len == 0:
+        if rooms.get_or_default(room).len == 0:
           room_evolution.del(room)
         else:
           room_evolution[room] = RoomEvolution(
             goal_order: @[],
-            goals: initTable[string, GoalPopulation](),
-            pending_creates: initHashSet[string](),
-            pending_create_tasks: initTable[string, string](),
-            pending_create_params: initTable[string, GoalParams](),
-            pending_create_env_params: initTable[string, string](),
+            goals: init_table[string, GoalPopulation](),
+            pending_creates: init_hash_set[string](),
+            pending_create_tasks: init_table[string, string](),
+            pending_create_params: init_table[string, GoalParams](),
+            pending_create_env_params: init_table[string, string](),
             default_params: dp,
             initializing: false,
           )
@@ -2961,7 +3360,7 @@ proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.expo
           sys_payload = system_msg_payload(username & " cleared room evolution state")
           targets = room_targets(room)
       else:
-        room_evolution[room] = populate_room_goals_locked(parsed, dp)
+        room_evolution[room] = populate_room_goals_locked(parsed, dp, detached_genomes)
         dirty_rooms.incl(room)
         queue_evolution_state_outbox_locked(room, outbox)
         sys_payload = system_msg_payload(username & " cleared room evolution state to gen 0")
@@ -2972,9 +3371,6 @@ proc clear_room_evolution*(room, goals_json, goal_name, username: string) {.expo
     broadcast(targets, sys_payload)
 
 proc apply_goal_reset*(room, goal_name, username, genomes_json: string) {.exportpy.} =
-  let g_arr = parseJson(genomes_json)
-  let fresh_lineage = merge_lineage_json("", genomes_json, 0)
-  let fresh_lean = compute_lean_lineage(fresh_lineage, genomes_json, 0)
   var
     outbox: seq[PendingBroadcast] = @[]
     sys_payload: string
@@ -2985,13 +3381,19 @@ proc apply_goal_reset*(room, goal_name, username, genomes_json: string) {.export
       let now = now_ms()
       var goal = room_evolution[room].goals[goal_name]
       let tc = task_cfg_locked(goal.task)
+      let indexed = index_goal_genomes(genomes_json, tc.sim_phase_enabled)
+      let fresh_lineage = merge_lineage_from_fresh("", extract_lineage_nodes_from_stubs(indexed.stubs_arr, 0))
+      let fresh_lean = compute_lean_lineage(fresh_lineage, genomes_json, 0)
       goal.generation = 0
       goal.genomes_json = genomes_json
-      goal.sharded_genomes_json = (if tc.sim_phase_enabled: build_sharded_genomes_json(genomes_json) else: "")
+      goal.sharded_genomes_json = indexed.sharded_json
+      goal.genome_items = indexed.items
+      goal.uuid_to_idx = indexed.uuid_map
+      goal.head_uuid = indexed.head_uuid
       goal.lineage_json = fresh_lineage
       goal.lean_lineage_json = fresh_lean.lean_json
       goal.lineage_total = fresh_lean.total
-      goal.votes = empty_votes(max(1, g_arr.len))
+      goal.votes = empty_votes(max(1, indexed.items.len))
       goal.phase = (if tc.sim_phase_enabled: "simulating" else: "voting")
       goal.sim_completed = 0
       goal.countdown_ends_at_ms = 0
@@ -3010,7 +3412,6 @@ proc apply_goal_reset*(room, goal_name, username, genomes_json: string) {.export
       broadcast(targets, sys_payload)
 
 proc apply_goal_evolve*(room, goal_name, genomes_json: string; top_score: int) {.exportpy.} =
-  let g_arr = parseJson(genomes_json)
   var
     outbox: seq[PendingBroadcast] = @[]
     sys_payload: string
@@ -3021,12 +3422,19 @@ proc apply_goal_evolve*(room, goal_name, genomes_json: string; top_score: int) {
       let now = now_ms()
       var goal = room_evolution[room].goals[goal_name]
       let tc = task_cfg_locked(goal.task)
+      let indexed = index_goal_genomes(genomes_json, tc.sim_phase_enabled)
       inc goal.generation
       goal.genomes_json = genomes_json
-      goal.sharded_genomes_json = (if tc.sim_phase_enabled: build_sharded_genomes_json(genomes_json) else: "")
-      goal.lineage_json = merge_lineage_json(goal.lineage_json, genomes_json, goal.generation)
+      goal.sharded_genomes_json = indexed.sharded_json
+      goal.genome_items = indexed.items
+      goal.uuid_to_idx = indexed.uuid_map
+      goal.head_uuid = indexed.head_uuid
+      goal.lineage_json = merge_lineage_from_fresh(
+        goal.lineage_json,
+        extract_lineage_nodes_from_stubs(indexed.stubs_arr, goal.generation),
+      )
       goal.refresh_goal_lineage_cache()
-      goal.votes = empty_votes(max(1, g_arr.len))
+      goal.votes = empty_votes(max(1, indexed.items.len))
       goal.phase = (if tc.sim_phase_enabled: "simulating" else: "voting")
       goal.sim_completed = 0
       goal.countdown_ends_at_ms = 0
@@ -3076,7 +3484,6 @@ proc cancel_goal_create*(room, goal_name: string) {.exportpy, gcsafe.} =
       room_evolution[room].pending_create_env_params.del(goal_name)
 
 proc apply_goal_resize*(room, goal_name, username, genomes_json: string) {.exportpy.} =
-  let g_len = max(1, parseJson(genomes_json).len)
   var
     outbox: seq[PendingBroadcast] = @[]
     sys_payload: string
@@ -3087,12 +3494,17 @@ proc apply_goal_resize*(room, goal_name, username, genomes_json: string) {.expor
       let now = now_ms()
       var goal = room_evolution[room].goals[goal_name]
       let tc = task_cfg_locked(goal.task)
+      let indexed = index_goal_genomes(genomes_json, tc.sim_phase_enabled)
+      let g_len = max(1, indexed.items.len)
       var next_votes = empty_votes(g_len)
       let keep = min(goal.votes.len, g_len)
       for i in 0 ..< keep:
         next_votes[i] = goal.votes[i]
       goal.genomes_json = genomes_json
-      goal.sharded_genomes_json = (if tc.sim_phase_enabled: build_sharded_genomes_json(genomes_json) else: "")
+      goal.sharded_genomes_json = indexed.sharded_json
+      goal.genome_items = indexed.items
+      goal.uuid_to_idx = indexed.uuid_map
+      goal.head_uuid = indexed.head_uuid
       goal.lineage_json = merge_missing_lineage_json(goal.lineage_json, genomes_json, goal.generation)
       goal.refresh_goal_lineage_cache()
       goal.votes = next_votes
@@ -3112,7 +3524,7 @@ proc apply_goal_resize*(room, goal_name, username, genomes_json: string) {.expor
       broadcast(targets, sys_payload)
 
 proc seed_room_history*(room, messages_json: string) {.exportpy.} =
-  let parsed = parseJson(messages_json)
+  let parsed = parse_json(messages_json)
   if parsed.kind != JArray:
     return
   var items: seq[string] = @[]
@@ -3130,7 +3542,7 @@ proc drain_pending_messages*(): string {.exportpy.} =
       return "[]"
     batch = move pending_saves
     pending_saves = @[]
-  var arr = newJArray()
+  var arr = new_j_array()
   for item in batch:
     arr.add(%*{
       "room": item.room,
@@ -3141,7 +3553,7 @@ proc drain_pending_messages*(): string {.exportpy.} =
 
 proc get_room_goal_pop_sizes*(room: string): string {.exportpy.} =
   ## Return JSON object mapping active goal names in `room` to their population sizes.
-  var obj = newJObject()
+  var obj = new_j_object()
   with_state_lock:
     if room in room_evolution:
       for g_name in room_evolution[room].goal_order:
@@ -3154,7 +3566,7 @@ proc has_room_evolution*(room: string): bool {.exportpy.} =
     result = room in room_evolution and not room_evolution[room].initializing
 
 proc drain_dirty_room_states*(): string {.exportpy.} =
-  var arr = newJArray()
+  var arr = new_j_array()
   with_state_lock:
     if dirty_rooms.len == 0:
       return "[]"
@@ -3162,7 +3574,7 @@ proc drain_dirty_room_states*(): string {.exportpy.} =
       if room in room_evolution and not room_evolution[room].initializing:
         arr.add(%*{
           "room": room,
-          "stateJson": serialize_room_evolution(room_evolution[room]),
+          "state_json": serialize_room_evolution(room_evolution[room]),
         })
     dirty_rooms.clear()
   $arr
@@ -3170,74 +3582,83 @@ proc drain_dirty_room_states*(): string {.exportpy.} =
 proc restore_room_state*(room, state_json: string) {.exportpy.} =
   if state_json.len == 0:
     return
+  let det = json_detach_state_doc(state_json)
   var parsed: JsonNode
   try:
-    parsed = parseJson(state_json)
+    parsed = parse_json(det.lean_doc)
   except CatchableError:
     return
   if parsed.kind != JObject:
     return
-  let goals_node = parsed.getOrDefault("goals")
+  let goals_node = parsed.get_or_default("goals")
   if goals_node == nil or goals_node.kind != JArray:
     return
 
   var outbox: seq[PendingBroadcast] = @[]
   with_state_lock:
-    let dp = parse_goal_params_json(parsed.getOrDefault("defaultParams"), cfg.params)
+    let dp = parse_goal_params_json(parsed.get_or_default("default_params"), cfg.params)
     var evo = RoomEvolution(
       goal_order: @[],
-      goals: initTable[string, GoalPopulation](),
-      pending_creates: initHashSet[string](),
-      pending_create_tasks: initTable[string, string](),
-      pending_create_params: initTable[string, GoalParams](),
-      pending_create_env_params: initTable[string, string](),
+      goals: init_table[string, GoalPopulation](),
+      pending_creates: init_hash_set[string](),
+      pending_create_tasks: init_table[string, string](),
+      pending_create_params: init_table[string, GoalParams](),
+      pending_create_env_params: init_table[string, string](),
       default_params: dp,
       initializing: false,
     )
-    for item in goals_node:
+    for goal_idx in 0 ..< goals_node.len:
+      let item = goals_node[goal_idx]
       if item.kind != JObject:
         continue
-      let name = sanitize_goal_name(item.getOrDefault("name").getStr(""))
-      let task = sanitize_task_name_locked(item.getOrDefault("task").getStr("image"))
-      let genomes_arr = item.getOrDefault("genomes")
-      if name.len == 0 or genomes_arr == nil or genomes_arr.kind != JArray or genomes_arr.len == 0:
+      let name = sanitize_goal_name(item.get_or_default("name").get_str(""))
+      let task = sanitize_task_name_locked(item.get_or_default("task").get_str("image"))
+      let g_json =
+        if goal_idx < det.genomes_list.len: det.genomes_list[goal_idx]
+        else: $item.get_or_default("genomes")
+      if name.len == 0 or g_json.len <= 2:
         continue
-      let gen = max(0, item.getOrDefault("generation").getInt(0))
-      var gp = parse_goal_params_json(item.getOrDefault("params"), dp)
+      let tc = task_cfg_locked(task)
+      let indexed = index_goal_genomes(g_json, tc.sim_phase_enabled)
+      if indexed.items.len == 0:
+        continue
+      let pop_cnt = indexed.items.len
+      let gen = max(0, item.get_or_default("generation").get_int(0))
+      var gp = parse_goal_params_json(item.get_or_default("params"), dp)
       if gp.min_votes <= 0:
         gp.min_votes = default_min_votes_for_task_locked(task)
       clamp_control_min_votes_locked(task, gp)
-      let g_json = $genomes_arr
-      let env_node = item.getOrDefault("envParams")
+      let env_node = item.get_or_default("env_params")
       let env_json =
         if env_node != nil and env_node.kind == JObject: $env_node
         else: "{}"
-      let lin_node = item.getOrDefault("lineage")
+      let lin_node = item.get_or_default("lineage")
       let l_json =
         if lin_node != nil and lin_node.kind == JArray and lin_node.len > 0:
           $lin_node
         else:
-          $extract_lineage_nodes(g_json, gen)
+          $extract_lineage_nodes_from_stubs(indexed.stubs_arr, gen)
       let lean = compute_lean_lineage(l_json, g_json, gen)
-      let tc = task_cfg_locked(task)
-      let sharded_json = (if tc.sim_phase_enabled: build_sharded_genomes_json(g_json) else: "")
       let default_phase = if tc.sim_phase_enabled: "simulating" else: "voting"
-      let raw_phase = item.getOrDefault("phase").getStr(default_phase)
+      let raw_phase = item.get_or_default("phase").get_str(default_phase)
       let eff_phase = if raw_phase in ["simulating", "voting"]: raw_phase else: default_phase
-      let eff_sim_done = clamp(item.getOrDefault("simCompleted").getInt(0), 0, max(1, genomes_arr.len))
-      let eff_auto = item.getOrDefault("autoEvolve").getBool(tc.default_auto_evolve)
+      let eff_sim_done = clamp(item.get_or_default("sim_completed").get_int(0), 0, max(1, pop_cnt))
+      let eff_auto = item.get_or_default("auto_evolve").get_bool(tc.default_auto_evolve)
       evo.goal_order.add(name)
       evo.goals[name] = GoalPopulation(
         name: name,
         task: task,
         generation: gen,
         genomes_json: g_json,
-        sharded_genomes_json: sharded_json,
+        sharded_genomes_json: indexed.sharded_json,
+        genome_items: indexed.items,
+        uuid_to_idx: indexed.uuid_map,
+        head_uuid: indexed.head_uuid,
         env_params_json: env_json,
         lineage_json: l_json,
         lean_lineage_json: lean.lean_json,
         lineage_total: lean.total,
-        votes: empty_votes(max(1, genomes_arr.len)),
+        votes: empty_votes(max(1, pop_cnt)),
         phase: eff_phase,
         sim_completed: eff_sim_done,
         auto_evolve: eff_auto,

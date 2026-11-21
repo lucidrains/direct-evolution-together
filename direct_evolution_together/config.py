@@ -16,6 +16,8 @@ import threading
 _VALID_POLICIES = {"client_locked", "client_preferred", "server_only", "external_worker"}
 _VALID_AGGS = {"median", "weighted_mean"}
 _IMAGE_LOBBY_GOALS = ("Butterfly", "Galaxy", "Creature")
+LARGE_POP_MAX_SIZE = 1024
+SYSTEM_MAX_POPULATION_SIZE = 10_000
 
 
 @dataclass(frozen=True)
@@ -38,9 +40,9 @@ class TrustPolicyConfig:
         return {
             "enabled": bool(self.enabled),
             "quorum": int(self.quorum),
-            "shardQuorum": int(self.shard_quorum),
-            "spotCheckRate": float(self.spot_check_rate),
-            "shardShuffle": bool(self.shard_shuffle),
+            "shard_quorum": int(self.shard_quorum),
+            "spot_check_rate": float(self.spot_check_rate),
+            "shard_shuffle": bool(self.shard_shuffle),
             "aggregation": self.aggregation,
         }
 
@@ -107,8 +109,8 @@ class EnvPolicyConfig:
     ) -> dict[str, int | bool]:
         """Enforce centralized population and voting constraints before scaling a room."""
         eff_pop = max(self.min_pop_size, min(self.effective_max_pop_size, int(pop_size)))
-        eff_max_votes = max(1, min(128, int(max_votes_per_user)))
-        eff_min_votes = max(1, min(256, int(min_votes)))
+        eff_max_votes = max(1, min(256, int(max_votes_per_user)))
+        eff_min_votes = max(1, min(1024, int(min_votes)))
         if is_control:
             eff_min_votes = min(eff_min_votes, eff_max_votes)
         sharded = bool(self.sim_phase_enabled and eff_pop > self.crowd_shard_threshold)
@@ -124,6 +126,7 @@ class EnvPolicyConfig:
 
 @dataclass(frozen=True)
 class CentralConfig:
+    large_pop: bool = False
     trust: TrustPolicyConfig = field(default_factory=TrustPolicyConfig)
     environments: dict[str, EnvPolicyConfig] = field(default_factory=dict)
     mujoco_wasm_url: str = ""
@@ -148,18 +151,18 @@ class CentralConfig:
 
     def to_public_dict(self) -> dict[str, object]:
         return {
+            "large_pop": self.large_pop,
             "trust": asdict(self.trust),
             "environments": {
-                k: {**asdict(v), "simModes": list(v.sim_modes), "defaultSimMode": v.default_sim_mode}
+                k: {**asdict(v), "sim_modes": list(v.sim_modes), "default_sim_mode": v.default_sim_mode}
                 for k, v in self.environments.items()
             },
-            "mujocoWasmUrl": self.mujoco_wasm_url,
+            "mujoco_wasm_url": self.mujoco_wasm_url,
         }
 
 
-# Single source of truth for per-environment policy defaults.
-# `microduck` and `unitree_go2` run 8-member PopuLoRA populations simulated across browser WASM peers;
-# `halfcheetah` runs a 16-member demo population with quorum 8.
+# Single source of truth for per-environment policy defaults (with `DET_LARGE_POP=0`).
+# `DET_LARGE_POP=1` (`--large-pop`) layers `_LARGE_POP_PRESET` on top (250 Microduck gait + 1,024 room cap).
 DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
     "microduck": EnvPolicyConfig(
         task="microduck",
@@ -264,6 +267,14 @@ DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
     ),
 }
 
+_LARGE_POP_PRESET: dict[str, dict[str, object]] = {
+    "microduck": {"default_pop_size": 250, "max_pop_size": LARGE_POP_MAX_SIZE, "crowd_shard_size": 8},
+    "unitree_go2": {"max_pop_size": LARGE_POP_MAX_SIZE},
+    "so101": {"max_pop_size": LARGE_POP_MAX_SIZE},
+    "image": {"max_pop_size": LARGE_POP_MAX_SIZE},
+    "external": {"max_pop_size": LARGE_POP_MAX_SIZE},
+}
+
 # (field, env var template) -- `{task}` expands to the upper-cased task id.
 _ENV_VAR_OVERRIDES: tuple[tuple[str, str], ...] = (
     ("enabled", "DET_TASK_ENABLED_{task}"),
@@ -352,11 +363,11 @@ def _coerce_env_value(field_name: str, raw: object, default: object) -> object:
         policy = str(raw).strip().lower()
         return policy if policy in _VALID_POLICIES else default
     if field_name in ("min_pop_size", "default_pop_size", "max_pop_size"):
-        return _coerce_int(raw, int(default), 3, 128)
+        return _coerce_int(raw, int(default), 3, SYSTEM_MAX_POPULATION_SIZE)
     if field_name == "crowd_shard_threshold":
-        return _coerce_int(raw, int(default), 3, 256)
+        return _coerce_int(raw, int(default), 3, 1024)
     if field_name == "crowd_shard_size":
-        return _coerce_int(raw, int(default), 1, 32)
+        return _coerce_int(raw, int(default), 1, 256)
     if field_name == "env_hyperparams":
         if isinstance(raw, dict):
             return {str(k): v for k, v in raw.items()}
@@ -369,7 +380,7 @@ def _coerce_env_value(field_name: str, raw: object, default: object) -> object:
                 pass
         return default
     if field_name == "default_min_votes":
-        return _coerce_int(raw, int(default), 0, 256)
+        return _coerce_int(raw, int(default), 0, 1024)
     if field_name == "default_elite_frac":
         text = str(raw).strip().lower()
         if text in ("", "none", "null"):
@@ -390,33 +401,45 @@ def build_config() -> CentralConfig:
     t_dict = asdict(TrustPolicyConfig())
     envs = dict(DEFAULT_ENV_POLICIES)
     wasm_url = os.getenv("DET_MUJOCO_WASM_URL", "").strip()
+    large_pop = False
+    loaded: dict[str, object] = {}
 
     cfg_raw = os.getenv("DET_CONFIG_FILE", "").strip()
     if cfg_raw and Path(cfg_raw).is_file():
         try:
-            loaded = json.loads(Path(cfg_raw).read_text(encoding="utf-8"))
+            raw_doc = json.loads(Path(cfg_raw).read_text(encoding="utf-8"))
+            if isinstance(raw_doc, dict):
+                loaded = raw_doc
         except Exception:
             loaded = {}
-        if isinstance(loaded, dict):
-            if isinstance(loaded.get("mujoco_wasm_url"), str):
-                wasm_url = loaded["mujoco_wasm_url"].strip()
-            raw_t = loaded.get("trust")
-            if isinstance(raw_t, dict):
-                for fname, _, lo, hi in _TRUST_FIELDS:
-                    if fname in raw_t:
-                        t_dict[fname] = _coerce_field(raw_t[fname], t_dict[fname], lo, hi)
-            raw_e = loaded.get("environments")
-            if isinstance(raw_e, dict):
-                for tid, overrides in raw_e.items():
-                    base = envs.get(tid)
-                    if base is None or not isinstance(overrides, dict):
-                        continue
-                    values = asdict(base)
-                    for field_name, raw in overrides.items():
-                        if field_name in _ENV_POLICY_FIELDS:
-                            values[field_name] = _coerce_env_value(field_name, raw, values[field_name])
-                    values["max_pop_size"] = max(int(values["default_pop_size"]), int(values["max_pop_size"]))
-                    envs[tid] = EnvPolicyConfig(**values)
+
+    if "large_pop" in loaded:
+        large_pop = _coerce_bool(loaded["large_pop"], False)
+    if (raw_lp := os.getenv("DET_LARGE_POP")) is not None and raw_lp.strip():
+        large_pop = _coerce_bool(raw_lp, large_pop)
+
+    if large_pop:
+        for tid, preset in _LARGE_POP_PRESET.items():
+            if base := envs.get(tid):
+                envs[tid] = EnvPolicyConfig(**{**asdict(base), **preset})
+
+    if loaded:
+        if isinstance(loaded.get("mujoco_wasm_url"), str):
+            wasm_url = loaded["mujoco_wasm_url"].strip()
+        if isinstance(raw_t := loaded.get("trust"), dict):
+            for fname, _, lo, hi in _TRUST_FIELDS:
+                if fname in raw_t:
+                    t_dict[fname] = _coerce_field(raw_t[fname], t_dict[fname], lo, hi)
+        if isinstance(raw_e := loaded.get("environments"), dict):
+            for tid, overrides in raw_e.items():
+                if (base := envs.get(tid)) is None or not isinstance(overrides, dict):
+                    continue
+                values = asdict(base)
+                for field_name, raw in overrides.items():
+                    if field_name in _ENV_POLICY_FIELDS:
+                        values[field_name] = _coerce_env_value(field_name, raw, values[field_name])
+                values["max_pop_size"] = max(int(values["default_pop_size"]), int(values["max_pop_size"]))
+                envs[tid] = EnvPolicyConfig(**values)
 
     for fname, env_key, lo, hi in _TRUST_FIELDS:
         raw_env = os.getenv(env_key)
@@ -439,7 +462,12 @@ def build_config() -> CentralConfig:
         values["max_pop_size"] = max(int(values["default_pop_size"]), int(values["max_pop_size"]))
         envs[tid] = EnvPolicyConfig(**values)
 
-    return CentralConfig(trust=TrustPolicyConfig(**t_dict), environments=envs, mujoco_wasm_url=wasm_url)
+    return CentralConfig(
+        large_pop=large_pop,
+        trust=TrustPolicyConfig(**t_dict),
+        environments=envs,
+        mujoco_wasm_url=wasm_url,
+    )
 
 
 _config_lock = threading.Lock()

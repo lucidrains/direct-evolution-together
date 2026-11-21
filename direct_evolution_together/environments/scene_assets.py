@@ -303,9 +303,9 @@ def build_visual_meshpack(
             chunks.append(b"\x00" * idx_pad)
 
     return b"".join(chunks), {
-        "bodyMeshCount": len(body_entries),
-        "totalVerts": total_verts,
-        "totalTris": total_tris,
+        "body_mesh_count": len(body_entries),
+        "total_verts": total_verts,
+        "total_tris": total_tris,
     }
 
 
@@ -442,7 +442,7 @@ def _compute_camera_defaults(model: mujoco.MjModel) -> dict[str, object]:
     mujoco.mj_kinematics(model, data)
 
     if int(model.nbody) <= 1:
-        return {"trackBodyId": 1, "targetHeight": 0.25, "distance": 1.2, "yaw": -0.65, "pitch": 0.28}
+        return {"track_body_id": 1, "target_height": 0.25, "distance": 1.2, "yaw": -0.65, "pitch": 0.28}
 
     xpos = np.asarray(data.xpos[1:], dtype=np.float64)
     z_min = float(min(0.0, xpos[:, 2].min()))
@@ -451,12 +451,12 @@ def _compute_camera_defaults(model: mujoco.MjModel) -> dict[str, object]:
     height = max(0.08, z_max - z_min)
     extent = max(height, xy_span)
     return {
-        "trackBodyId": 1,
-        "targetHeight": round(max(0.05, z_min + 0.52 * height), 4),
+        "track_body_id": 1,
+        "target_height": round(max(0.05, z_min + 0.52 * height), 4),
         "distance": round(max(0.38, min(5.0, extent * 3.1)), 3),
         "yaw": -0.68,
         "pitch": 0.26,
-        "gridScale": 0.25 if extent < 0.45 else 1.0,
+        "grid_scale": 0.25 if extent < 0.45 else 1.0,
     }
 
 
@@ -504,22 +504,22 @@ def compile_mjcf_scene(
     if camera_overrides:
         cam_defaults.update(camera_overrides)
     manifest: dict[str, object] = {
-        "sceneId": scene_id,
-        "entryXml": entry_rel,
-        "physicsAsset": f"scenes/{scene_id}/physics.bin",
-        "physicsSha256": phys_sha,
-        "physicsBytes": len(physics_bytes),
-        "visualAsset": f"scenes/{scene_id}/visual.bin",
-        "visualSha256": vis_sha,
-        "visualBytes": len(visual_bytes),
+        "scene_id": scene_id,
+        "entry_xml": entry_rel,
+        "physics_asset": f"scenes/{scene_id}/physics.bin",
+        "physics_sha256": phys_sha,
+        "physics_bytes": len(physics_bytes),
+        "visual_asset": f"scenes/{scene_id}/visual.bin",
+        "visual_sha256": vis_sha,
+        "visual_bytes": len(visual_bytes),
         "nbody": int(model.nbody),
         "nq": int(model.nq),
         "nv": int(model.nv),
         "nu": int(model.nu),
-        "collisionMeshes": sorted(collision_meshes),
-        "bodyNames": body_names,
-        "visualStats": vis_stats,
-        "cameraDefaults": cam_defaults,
+        "collision_meshes": sorted(collision_meshes),
+        "body_names": body_names,
+        "visual_stats": vis_stats,
+        "camera_defaults": cam_defaults,
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest

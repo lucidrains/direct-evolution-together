@@ -3,7 +3,7 @@
 (function (global) {
   "use strict";
 
-  const DB_NAME = "det_scene_assets_v1";
+  const DB_NAME = "det_scene_assets_v2";
   const STORE_NAME = "blobs";
   const memCache = new Map();
   const inFlight = new Map();
@@ -158,42 +158,42 @@
     }
 
     return {
-      sceneId: manifest ? manifest.sceneId : "scene",
-      sha256: manifest ? manifest.visualSha256 : "",
+      scene_id: manifest ? manifest.scene_id : "scene",
+      sha256: manifest ? manifest.visual_sha256 : "",
       nbody: manifest ? manifest.nbody : numBodies + 1,
-      cameraDefaults: (manifest && manifest.cameraDefaults) || {
-        trackBodyId: 1,
-        targetHeight: 0.14,
+      camera_defaults: (manifest && manifest.camera_defaults) || {
+        track_body_id: 1,
+        target_height: 0.14,
         distance: 0.75,
         yaw: -0.68,
         pitch: 0.26,
-        gridScale: 0.25,
+        grid_scale: 0.25,
       },
       bodyMeshes,
     };
   }
 
   async function loadSceneVisualPack(basePath, manifest) {
-    if (!manifest || !manifest.visualAsset) return null;
-    const ver = (manifest.visualSha256 || "").slice(0, 12);
-    const parsedKey = `vis_parsed:${manifest.sceneId}:${ver}`;
+    if (!manifest || !manifest.visual_asset) return null;
+    const ver = (manifest.visual_sha256 || "").slice(0, 12);
+    const parsedKey = `vis_parsed:${manifest.scene_id}:${ver}`;
     if (memCache.has(parsedKey)) {
       const hit = memCache.get(parsedKey);
-      if (manifest.cameraDefaults) hit.cameraDefaults = manifest.cameraDefaults;
+      if (manifest.camera_defaults) hit.camera_defaults = manifest.camera_defaults;
       return hit;
     }
-    const url = `${basePath}/assets/${manifest.visualAsset}${ver ? `?v=${ver}` : ""}`;
-    const buf = await fetchBinaryAsset(url, `vis_bin:${manifest.sceneId}:${ver}`);
+    const url = `${basePath}/assets/${manifest.visual_asset}${ver ? `?v=${ver}` : ""}`;
+    const buf = await fetchBinaryAsset(url, `vis_bin:${manifest.scene_id}:${ver}`);
     const parsed = parseVisualMeshpack(buf, manifest);
     memCache.set(parsedKey, parsed);
     return parsed;
   }
 
   async function loadScenePhysicsBuffer(basePath, manifest) {
-    if (!manifest || !manifest.physicsAsset) return null;
-    const ver = (manifest.physicsSha256 || "").slice(0, 12);
-    const url = `${basePath}/assets/${manifest.physicsAsset}${ver ? `?v=${ver}` : ""}`;
-    return fetchBinaryAsset(url, `phys_bin:${manifest.sceneId}:${ver}`);
+    if (!manifest || !manifest.physics_asset) return null;
+    const ver = (manifest.physics_sha256 || "").slice(0, 12);
+    const url = `${basePath}/assets/${manifest.physics_asset}${ver ? `?v=${ver}` : ""}`;
+    return fetchBinaryAsset(url, `phys_bin:${manifest.scene_id}:${ver}`);
   }
 
   async function loadPopuloraBaseModel(basePath, taskId, baseHash = "", baseSeed = 1) {
@@ -204,18 +204,18 @@
 
     const p = (async () => {
       const hit = await idbGet(key);
-      if (hit && typeof hit === "object" && hit.tensors) {
+      if (hit && typeof hit === "object" && hit.tensors && (hit.obs_dim || hit.obsDim)) {
         memCache.set(key, hit);
         return hit;
       }
       if (cleanHash) {
         try {
-          const staticResp = await fetch(`${basePath}/media/base_models/${cleanHash}.json`, {
+          const staticResp = await fetch(`${basePath}/media/base_models/${cleanHash}.json?v=2`, {
             cache: "force-cache",
           });
           if (staticResp.ok) {
             const parsed = await staticResp.json();
-            if (parsed && parsed.tensors) {
+            if (parsed && parsed.tensors && (parsed.obs_dim || parsed.obsDim)) {
               memCache.set(key, parsed);
               idbSet(key, parsed).catch(() => {});
               return parsed;

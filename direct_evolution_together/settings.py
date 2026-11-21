@@ -136,12 +136,14 @@ SUBPATH = f"/{_raw_subpath}" if _raw_subpath else ""
 WS_VIA_PROXY = os.getenv("DET_WS_PROXY", "1" if SUBPATH else "0") == "1"
 WS_HOST = os.getenv("MUMMY_WS_HOST", "127.0.0.1")
 WS_PORT = int(os.getenv("MUMMY_WS_PORT", "8001"))
-POPULATION_SIZE = max(3, min(64, int(os.getenv("MUMMY_POP_SIZE", "30"))))
+POPULATION_SIZE_EXPLICIT = bool(os.getenv("MUMMY_POP_SIZE", "").strip())
+POPULATION_SIZE_OVERRIDE = os.getenv("MUMMY_POP_SIZE_OVERRIDE", "0") == "1"
+POPULATION_SIZE = max(3, min(1024, int(os.getenv("MUMMY_POP_SIZE", "30"))))
 MIN_VOTES_EXPLICIT = bool(os.getenv("MUMMY_MIN_VOTES", "").strip())
 MIN_VOTES_OVERRIDE = os.getenv("MUMMY_MIN_VOTES_OVERRIDE", "0") == "1"
-MIN_VOTES = max(1, min(256, int(os.getenv("MUMMY_MIN_VOTES", "20"))))
+MIN_VOTES = max(1, min(1024, int(os.getenv("MUMMY_MIN_VOTES", "20"))))
 COUNTDOWN_MS = max(100, min(60000, int(os.getenv("MUMMY_COUNTDOWN_MS", "8000"))))
-MAX_VOTES_PER_USER = max(1, min(64, int(os.getenv("MUMMY_MAX_VOTES", "20"))))
+MAX_VOTES_PER_USER = max(1, min(256, int(os.getenv("MUMMY_MAX_VOTES", "20"))))
 MUTATION_SIGMA = max(0.05, min(1.0, float(os.getenv("MUMMY_MUT_SIGMA", "0.30"))))
 ELITE_FRAC = max(0.0, min(0.5, float(os.getenv("MUMMY_ELITE_FRAC", "0.20"))))
 CROSSOVER_RATE = max(0.0, min(1.0, float(os.getenv("MUMMY_CROSSOVER_RATE", "0.75"))))
@@ -173,5 +175,5 @@ MAX_MEDIA_CACHE_BYTES = int(os.getenv("DET_MAX_MEDIA_CACHE_BYTES", str(256 * 102
 MUJOCO_WASM_URL = os.getenv("DET_MUJOCO_WASM_URL", "").strip()
 DATA_UPLOAD_MAX_MEMORY_SIZE = 4 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 256 * 1024
-DATA_UPLOAD_MAX_NUMBER_FILES = 64
+DATA_UPLOAD_MAX_NUMBER_FILES = 256
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

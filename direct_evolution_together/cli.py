@@ -100,8 +100,8 @@ def main() -> None:
     parser.add_argument(
         "--population-size",
         type=int,
-        default=int(os.getenv("MUMMY_POP_SIZE", "30")),
-        help="Fixed population size for public rooms and default for private rooms (3-64, default: 30)",
+        default=None,
+        help="Override population size across rooms/goals (3-1024, default: per-task policy / 30 for image)",
     )
     parser.add_argument(
         "--min-votes",
@@ -138,6 +138,12 @@ def main() -> None:
         type=float,
         default=float(os.getenv("MUMMY_CROSSOVER_RATE", "0.75")),
         help="Crossover probability for breeding for public rooms and default for private rooms (0.0-1.0, default: 0.75)",
+    )
+    parser.add_argument(
+        "--large-pop",
+        action="store_true",
+        default=os.getenv("DET_LARGE_POP", "0") == "1",
+        help="Enable large-population preset (250 Microduck gait + 1,024 room cap)",
     )
     parser.add_argument(
         "--evolve-now",
@@ -201,24 +207,30 @@ def main() -> None:
             print(message)
             return
 
-    pop_size = max(3, min(64, args.population_size))
+    pop_size_override = args.population_size is not None
+    raw_pop = args.population_size if pop_size_override else int(os.getenv("MUMMY_POP_SIZE", "30"))
+    pop_size = max(3, min(1024, raw_pop))
     min_votes_override = args.min_votes is not None
     countdown_ms = max(100, min(60000, args.countdown_ms))
-    max_votes = max(1, min(64, args.max_votes_per_user))
+    max_votes = max(1, min(256, args.max_votes_per_user))
     mut_sigma = max(0.05, min(1.0, float(args.mutation_sigma)))
     elite_frac = max(0.0, min(0.5, float(args.elite_frac)))
     crossover_rate = max(0.0, min(1.0, float(args.crossover_rate)))
     os.environ["MUMMY_WS_HOST"] = args.ws_host
     os.environ["MUMMY_WS_PORT"] = str(args.ws_port)
-    os.environ["MUMMY_POP_SIZE"] = str(pop_size)
+    if pop_size_override:
+        os.environ["MUMMY_POP_SIZE"] = str(pop_size)
+        os.environ["MUMMY_POP_SIZE_OVERRIDE"] = "1"
     if min_votes_override:
-        os.environ["MUMMY_MIN_VOTES"] = str(max(1, min(256, args.min_votes)))
+        os.environ["MUMMY_MIN_VOTES"] = str(max(1, min(1024, args.min_votes)))
         os.environ["MUMMY_MIN_VOTES_OVERRIDE"] = "1"
     os.environ["MUMMY_COUNTDOWN_MS"] = str(countdown_ms)
     os.environ["MUMMY_MAX_VOTES"] = str(max_votes)
     os.environ["MUMMY_MUT_SIGMA"] = f"{mut_sigma:.2f}"
     os.environ["MUMMY_ELITE_FRAC"] = f"{elite_frac:.2f}"
     os.environ["MUMMY_CROSSOVER_RATE"] = f"{crossover_rate:.2f}"
+    if args.large_pop:
+        os.environ["DET_LARGE_POP"] = "1"
     if args.admin_password:
         os.environ["DET_ADMIN_PASSWORD"] = args.admin_password
     if args.evolve_now:
@@ -226,9 +238,12 @@ def main() -> None:
         os.environ.setdefault("DET_EVOLVE_SECRET", secrets.token_hex(16))
 
     from direct_evolution_together import settings as det_settings
+    from direct_evolution_together.config import reload_config
 
+    reload_config()
     importlib.reload(det_settings)
 
+    eff_pop_override = pop_size_override or det_settings.POPULATION_SIZE_OVERRIDE
     eff_min_votes = (
         det_settings.MIN_VOTES
         if (min_votes_override or det_settings.MIN_VOTES_EXPLICIT)
@@ -254,6 +269,8 @@ def main() -> None:
             overrides.append(f"min_votes={eff_min_votes}")
         if countdown_ms != 8000:
             overrides.append(f"countdown_ms={countdown_ms}")
+        if args.large_pop:
+            overrides.append("large_pop=1")
         if args.evolve_now:
             overrides.append("evolve_now=localhost-only")
         if overrides:
@@ -265,6 +282,7 @@ def main() -> None:
                 host=args.ws_host,
                 port=args.ws_port,
                 pop_size=pop_size,
+                pop_size_override=eff_pop_override,
                 min_votes=eff_min_votes,
                 min_votes_override=min_votes_override,
                 countdown_ms=countdown_ms,

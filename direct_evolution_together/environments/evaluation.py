@@ -126,7 +126,7 @@ def attach_halfcheetah_geoms(rollout: dict[str, object]) -> dict[str, object]:
     frames = rollout.get("frames") or []
     if not isinstance(frames, list) or not frames:
         return rollout
-    if "geomSpecs" in rollout and "geomPoses" in rollout:
+    if "geom_specs" in rollout and "geom_poses" in rollout:
         return rollout
     model = get_halfcheetah_model()
     data = get_thread_halfcheetah_data(model)
@@ -162,8 +162,8 @@ def attach_halfcheetah_geoms(rollout: dict[str, object]) -> dict[str, object]:
         geom_poses.append(row)
 
     out = dict(rollout)
-    out["geomSpecs"] = geom_specs
-    out["geomPoses"] = geom_poses
+    out["geom_specs"] = geom_specs
+    out["geom_poses"] = geom_poses
     return out
 
 
@@ -218,6 +218,6 @@ def evaluate_control_batch(
             "summary": summary,
         }
         if include_primary_rollout and primary_ro is not None:
-            entry["primaryRollout"] = primary_ro
+            entry["primary_rollout"] = primary_ro
         results.append(entry)
     return results

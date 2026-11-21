@@ -401,7 +401,7 @@
       this.yaw = -0.26;
       this.pitch = 0.22;
       this.distance = 2.65;
-      this._defaultCam = { yaw: -0.26, pitch: 0.22, distance: 2.65, targetHeight: 0.56, gridScale: 1.0 };
+      this._defaultCam = { yaw: -0.26, pitch: 0.22, distance: 2.65, target_height: 0.56, grid_scale: 1.0 };
       this._activeSceneKey = "";
       this._sceneVaos = new Map(); // `${sceneId}:${sha}` -> Map<bodyId, { vao, count, buffers }>
       this.dragging = false;
@@ -464,7 +464,7 @@
       this.uFloor = {
         viewProj: gl.getUniformLocation(this.floorProg, "u_viewProj"),
         focusXZ: gl.getUniformLocation(this.floorProg, "u_focusXZ"),
-        gridScale: gl.getUniformLocation(this.floorProg, "u_gridScale"),
+        grid_scale: gl.getUniformLocation(this.floorProg, "u_gridScale"),
       };
       this._sceneVaos.clear();
       this.ready = true;
@@ -493,7 +493,7 @@
     }
 
     _ensureSceneVaos(visualPack) {
-      const key = `${visualPack.sceneId}:${visualPack.sha256 || ""}`;
+      const key = `${visualPack.scene_id}:${visualPack.sha256 || ""}`;
       if (this._sceneVaos.has(key)) return this._sceneVaos.get(key);
       const gl = this.gl;
       const byBody = new Map();
@@ -538,8 +538,8 @@
         yaw: typeof cd.yaw === "number" ? cd.yaw : -0.26,
         pitch: typeof cd.pitch === "number" ? cd.pitch : 0.22,
         distance: typeof cd.distance === "number" ? cd.distance : 2.65,
-        targetHeight: typeof cd.targetHeight === "number" ? cd.targetHeight : 0.56,
-        gridScale: typeof cd.gridScale === "number" ? cd.gridScale : 1.0,
+        target_height: typeof cd.target_height === "number" ? cd.target_height : 0.56,
+        grid_scale: typeof cd.grid_scale === "number" ? cd.grid_scale : 1.0,
       };
       this.yaw = this._defaultCam.yaw;
       this.pitch = this._defaultCam.pitch;
@@ -551,7 +551,7 @@
       if (this._lastRender.kind === "bodies") {
         this.renderSceneBodies(this._lastRender.visualPack, this._lastRender.bodyPoseRow);
       } else {
-        this.renderFrame(this._lastRender.geomSpecs, this._lastRender.poseRow, this._lastRender.focusX);
+        this.renderFrame(this._lastRender.geom_specs, this._lastRender.poseRow, this._lastRender.focusX);
       }
     }
 
@@ -608,7 +608,7 @@
       if (!this.ready || !this.gl || !visualPack || !Array.isArray(bodyPoseRow) && !(bodyPoseRow instanceof Float32Array)) {
         return false;
       }
-      this._applySceneCameraIfChanged(`pack:${visualPack.sceneId}`, visualPack.cameraDefaults);
+      this._applySceneCameraIfChanged(`pack:${visualPack.scene_id}`, visualPack.camera_defaults);
       this._lastRender = { kind: "bodies", visualPack, bodyPoseRow };
 
       const gl = this.gl;
@@ -619,10 +619,10 @@
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       gl.enable(gl.DEPTH_TEST);
 
-      const trackId = Math.max(1, Number(visualPack.cameraDefaults?.trackBodyId || 1));
+      const trackId = Math.max(1, Number(visualPack.camera_defaults?.track_body_id || 1));
       const trackOff = (trackId - 1) * 7;
-      const camOff = Array.isArray(visualPack.cameraDefaults?.targetOffset)
-        ? visualPack.cameraDefaults.targetOffset
+      const camOff = Array.isArray(visualPack.camera_defaults?.target_offset)
+        ? visualPack.camera_defaults.target_offset
         : [0.0, 0.0];
       const focusX = (bodyPoseRow.length > trackOff ? Number(bodyPoseRow[trackOff] || 0) : 0.0) + Number(camOff[0] || 0);
       const focusY = (bodyPoseRow.length > trackOff + 1 ? Number(bodyPoseRow[trackOff + 1] || 0) : 0.0) + Number(camOff[1] || 0);
@@ -631,7 +631,7 @@
       const yaw = cameraOverride && typeof cameraOverride.yaw === "number" ? cameraOverride.yaw : this.yaw;
       const pitch = cameraOverride && typeof cameraOverride.pitch === "number" ? cameraOverride.pitch : this.pitch;
       const dist = cameraOverride && typeof cameraOverride.distance === "number" ? cameraOverride.distance : this.distance;
-      const targetH = this._defaultCam.targetHeight;
+      const targetH = this._defaultCam.target_height;
 
       const cp = Math.cos(pitch);
       const sp = Math.sin(pitch);
@@ -650,7 +650,7 @@
       gl.useProgram(this.floorProg);
       gl.uniformMatrix4fv(this.uFloor.viewProj, false, vp);
       gl.uniform2f(this.uFloor.focusXZ, focusX, focusGlZ);
-      gl.uniform1f(this.uFloor.gridScale, this._defaultCam.gridScale);
+      gl.uniform1f(this.uFloor.grid_scale, this._defaultCam.grid_scale);
       gl.bindVertexArray(this.floorVao);
       gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
 
@@ -696,10 +696,10 @@
         yaw: -0.26,
         pitch: 0.22,
         distance: 2.65,
-        targetHeight: 0.56,
-        gridScale: 1.0,
+        target_height: 0.56,
+        grid_scale: 1.0,
       });
-      this._lastRender = { kind: "geoms", geomSpecs, poseRow, focusX };
+      this._lastRender = { kind: "geoms", geom_specs: geomSpecs, poseRow, focusX };
 
       const gl = this.gl;
       const w = this.canvas.width || 512;
@@ -713,7 +713,7 @@
       const sp = Math.sin(this.pitch);
       const cy = Math.cos(this.yaw);
       const sy = Math.sin(this.yaw);
-      const target = [focusX, this._defaultCam.targetHeight, 0.0];
+      const target = [focusX, this._defaultCam.target_height, 0.0];
       const eye = [
         target[0] + this.distance * cp * sy,
         target[1] + this.distance * sp,
@@ -726,7 +726,7 @@
       gl.useProgram(this.floorProg);
       gl.uniformMatrix4fv(this.uFloor.viewProj, false, vp);
       gl.uniform2f(this.uFloor.focusXZ, focusX, 0.0);
-      gl.uniform1f(this.uFloor.gridScale, this._defaultCam.gridScale);
+      gl.uniform1f(this.uFloor.grid_scale, this._defaultCam.grid_scale);
       gl.bindVertexArray(this.floorVao);
       gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
 
@@ -866,10 +866,10 @@
     const ctx = canvas.getContext("2d");
     const w = canvas.width;
     const h = canvas.height;
-    const poses = (rollout && rollout.bodyPoses) || [];
+    const poses = (rollout && (rollout.body_poses || rollout.bodyPoses)) || [];
     const poseRow = poses.length ? poses[Math.min(poses.length - 1, Math.floor(poses.length * 0.75))] : null;
     const solved = Boolean(summary && summary.solved);
-    const ret = summary && typeof summary.return === "number" ? summary.return : (summary?.primaryValue ?? -1);
+    const ret = summary && typeof summary.return === "number" ? summary.return : (summary?.primary_value ?? summary?.primaryValue ?? -1);
     const accent = solved ? "#34d399" : (ret >= 20 ? "#f5c451" : "#fb7185");
 
     let drewGl = false;
@@ -886,13 +886,13 @@
         ctx.fillStyle = "#71717a";
         ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
         ctx.textAlign = "center";
-        ctx.fillText("queued for WASM sim", w * 0.5, h * 0.48);
+        ctx.fillText("simulating...", w * 0.5, h * 0.48);
         ctx.textAlign = "start";
       }
     }
 
     // Compact velocity sparkline strip at bottom of grid cards
-    const vxs = (rollout && rollout.vx_trace) || [];
+    const vxs = (rollout && (rollout.vx_trace || rollout.vxTrace)) || [];
     if (w > 60 && vxs.length >= 2) {
       const margin = Math.round(w * 0.07);
       const usableW = w - 2 * margin;
@@ -920,7 +920,7 @@
   }
 
   function renderSceneCardLiveFrame(canvas, visualPack, bodyPoses, stepIdx, maxSteps) {
-    const poses = Array.isArray(bodyPoses) ? bodyPoses : (bodyPoses && bodyPoses.bodyPoses) || [];
+    const poses = Array.isArray(bodyPoses) ? bodyPoses : (bodyPoses && (bodyPoses.body_poses || bodyPoses.bodyPoses)) || [];
     if (!poses.length) return;
     const ctx = canvas.getContext("2d");
     const w = canvas.width;

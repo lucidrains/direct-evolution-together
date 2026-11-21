@@ -187,29 +187,29 @@ def test_e2e_chat_persistence_cursor_and_evolution():
             ]
             assert evo0["goals"][0]["task"] == "microduck"
             assert evo0["goals"][0]["phase"] == "simulating"
-            assert evo0["goals"][0]["simPhaseEnabled"] is True
-            assert evo0["goals"][0]["eliteFrac"] == 0.25
+            assert evo0["goals"][0]["sim_phase_enabled"] is True
+            assert evo0["goals"][0]["elite_frac"] == 0.25
             assert len(evo0["goals"][0]["genomes"]) == 8
             assert evo0["goals"][1]["task"] == "unitree_go2"
             assert evo0["goals"][1]["phase"] == "simulating"
-            assert evo0["goals"][1]["simPhaseEnabled"] is True
-            assert evo0["goals"][1]["eliteFrac"] == 0.25
+            assert evo0["goals"][1]["sim_phase_enabled"] is True
+            assert evo0["goals"][1]["elite_frac"] == 0.25
             assert len(evo0["goals"][1]["genomes"]) == 8
             assert evo0["goals"][2]["task"] == "so101"
             assert evo0["goals"][2]["phase"] == "simulating"
-            assert evo0["goals"][2]["simPhaseEnabled"] is True
-            assert evo0["goals"][2]["eliteFrac"] == 0.25
+            assert evo0["goals"][2]["sim_phase_enabled"] is True
+            assert evo0["goals"][2]["elite_frac"] == 0.25
             assert len(evo0["goals"][2]["genomes"]) == 8
             assert evo0["goals"][3]["task"] == "halfcheetah"
-            assert evo0["goals"][3]["minVotes"] == 2
-            assert evo0["goals"][3]["eliteFrac"] == 0.05
+            assert evo0["goals"][3]["min_votes"] == 2
+            assert evo0["goals"][3]["elite_frac"] == 0.05
             assert len(evo0["goals"][3]["genomes"]) == 12
             assert evo0["goals"][4]["task"] == "cartpole"
-            assert evo0["goals"][4]["minVotes"] == 2
-            assert evo0["goals"][4]["eliteFrac"] == 0.0
+            assert evo0["goals"][4]["min_votes"] == 2
+            assert evo0["goals"][4]["elite_frac"] == 0.0
             assert len(evo0["goals"][4]["genomes"]) == 12
             assert evo0["goals"][5]["task"] == "image"
-            assert evo0["goals"][5]["minVotes"] == 2
+            assert evo0["goals"][5]["min_votes"] == 2
             assert len(evo0["goals"][5]["genomes"]) == 12
 
             with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice") as a2:
@@ -233,18 +233,18 @@ def test_e2e_chat_persistence_cursor_and_evolution():
 
                 # Per-user vote cap (2) + throttle + flip + unvote reclaim + countdown -> gen 1
                 a1.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "index": 0, "vote": 1}))
-                assert _recv_until(a1, "votes_updated")["totalVotes"] == 1
+                assert _recv_until(a1, "votes_updated")["total_votes"] == 1
                 a1.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "index": 1, "vote": 1}))
                 _recv_until(a1, "votes_updated")
                 a1.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "index": 2, "vote": 1}))
-                assert _recv_until(a1, "vote_throttled")["maxVotesPerUser"] == 2
+                assert _recv_until(a1, "vote_throttled")["max_votes_per_user"] == 2
                 a1.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "index": 0, "vote": 1}))
                 _recv_until(a1, "votes_updated")
 
                 a2.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "index": 2, "vote": 1}))
                 upd = _recv_until(a1, "goal_updated", timeout=5.0)
                 assert upd["goal"]["generation"] == 1
-                assert upd["goal"]["lineageTotal"] == 24
+                assert upd["goal"]["lineage_total"] == 24
                 assert len(upd["goal"]["lineage"]) < 24
 
                 a1.send(json.dumps({"type": "lineage_all", "goal": "Butterfly"}))
@@ -267,17 +267,17 @@ def test_ws_gzip_state_and_lazy_lineage():
 
             md_goal = msg["goals"][0]
             assert md_goal["task"] == "microduck"
-            assert md_goal["lineageTotal"] == len(md_goal["lineage"]) == 6
+            assert md_goal["lineage_total"] == len(md_goal["lineage"]) == 6
             assert all(node.get("kind") == "populora" and "adapters" not in node for node in md_goal["lineage"])
 
             goal = next(g for g in msg["goals"] if g["task"] == "image")
-            assert goal["lineageTotal"] == len(goal["lineage"]) == 6
+            assert goal["lineage_total"] == len(goal["lineage"]) == 6
             assert all("weights" not in node for node in goal["lineage"])
 
             ws.send(json.dumps({"type": "lineage_all", "goal": goal["name"]}))
             full = _recv_until(ws, "lineage_all")
             assert full["goal"] == goal["name"]
-            assert full["lineageTotal"] == len(full["lineage"]) == 6
+            assert full["lineage_total"] == len(full["lineage"]) == 6
             assert all("weights" in node for node in full["lineage"])
 
 
@@ -298,18 +298,18 @@ def test_e2e_private_room_ga_and_admin_reset(client, monkeypatch, settings):
             _recv_until(pub, "evolution_state")
             p_evo = _recv_until(priv, "evolution_state")
             lotus = p_evo["goals"][0]
-            assert lotus["name"] == "Lotus" and lotus["populationSize"] == 8
-            assert lotus["maxVotesPerUser"] == 4
-            assert abs(lotus["mutationSigma"] - 0.50) < 1e-6
-            assert abs(lotus["eliteFrac"] - 0.25) < 1e-6
-            assert abs(lotus["crossoverRate"] - 0.40) < 1e-6
+            assert lotus["name"] == "Lotus" and lotus["population_size"] == 8
+            assert lotus["max_votes_per_user"] == 4
+            assert abs(lotus["mutation_sigma"] - 0.50) < 1e-6
+            assert abs(lotus["elite_frac"] - 0.25) < 1e-6
+            assert abs(lotus["crossover_rate"] - 0.40) < 1e-6
 
             priv.send(json.dumps({
                 "type": "create_goal", "goal": "Beetle", "population_size": 6,
                 "max_votes_per_user": 5, "mutation_sigma": 0.25, "elite_frac": 0.20, "crossover_rate": 0.90,
             }))
             beetle = {g["name"]: g for g in _recv_until(priv, "evolution_state")["goals"]}["Beetle"]
-            assert beetle["populationSize"] == 6 and beetle["maxVotesPerUser"] == 5
+            assert beetle["population_size"] == 6 and beetle["max_votes_per_user"] == 5
 
             # Named private rooms (no p- prefix) start empty and accept goals
             with connect(f"ws://127.0.0.1:{port}/ws/chat/named-room/?username=carol") as named:
@@ -430,8 +430,8 @@ def test_ws_voting_threshold_and_generation_guard():
         with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice") as ws:
             evo = _recv_until(ws, "evolution_state")
             butterfly = next(g for g in evo["goals"] if g["name"] == "Butterfly")
-            assert butterfly["minVotes"] == 5
-            assert butterfly["maxVotesPerUser"] == 20
+            assert butterfly["min_votes"] == 5
+            assert butterfly["max_votes_per_user"] == 20
 
             # 5 downvotes alone meet candidate count (5/10) but NOT likedCandidates >= 1
             for idx in range(5):
@@ -443,9 +443,9 @@ def test_ws_voting_threshold_and_generation_guard():
                     "vote": -1,
                 }))
                 upd = _recv_until(ws, "votes_updated")
-            assert upd["votedCandidates"] == 5
-            assert upd["likedCandidates"] == 0
-            assert upd["countdownMs"] == 0
+            assert upd["voted_candidates"] == 5
+            assert upd["liked_candidates"] == 0
+            assert upd["countdown_ms"] == 0
 
             # Flipping 1 downvote to an upvote triggers countdown
             ws.send(json.dumps({
@@ -456,9 +456,9 @@ def test_ws_voting_threshold_and_generation_guard():
                 "vote": 1,
             }))
             started = _recv_until(ws, "votes_updated")
-            assert started["votedCandidates"] == 5
-            assert started["likedCandidates"] == 1
-            assert started["countdownMs"] > 0
+            assert started["voted_candidates"] == 5
+            assert started["liked_candidates"] == 1
+            assert started["countdown_ms"] > 0
 
         # Fast countdown run to verify generation evolution + stale-generation vote guard
         mummy_ws.set_round_config(5, 80)
@@ -495,15 +495,15 @@ def test_ws_voting_threshold_and_generation_guard():
                 "vote": 1,
             }))
             v_ok = _recv_until(bob, "votes_updated")
-            assert v_ok["totalVotes"] == 1 and v_ok["likedCandidates"] == 1
+            assert v_ok["total_votes"] == 1 and v_ok["liked_candidates"] == 1
 
     # Public CPPN image room always lets one researcher vote up to required quorum (>= minVotes)
     with _ws_server(seed=False, pop_size=24, min_votes=20, max_votes=5) as port:
         with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=solo") as ws_solo:
             evo = _recv_until(ws_solo, "evolution_state")
             galaxy = next(g for g in evo["goals"] if g["name"] == "Galaxy")
-            assert galaxy["minVotes"] == 20
-            assert galaxy["maxVotesPerUser"] == 20
+            assert galaxy["min_votes"] == 20
+            assert galaxy["max_votes_per_user"] == 20
             mummy_ws.set_round_config(20, 60)
             for idx in range(20):
                 ws_solo.send(json.dumps({
@@ -557,15 +557,15 @@ def test_deploy_restart_restores_and_rebroadcasts_state():
             lob_evo = _recv_until(lob2, "evolution_state")
             bfly2 = next(g for g in lob_evo["goals"] if g["name"] == "Butterfly")
             assert bfly2["generation"] == 1
-            assert bfly2["lineageTotal"] == 16
+            assert bfly2["lineage_total"] == 16
             assert bfly2["genomes"][0]["id"] == saved_bfly_id
             assert bfly2["genomes"][0]["weights"] == saved_bfly_weights
 
             priv_evo = _recv_until(priv2, "evolution_state")
             orchid2 = next(g for g in priv_evo["goals"] if g["name"] == "Orchid")
             assert orchid2["generation"] == 1
-            assert orchid2["lineageTotal"] == 12
-            assert abs(orchid2["mutationSigma"] - 0.45) < 1e-6
+            assert orchid2["lineage_total"] == 12
+            assert abs(orchid2["mutation_sigma"] - 0.45) < 1e-6
             assert orchid2["genomes"][0]["id"] == saved_orchid_id
             assert orchid2["genomes"][0]["weights"] == saved_orchid_weights
 
@@ -767,8 +767,8 @@ def test_weight_upload_validation_and_population_cap(client):
     assert not Room.objects.filter(name="Overfull Dish").exists()
     assert not RoomEvolutionState.objects.filter(room="overfull-dish").exists()
 
-    # Out-of-range population sizes (2 and 65) are rejected explicitly
-    for bad_pop in ("2", "65", "abc"):
+    # Out-of-range population sizes (2 and 1025) are rejected explicitly
+    for bad_pop in ("2", "1025", "abc"):
         r_pop = client.post(
             "/api/rooms/",
             {
@@ -977,7 +977,7 @@ def test_e2e_download_weights_reseed_new_room_and_evolve(client, monkeypatch):
             dish = reseed_evo["goals"][0]
             assert dish["name"] == "Petri Reseed"
             assert dish["generation"] == 0
-            assert dish["populationSize"] == 6
+            assert dish["population_size"] == 6
             assert len(dish["genomes"]) == 6
 
             g0, g1 = dish["genomes"][0], dish["genomes"][1]
@@ -1079,7 +1079,7 @@ def test_cartpole_substrate_js_python_parity_and_convergence():
         py_ro = cartpole_rollout(pop[0], seed=seed, max_steps=500)
         proc = subprocess.run(
             ["node", "-e", js_core],
-            input=json.dumps({"genome": pop[0], "seed": seed, "maxSteps": 500}),
+            input=json.dumps({"genome": pop[0], "seed": seed, "max_steps": 500}),
             text=True,
             capture_output=True,
             check=True,
@@ -1116,13 +1116,13 @@ def test_cartpole_substrate_js_python_parity_and_convergence():
                     )
                     for i, g in enumerate(evo_pop)
                 ),
-                key=lambda item: (item[0]["meanSteps"], -item[0]["meanAbsX"]),
+                key=lambda item: (item[0]["mean_steps"], -item[0]["mean_abs_x"]),
                 reverse=True,
             )
             top_candidate = evo_pop[ranked[0][1]]
             heldout = evaluate_control_genome("cartpole", top_candidate, seeds=tuple(range(100, 110)))
             best_heldout = heldout
-            if heldout["minSteps"] >= 490 and gen > 0:
+            if heldout["min_steps"] >= 490 and gen > 0:
                 solved_gen = gen
                 break
             votes = [0] * len(evo_pop)
@@ -1143,7 +1143,7 @@ def test_cartpole_substrate_js_python_parity_and_convergence():
             saw_zero_elitism = True
         assert saw_zero_elitism
         assert solved_gen is not None and solved_gen < 20, f"Did not solve in 20 gens: {best_heldout}"
-        assert best_heldout["meanSteps"] >= 495.0
+        assert best_heldout["mean_steps"] >= 495.0
     finally:
         py_random.setstate(saved_state)
         torch.random.set_rng_state(torch_state)
@@ -1230,40 +1230,40 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
             ]
             assert lob_state["goals"][0]["task"] == "microduck"
             assert len(lob_state["goals"][0]["genomes"]) == 8
-            assert lob_state["goals"][0]["minVotes"] == 4
+            assert lob_state["goals"][0]["min_votes"] == 4
             assert lob_state["goals"][1]["task"] == "unitree_go2"
             assert len(lob_state["goals"][1]["genomes"]) == 8
-            assert lob_state["goals"][1]["minVotes"] == 4
+            assert lob_state["goals"][1]["min_votes"] == 4
             assert lob_state["goals"][2]["task"] == "so101"
             assert len(lob_state["goals"][2]["genomes"]) == 8
-            assert lob_state["goals"][2]["minVotes"] == 4
+            assert lob_state["goals"][2]["min_votes"] == 4
             assert lob_state["goals"][3]["task"] == "halfcheetah"
-            assert lob_state["goals"][3]["eliteFrac"] == 0.05
-            assert lob_state["goals"][3]["minVotes"] == 6
+            assert lob_state["goals"][3]["elite_frac"] == 0.05
+            assert lob_state["goals"][3]["min_votes"] == 6
             assert all(
-                evaluate_control_genome("halfcheetah", cand, seeds=(0, 1))["meanDistance"] < 4.5
+                evaluate_control_genome("halfcheetah", cand, seeds=(0, 1))["mean_distance"] < 4.5
                 for cand in lob_state["goals"][3]["genomes"]
             )
             assert lob_state["goals"][4]["task"] == "cartpole"
-            assert lob_state["goals"][4]["eliteFrac"] == 0.0
-            assert lob_state["goals"][4]["minVotes"] == 6
+            assert lob_state["goals"][4]["elite_frac"] == 0.0
+            assert lob_state["goals"][4]["min_votes"] == 6
             assert all(
-                evaluate_control_genome("cartpole", cand, seeds=(0, 1, 2))["meanSteps"] < 60.0
+                evaluate_control_genome("cartpole", cand, seeds=(0, 1, 2))["mean_steps"] < 60.0
                 for cand in lob_state["goals"][4]["genomes"]
             )
 
         # CartPole quorum is capped by the per-person vote budget; image quorum stays independent
         with connect(f"ws://127.0.0.1:{port}/ws/chat/{split_data['slug']}/?username=splituser") as ws_split:
             split_evo = _recv_until(ws_split, "evolution_state")
-            assert split_evo["goals"][0]["minVotes"] == 4
-            assert split_evo["goals"][0]["maxVotesPerUser"] == 4
+            assert split_evo["goals"][0]["min_votes"] == 4
+            assert split_evo["goals"][0]["max_votes_per_user"] == 4
 
         with connect(
             f"ws://127.0.0.1:{port}/ws/chat/p-split-img/?username=imguser&goal=Prism&pop=8&min_votes=6&max_votes=2"
         ) as ws_img:
             img_evo = _recv_until(ws_img, "evolution_state")
-            assert img_evo["goals"][0]["minVotes"] == 6
-            assert img_evo["goals"][0]["maxVotesPerUser"] == 2
+            assert img_evo["goals"][0]["min_votes"] == 6
+            assert img_evo["goals"][0]["max_votes_per_user"] == 2
 
         # Check pre-seeded CartPole room + create_goal + one-person quorum -> zero-elite Gen 1
         mummy_ws.set_round_config(10, 120)
@@ -1271,11 +1271,11 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
             evo0 = _recv_until(ws, "evolution_state")
             goal = evo0["goals"][0]
             assert goal["task"] == "cartpole"
-            assert goal["minVotes"] == 20
-            assert goal["eliteFrac"] == 0.0
+            assert goal["min_votes"] == 20
+            assert goal["elite_frac"] == 0.0
             assert len(goal["genomes"]) == 16
             assert all(
-                evaluate_control_genome("cartpole", cand, seeds=(0, 1, 2))["meanSteps"] < 60.0
+                evaluate_control_genome("cartpole", cand, seeds=(0, 1, 2))["mean_steps"] < 60.0
                 for cand in goal["genomes"]
             )
 
@@ -1292,8 +1292,8 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
             assert "Pole Run 2" in created_goals
             created = created_goals["Pole Run 2"]
             assert created["task"] == "cartpole"
-            assert created["minVotes"] == 6
-            assert created["eliteFrac"] == 0.0
+            assert created["min_votes"] == 6
+            assert created["elite_frac"] == 0.0
             assert len(created["genomes"]) == 8
 
             # One person's full vote budget now satisfies the cartpole quorum
@@ -1306,14 +1306,14 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
                     "vote": 1,
                 }))
                 upd = _recv_until(ws, "votes_updated")
-            assert upd["totalVotes"] == 6
-            assert upd["countdownMs"] > 0
+            assert upd["total_votes"] == 6
+            assert upd["countdown_ms"] > 0
             gen1 = _recv_until(ws, "goal_updated", timeout=5.0)["goal"]
 
             assert gen1["name"] == "Pole Run 2"
             assert gen1["generation"] == 1
             assert gen1["task"] == "cartpole"
-            assert gen1["eliteFrac"] == 0.0
+            assert gen1["elite_frac"] == 0.0
             assert all(g["op"] != "elite" for g in gen1["genomes"])
 
         # Download Gen 1 CartPole .pt weights directly and resume in a new private CartPole room
@@ -1352,8 +1352,8 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
             res_evo = _recv_until(r_ws, "evolution_state")
             res_goal = res_evo["goals"][0]
             assert res_goal["task"] == "cartpole"
-            assert res_goal["minVotes"] == 20
-            assert res_goal["eliteFrac"] == 0.0
+            assert res_goal["min_votes"] == 20
+            assert res_goal["elite_frac"] == 0.0
             assert len(res_goal["genomes"]) == 6
             assert res_goal["genomes"][0]["op"] == "seed"
             assert res_goal["genomes"][0]["weights"] == champ_genome["weights"]
@@ -1383,8 +1383,8 @@ def test_lazy_mp4_rendering_range_serving_gzip_exclusion_and_bundle(client, sett
     assert render_resp.status_code == 200
     payload = render_resp.json()
     assert payload["ok"] is True
-    assert payload["videoUrl"].endswith(".mp4")
-    assert payload["posterUrl"].endswith(".png")
+    assert payload["video_url"].endswith(".mp4")
+    assert payload["poster_url"].endswith(".png")
     assert payload["steps"] >= 1
 
     # Second identical request reuses cached content-addressed files
@@ -1393,10 +1393,10 @@ def test_lazy_mp4_rendering_range_serving_gzip_exclusion_and_bundle(client, sett
         data=json.dumps({"task": "cartpole", "genome": genome, "seed": 0}),
         content_type="application/json",
     )
-    assert render_resp2.json()["videoUrl"] == payload["videoUrl"]
+    assert render_resp2.json()["video_url"] == payload["video_url"]
 
     # Full MP4 fetch must NOT be gzip-compressed and must advertise byte ranges & immutable cache
-    mp4_resp = client.get(payload["videoUrl"], HTTP_ACCEPT_ENCODING="gzip, deflate")
+    mp4_resp = client.get(payload["video_url"], HTTP_ACCEPT_ENCODING="gzip, deflate")
     assert mp4_resp.status_code == 200
     assert mp4_resp["Content-Type"] == "video/mp4"
     assert mp4_resp["Accept-Ranges"] == "bytes"
@@ -1407,7 +1407,7 @@ def test_lazy_mp4_rendering_range_serving_gzip_exclusion_and_bundle(client, sett
 
     # Range request -> 206 Partial Content with exact Content-Range slice
     range_resp = client.get(
-        payload["videoUrl"],
+        payload["video_url"],
         HTTP_RANGE="bytes=0-127",
         HTTP_ACCEPT_ENCODING="gzip",
     )
@@ -1418,7 +1418,7 @@ def test_lazy_mp4_rendering_range_serving_gzip_exclusion_and_bundle(client, sett
     assert part_bytes == raw_mp4[:128]
 
     # Poster PNG fetch
-    png_resp = client.get(payload["posterUrl"], HTTP_ACCEPT_ENCODING="gzip")
+    png_resp = client.get(payload["poster_url"], HTTP_ACCEPT_ENCODING="gzip")
     assert png_resp.status_code == 200
     assert png_resp["Content-Type"] == "image/png"
     assert not png_resp.has_header("Content-Encoding")
@@ -1649,28 +1649,28 @@ console.log(JSON.stringify({{
     best_genome = pop[0]
     for _gen in range(20):
         evals = evaluate_control_batch("halfcheetah", pop, seeds=(0, 1), include_primary_rollout=False)
-        fits = [e["summary"]["primaryValue"] * max(0.15, e["summary"]["meanUpright"]) for e in evals]
+        fits = [e["summary"]["primary_value"] * max(0.15, e["summary"]["mean_upright"]) for e in evals]
         top_idx = sorted(range(len(pop)), key=lambda i: fits[i], reverse=True)
         cur_best_i = top_idx[0]
-        if best_summary is None or fits[cur_best_i] > best_summary["primaryValue"] * max(0.15, best_summary["meanUpright"]):
+        if best_summary is None or fits[cur_best_i] > best_summary["primary_value"] * max(0.15, best_summary["mean_upright"]):
             best_summary = evals[cur_best_i]["summary"]
             best_genome = pop[cur_best_i]
-        if best_summary["meanDistance"] >= 8.0 and best_summary["meanUpright"] >= 0.40:
+        if best_summary["mean_distance"] >= 8.0 and best_summary["mean_upright"] >= 0.40:
             break
         winners = set(top_idx[:4])
         scores = [max(1, 5 - top_idx[:4].index(i)) if i in winners else 0 for i in range(len(pop))]
         ups = [1 if i in winners else 0 for i in range(len(pop))]
         pop, _ = evolve_population(pop, scores, ups, mut_sigma=0.35, pop_size=16, elite_frac=0.05, crossover_rate=0.75)
     assert best_summary is not None
-    assert best_summary["meanDistance"] >= 8.0
-    assert best_summary["meanUpright"] >= 0.40
+    assert best_summary["mean_distance"] >= 8.0
+    assert best_summary["mean_upright"] >= 0.40
 
     # 5. Client-locked policy enforcement for HalfCheetah + direct attach_halfcheetah_geoms + CartPole server fallback
     from direct_evolution_together.environments import halfcheetah_rollout, attach_halfcheetah_geoms
 
     locked_batch = client.post(
         "/api/sim/eval-batch/",
-        data=json.dumps({"task": "halfcheetah", "genomes": [best_genome], "includeRollout": True}),
+        data=json.dumps({"task": "halfcheetah", "genomes": [best_genome], "include_rollout": True}),
         content_type="application/json",
     )
     assert locked_batch.status_code == 400
@@ -1685,17 +1685,17 @@ console.log(JSON.stringify({{
     assert "locked" in locked_ro.json()["error"].lower()
 
     direct_evals = evaluate_control_batch("halfcheetah", [best_genome], seeds=(0,), include_primary_rollout=True)
-    assert direct_evals[0]["summary"]["meanDistance"] >= 8.0
-    assert len(direct_evals[0]["primaryRollout"]["frames"]) == 201
+    assert direct_evals[0]["summary"]["mean_distance"] >= 8.0
+    assert len(direct_evals[0]["primary_rollout"]["frames"]) == 201
 
     ro_direct = attach_halfcheetah_geoms(halfcheetah_rollout(best_genome, seed=0, max_steps=200, nudge="fwd"))
-    assert len(ro_direct["geomSpecs"]) == 8  # 8 non-plane capsules of half_cheetah.xml
-    assert len(ro_direct["geomPoses"]) == 201 and len(ro_direct["geomPoses"][0]) == 8 * 12
+    assert len(ro_direct["geom_specs"]) == 8  # 8 non-plane capsules of half_cheetah.xml
+    assert len(ro_direct["geom_poses"]) == 201 and len(ro_direct["geom_poses"][0]) == 8 * 12
 
     cp_genome = create_task_population("cartpole", 1)[0]
     cp_batch = client.post(
         "/api/sim/eval-batch/",
-        data=json.dumps({"task": "cartpole", "genomes": [cp_genome], "includeRollout": True}),
+        data=json.dumps({"task": "cartpole", "genomes": [cp_genome], "include_rollout": True}),
         content_type="application/json",
     )
     assert cp_batch.status_code == 200 and cp_batch.json()["engine"] == "server"
@@ -1714,9 +1714,9 @@ console.log(JSON.stringify({{
     )
     assert vid_resp.status_code == 200
     v_data = vid_resp.json()
-    assert v_data["ok"] is True and v_data["videoUrl"].endswith(".mp4")
-    assert v_data["posterUrl"].endswith(".png")
-    media_mp4 = client.get(v_data["videoUrl"])
+    assert v_data["ok"] is True and v_data["video_url"].endswith(".mp4")
+    assert v_data["poster_url"].endswith(".png")
+    media_mp4 = client.get(v_data["video_url"])
     assert media_mp4.status_code == 200
     mp4_bytes = b"".join(media_mp4.streaming_content)
     assert b"ftyp" in mp4_bytes[:64]
@@ -1799,13 +1799,13 @@ def test_external_researcher_worker_api_and_ws_broadcast(client):
                     "results": [{
                         "hash": first_item["hash"],
                         "summary": {
-                            "primaryValue": 12.34,
-                            "primaryDisplay": "12.3m",
-                            "badgeText": "12.3m",
+                            "primary_value": 12.34,
+                            "primary_display": "12.3m",
+                            "badge_text": "12.3m",
                             "tier": "solved",
-                            "secondaryText": "custom microduck",
+                            "secondary_text": "custom microduck",
                         },
-                        "posterPngB64": base64.b64encode(tiny_png).decode("ascii"),
+                        "poster_png_b64": base64.b64encode(tiny_png).decode("ascii"),
                         "topology": {
                             "nodes": [
                                 {"id": "s0", "kind": "sensor", "label": "imu_pitch"},
@@ -1826,14 +1826,14 @@ def test_external_researcher_worker_api_and_ws_broadcast(client):
 
             ws_msg = _recv_until(ws, "worker_eval_updated")
             assert ws_msg["items"][0]["hash"] == first_item["hash"]
-            assert ws_msg["items"][0]["summary"]["badgeText"] == "12.3m"
+            assert ws_msg["items"][0]["summary"]["badge_text"] == "12.3m"
             assert ws_msg["items"][0]["topology"]["nodes"][0]["label"] == "imu_pitch"
 
     evals_resp = client.get(f"/api/rooms/{slug}/worker/evals/?goal={jdata['goal']}&generation=0")
     assert evals_resp.status_code == 200
     edata = evals_resp.json()
     assert len(edata["items"]) == 1
-    assert edata["items"][0]["posterDataUrl"].startswith("data:image/png;base64,")
+    assert edata["items"][0]["poster_data_url"].startswith("data:image/png;base64,")
     assert len(edata["items"][0]["topology"]["edges"]) == 2
 
 
@@ -1928,7 +1928,7 @@ const neat = {{
     {{ from: "h2", to: "h1", weight: -0.5, enabled: true }}
   ]
 }};
-const g = nv.buildNeatDagGraph(neat, {{ obsLabels: ["z", "1"], actionLabels: ["act"] }});
+const g = nv.buildNeatDagGraph(neat, {{ obs_labels: ["z", "1"], action_labels: ["act"] }});
 const byId = Object.fromEntries(g.nodes.map(n => [n.id, n]));
 const rec = g.edges.filter(e => e.recurrent);
 console.log(JSON.stringify({{
@@ -1959,7 +1959,7 @@ def test_centralized_config_client_lock_and_crowd_trust(client, monkeypatch, tmp
     assert cdata["ok"] is True
     assert cdata["trust"]["quorum"] == 2
     assert cdata["environments"]["halfcheetah"]["execution_policy"] == "client_locked"
-    assert cdata["environments"]["halfcheetah"]["simModes"] == ["client"]
+    assert cdata["environments"]["halfcheetah"]["sim_modes"] == ["client"]
     assert cdata["environments"]["halfcheetah"]["crowd_contribute"] is True
     assert cdata["environments"]["external"]["enabled"] is True
 
@@ -2003,7 +2003,7 @@ def test_centralized_config_client_lock_and_crowd_trust(client, monkeypatch, tmp
     peer1, peer2, peer3 = Client(), Client(), Client()
     for p in (peer1, peer2, peer3):
         init = p.get("/api/rooms/lobby/crowd/evals/?goal=HalfCheetah&generation=0")
-        assert init.status_code == 200 and len(init.json()["contributorId"]) >= 8
+        assert init.status_code == 200 and len(init.json()["contributor_id"]) >= 8
 
     def _submit(peer, gh, val):
         return peer.post(
@@ -2014,11 +2014,11 @@ def test_centralized_config_client_lock_and_crowd_trust(client, monkeypatch, tmp
                 "results": [{
                     "hash": gh,
                     "summary": {
-                        "primaryValue": val,
-                        "meanDistance": val,
-                        "meanUpright": 0.72,
-                        "primaryDisplay": f"+{val:.1f}m",
-                        "badgeText": f"+{val:.1f}m",
+                        "primary_value": val,
+                        "mean_distance": val,
+                        "mean_upright": 0.72,
+                        "primary_display": f"+{val:.1f}m",
+                        "badge_text": f"+{val:.1f}m",
                         "tier": "mid",
                     },
                 }],
@@ -2028,20 +2028,20 @@ def test_centralized_config_client_lock_and_crowd_trust(client, monkeypatch, tmp
 
     gh1 = "aa11bb22cc33dd44ee55"
     r1 = _submit(peer1, gh1, 4.50).json()
-    assert r1["verifiedCount"] == 0
+    assert r1["verified_count"] == 0
     assert r1["items"][0]["trust"]["status"] == "pending"
 
     # Peer 2 submits Byzantine outlier (+99.9m) -> disputed
     r2 = _submit(peer2, gh1, 99.90).json()
-    assert r2["verifiedCount"] == 0
+    assert r2["verified_count"] == 0
     assert r2["items"][0]["trust"]["status"] == "disputed"
 
     # Peer 3 agrees with Peer 1 (+4.54m) -> quorum reached (median = 4.52), rewards Peer1/Peer3, penalizes Peer2
     r3 = _submit(peer3, gh1, 4.54).json()
-    assert r3["verifiedCount"] == 1
+    assert r3["verified_count"] == 1
     assert r3["items"][0]["trust"]["status"] == "verified"
-    assert abs(r3["items"][0]["summary"]["primaryValue"] - 4.52) < 1e-3
-    assert r3["contributorReputation"] > 0.80
+    assert abs(r3["items"][0]["summary"]["primary_value"] - 4.52) < 1e-3
+    assert r3["contributor_reputation"] > 0.80
 
     # Check trusted_only=1 returns only verified consensus
     trusted = peer1.get("/api/rooms/lobby/crowd/evals/?goal=HalfCheetah&generation=0&trusted_only=1").json()
@@ -2091,8 +2091,8 @@ def test_ws_cid_reload_no_duplicate_leave_and_ping_reaper():
                     "type": "cast_vote", "goal": "HalfCheetah", "generation": 0, "index": 0, "vote": 1,
                 }))
                 v1 = _recv_until(obs, "votes_updated")
-                assert v1["totalVotes"] == 1
-                assert v1["votes"][0]["upUsers"] == ["alice"]
+                assert v1["total_votes"] == 1
+                assert v1["votes"][0]["up_users"] == ["alice"]
 
                 # Open replacement socket with same cid while ws1 is still open (reload race)
                 with connect(
@@ -2103,15 +2103,15 @@ def test_ws_cid_reload_no_duplicate_leave_and_ping_reaper():
                     pres2 = _recv_until(ws2, "presence")
                     assert sorted(pres2["users"]) == ["alice", "observer"]
                     hc_goal = {g["name"]: g for g in evo2["goals"]}["HalfCheetah"]
-                    assert hc_goal["votes"][0]["upUsers"] == ["alice"]
+                    assert hc_goal["votes"][0]["up_users"] == ["alice"]
 
                     # Idempotent unvote via vote=0 works on the transferred vote
                     ws2.send(json.dumps({
                         "type": "cast_vote", "goal": "HalfCheetah", "generation": 0, "index": 0, "vote": 0,
                     }))
                     v_cleared = _recv_until(ws2, "votes_updated")
-                    assert v_cleared["totalVotes"] == 0
-                    assert v_cleared["votes"][0]["upUsers"] == []
+                    assert v_cleared["total_votes"] == 0
+                    assert v_cleared["votes"][0]["up_users"] == []
 
                     # 2. RFC 6455 Ping -> Pong and JSON ping -> pong
                     pong_waiter = ws2.ping(b"keepalive")
@@ -2223,12 +2223,12 @@ def test_halfcheetah_fast_rollout_parity_and_fault_tolerant_evolve(monkeypatch):
         room="lobby",
         defaults={
             "state_json": json.dumps({
-                "defaultParams": {
-                    "maxVotesPerUser": 1,
-                    "minVotes": 99,
-                    "mutSigma": 0.30,
-                    "eliteFrac": 0.25,
-                    "crossoverRate": 0.75,
+                "default_params": {
+                    "max_votes_per_user": 1,
+                    "min_votes": 99,
+                    "mut_sigma": 0.30,
+                    "elite_frac": 0.25,
+                    "crossover_rate": 0.75,
                 },
                 "goals": [
                     {
@@ -2241,11 +2241,11 @@ def test_halfcheetah_fast_rollout_parity_and_fault_tolerant_evolve(monkeypatch):
                         ],
                         "lineage": [],
                         "params": {
-                            "maxVotesPerUser": 1,
-                            "minVotes": 99,
-                            "mutSigma": 0.30,
-                            "eliteFrac": 0.25,
-                            "crossoverRate": 0.75,
+                            "max_votes_per_user": 1,
+                            "min_votes": 99,
+                            "mut_sigma": 0.30,
+                            "elite_frac": 0.25,
+                            "crossover_rate": 0.75,
                         },
                     }
                 ],
@@ -2278,7 +2278,7 @@ def test_halfcheetah_fast_rollout_parity_and_fault_tolerant_evolve(monkeypatch):
             evo = _recv_until(ws, "evolution_state")
             hc_evo = {g["name"]: g for g in evo["goals"]}["HalfCheetah"]
             assert hc_evo["generation"] == 3
-            assert hc_evo["eliteFrac"] == 0.05
+            assert hc_evo["elite_frac"] == 0.05
 
             ws.send(json.dumps({
                 "type": "cast_vote", "goal": "HalfCheetah", "generation": 3, "index": 0, "vote": 1,
@@ -2313,11 +2313,11 @@ def test_crowd_trust_changed_items_dedup_and_ws_nginx_timeout():
         contributor_id="peer_alpha_01",
         results=[{
             "hash": "11223344556677889900",
-            "summary": {"primaryValue": 5.2, "meanDistance": 5.2, "meanUpright": 0.8},
+            "summary": {"primary_value": 5.2, "mean_distance": 5.2, "mean_upright": 0.8},
         }],
     )
-    assert len(r1["changedItems"]) == 1
-    assert r1["changedItems"][0]["trust"]["status"] == "pending"
+    assert len(r1["changed_items"]) == 1
+    assert r1["changed_items"][0]["trust"]["status"] == "pending"
 
     r2 = submit_eval_attestations(
         room="lobby",
@@ -2326,11 +2326,11 @@ def test_crowd_trust_changed_items_dedup_and_ws_nginx_timeout():
         contributor_id="peer_beta_02",
         results=[{
             "hash": "11223344556677889900",
-            "summary": {"primaryValue": 5.2, "meanDistance": 5.2, "meanUpright": 0.8},
+            "summary": {"primary_value": 5.2, "mean_distance": 5.2, "mean_upright": 0.8},
         }],
     )
-    assert len(r2["changedItems"]) == 1
-    assert r2["changedItems"][0]["trust"]["status"] == "verified"
+    assert len(r2["changed_items"]) == 1
+    assert r2["changed_items"][0]["trust"]["status"] == "verified"
 
     # Subsequent spot-check with identical consensus summary does not trigger redundant broadcast items
     r3 = submit_eval_attestations(
@@ -2340,11 +2340,11 @@ def test_crowd_trust_changed_items_dedup_and_ws_nginx_timeout():
         contributor_id="peer_gamma_03",
         results=[{
             "hash": "11223344556677889900",
-            "summary": {"primaryValue": 5.2, "meanDistance": 5.2, "meanUpright": 0.8},
+            "summary": {"primary_value": 5.2, "mean_distance": 5.2, "mean_upright": 0.8},
         }],
     )
     assert len(r3["items"]) == 1
-    assert r3["changedItems"] == []
+    assert r3["changed_items"] == []
 
     nginx_tpl = (Path(__file__).resolve().parent.parent / "deploy" / "nginx.conf.tpl").read_text(encoding="utf-8")
     assert "proxy_read_timeout 120;" in nginx_tpl
@@ -2385,9 +2385,9 @@ def test_general_scene_compiler_so101_and_microduck_assets(client, tmp_path):
 
     manifest = client.get("/api/sim/scene/microduck/").json()
     assert manifest["ok"] is True
-    assert manifest["sceneId"] == "microduck"
-    assert manifest["visualStats"]["bodyMeshCount"] == 15
-    assert manifest["visualStats"]["totalTris"] > 10_000
+    assert manifest["scene_id"] == "microduck"
+    assert manifest["visual_stats"]["body_mesh_count"] == 15
+    assert manifest["visual_stats"]["total_tris"] > 10_000
 
     # 2. Generalizability test: compile a synthetic so101-style 4-DOF robotic arm MJCF + binary STL
     #    WITHOUT explicit <inertial> tags -> verify inertial baking, visual mesh stripping, & 0.0 physics error!
@@ -2461,9 +2461,9 @@ def test_general_scene_compiler_so101_and_microduck_assets(client, tmp_path):
 
     out_dir = tmp_path / "so101_compiled"
     so_manifest = compile_mjcf_scene("so101", entry_xml, out_dir)
-    assert so_manifest["sceneId"] == "so101"
+    assert so_manifest["scene_id"] == "so101"
     assert so_manifest["nq"] == 4 and so_manifest["nu"] == 4
-    assert so_manifest["visualStats"]["bodyMeshCount"] == 4
+    assert so_manifest["visual_stats"]["body_mesh_count"] == 4
 
     vfs_files = unpack_vfs_entries((out_dir / "physics.bin").read_bytes())
     assert "meshes/visual_housing.stl" not in vfs_files  # visual-only STL stripped
@@ -2511,7 +2511,7 @@ console.log(JSON.stringify({{
     parsed = json.loads(subprocess.check_output(["node", "-e", parse_check], text=True))
     assert parsed["soBodies"] == 4
     assert parsed["mdBodies"] == 15
-    assert parsed["mdTris"] == manifest["visualStats"]["totalTris"]
+    assert parsed["mdTris"] == manifest["visual_stats"]["total_tris"]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2526,8 +2526,8 @@ def test_populora_checkpoint_roundtrip_and_multi_round_crowd_evolution(client, s
     base_model = bm_resp.json()
     assert base_model["ok"] is True
     assert base_model["arch"] == "gru_mlp"
-    assert base_model["obsDim"] == 55 and base_model["actionDim"] == 14
-    assert len(base_model["baseHash"]) == 16
+    assert base_model["obs_dim"] == 55 and base_model["action_dim"] == 14
+    assert len(base_model["base_hash"]) == 16
 
     room_resp = client.post(
         "/api/rooms/",
@@ -2550,7 +2550,7 @@ def test_populora_checkpoint_roundtrip_and_multi_round_crowd_evolution(client, s
 
     init_state = json.loads(RoomEvolutionState.objects.get(room=slug).state_json)
     g0 = init_state["goals"][0]["genomes"][0]
-    assert g0["kind"] == "populora" and g0["baseHash"] == base_model["baseHash"]
+    assert g0["kind"] == "populora" and g0["base_hash"] == base_model["base_hash"]
 
     for bad_ep, body in (
         ("/api/sim/eval-batch/", {"task": "microduck", "genomes": [g0]}),
@@ -2593,7 +2593,7 @@ def test_populora_checkpoint_roundtrip_and_multi_round_crowd_evolution(client, s
     v_strains = val_resp.json()["strains"]
     assert len(v_strains) == 2
     assert v_strains[0]["genome"]["hash"] == v_strains[1]["genome"]["hash"]
-    assert v_strains[0]["genome"]["baseHash"] == g0["baseHash"]
+    assert v_strains[0]["genome"]["base_hash"] == g0["base_hash"]
 
     # Verify exported merged state_dict loads cleanly with strict=True into GRUMLPPolicy
     import copy
@@ -2642,16 +2642,16 @@ def test_populora_checkpoint_roundtrip_and_multi_round_crowd_evolution(client, s
                     "hash": cand["hash"],
                     "summary": {
                         "return": ret,
-                        "primaryValue": ret,
-                        "meanDistance": dist,
-                        "minDistance": dist * 0.9,
-                        "meanSteps": 220.0 + idx * 10.0,
-                        "primaryDisplay": f"{ret:+.1f} ret ({dist:+.2f}m)",
-                        "badgeText": f"{dist:+.2f}m",
+                        "primary_value": ret,
+                        "mean_distance": dist,
+                        "min_distance": dist * 0.9,
+                        "mean_steps": 220.0 + idx * 10.0,
+                        "primary_display": f"{ret:+.1f} ret ({dist:+.2f}m)",
+                        "badge_text": f"{dist:+.2f}m",
                         "tier": "mid",
                     },
-                    "trajSample": traj,
-                    "replay": {"bodyPoses": [pose0, pose0], "poseStride": 2, "vx_trace": [0.2, 0.25]},
+                    "traj_sample": traj,
+                    "replay": {"body_poses": [pose0, pose0], "pose_stride": 2, "vx_trace": [0.2, 0.25]},
                 })
             resp = http_peer.post(
                 f"/api/rooms/{slug}/crowd/results/",
@@ -2673,8 +2673,8 @@ def test_populora_checkpoint_roundtrip_and_multi_round_crowd_evolution(client, s
             gname = goal0["name"]
             assert goal0["generation"] == 0
             assert goal0["phase"] == "simulating"
-            assert goal0["simPhaseEnabled"] is True
-            assert goal0["autoEvolve"] is False
+            assert goal0["sim_phase_enabled"] is True
+            assert goal0["auto_evolve"] is False
             assert len(goal0["genomes"]) == 8
 
             # Blind vote during Phase 1 ("simulating") must be rejected with simulations-running throttle
@@ -2685,12 +2685,12 @@ def test_populora_checkpoint_roundtrip_and_multi_round_crowd_evolution(client, s
             # Peer A submits all 8 -> with 2 peers in room, quorum=2 so verifiedCount == 0 (still simulating)
             sub_a = _submit_crowd_batch(peer_a, gname, 0, goal0["genomes"], offset=0.0)
             assert sub_a["quorum"] == 2
-            assert sub_a["verifiedCount"] == 0
+            assert sub_a["verified_count"] == 0
 
             # Peer B corroborates all 8 -> quorum reached (8/8 verified) -> phase transitions to "voting"!
             sub_b = _submit_crowd_batch(peer_b, gname, 0, goal0["genomes"], offset=0.02)
             assert sub_b["quorum"] == 2
-            assert sub_b["verifiedCount"] == 8
+            assert sub_b["verified_count"] == 8
 
             unlocked = None
             deadline = time.monotonic() + 3.0
@@ -2700,15 +2700,15 @@ def test_populora_checkpoint_roundtrip_and_multi_round_crowd_evolution(client, s
                     unlocked = msg
                     break
             assert unlocked is not None
-            assert unlocked["simCompleted"] == 8 and unlocked["simTotal"] == 8
+            assert unlocked["sim_completed"] == 8 and unlocked["sim_total"] == 8
 
             # Crowd evals endpoint returns peer 3D replay poses cleanly
             evals_g0 = peer_a.get(f"/api/rooms/{slug}/crowd/evals/?goal={gname}&generation=0").json()
             assert len(evals_g0["items"]) == 8
-            assert "replay" in evals_g0["items"][0] and len(evals_g0["items"][0]["replay"]["bodyPoses"]) == 2
+            assert "replay" in evals_g0["items"][0] and len(evals_g0["items"][0]["replay"]["body_poses"]) == 2
 
             # Cast 4 votes (half of pop=8) in Phase 2 -> triggers PopuLoRA evolution -> Gen 1!
-            assert goal0["minVotes"] == 4
+            assert goal0["min_votes"] == 4
             ws_a.send(json.dumps({"type": "cast_vote", "goal": gname, "generation": 0, "index": 7, "vote": 1}))
             ws_b.send(json.dumps({"type": "cast_vote", "goal": gname, "generation": 0, "index": 6, "vote": 1}))
             ws_a.send(json.dumps({"type": "cast_vote", "goal": gname, "generation": 0, "index": 5, "vote": 1}))
@@ -2716,9 +2716,9 @@ def test_populora_checkpoint_roundtrip_and_multi_round_crowd_evolution(client, s
             gen1 = _recv_until(ws_a, "goal_updated", timeout=8.0)["goal"]
             assert gen1["generation"] == 1
             assert gen1["phase"] == "simulating"
-            assert gen1["simCompleted"] == 0
+            assert gen1["sim_completed"] == 0
             assert len(gen1["genomes"]) == 8
-            assert all(g["kind"] == "populora" and g["baseHash"] == base_model["baseHash"] for g in gen1["genomes"])
+            assert all(g["kind"] == "populora" and g["base_hash"] == base_model["base_hash"] for g in gen1["genomes"])
             # Slot 0 champion backup preserves top candidate's weights/hash or evolves diverse LoRA deltas
             assert len({g["hash"] for g in gen1["genomes"]}) >= 6
 
@@ -2731,14 +2731,14 @@ def test_populora_checkpoint_roundtrip_and_multi_round_crowd_evolution(client, s
             # Enable hands-free Auto-Evolve over WebSocket
             ws_solo.send(json.dumps({"type": "set_auto_evolve", "goal": gname, "enabled": True}))
             ae_upd = _recv_until(ws_solo, "votes_updated")
-            assert ae_upd["autoEvolve"] is True
+            assert ae_upd["auto_evolve"] is True
 
             # Simulate 3 consecutive generations (Gen 1 -> Gen 2 -> Gen 3 -> Gen 4) solo without casting manual votes!
             for expected_next_gen in (2, 3, 4):
                 cur_gen = expected_next_gen - 1
                 sub_solo = _submit_crowd_batch(peer_a, gname, cur_gen, cur_goal["genomes"])
                 assert sub_solo["quorum"] == 1
-                assert sub_solo["verifiedCount"] == 8
+                assert sub_solo["verified_count"] == 8
 
                 next_goal = None
                 deadline = time.monotonic() + 8.0
@@ -2749,7 +2749,7 @@ def test_populora_checkpoint_roundtrip_and_multi_round_crowd_evolution(client, s
                         break
                 assert next_goal is not None, f"Auto-Evolve did not advance to Gen {expected_next_gen}"
                 assert next_goal["generation"] == expected_next_gen
-                assert next_goal["autoEvolve"] is True
+                assert next_goal["auto_evolve"] is True
                 assert next_goal["phase"] == "simulating"
                 assert len(next_goal["genomes"]) == 8
                 cur_goal = next_goal
@@ -2767,7 +2767,7 @@ def test_microduck_wasm_worker_and_populora_network_viz_in_node(tmp_path):
     pkg_dir = Path(__file__).resolve().parent.parent / "direct_evolution_together"
     _, base_hash, base_payload = get_or_create_base_model(MICRODUCK_POLICY_SPEC)
     genomes = create_populora_population("microduck", MICRODUCK_POLICY_SPEC, pop_size=8)
-    assert len(genomes) == 8 and all(g["baseHash"] == base_hash for g in genomes)
+    assert len(genomes) == 8 and all(g["base_hash"] == base_hash for g in genomes)
 
     # 1. Verify DetNetworkViz builds low-rank PopuLoRA adapter graph + delta-W matrices
     nv_js = str(pkg_dir / "frontend" / "network_viz.js")
@@ -2823,8 +2823,8 @@ function send(reqId, payload) {{
 }}
 const initRes = await send(1, {{
   type: "init",
-  taskSpecs: inp.specs,
-  mujocoWasmUrl: {json.dumps(wasm_js)},
+  task_specs: inp.specs,
+  mujoco_wasm_url: {json.dumps(wasm_js)},
   warmMujoco: true,
 }});
 if (!initRes.ok) throw new Error(initRes.error);
@@ -2842,18 +2842,18 @@ const roRes = await send(3, {{
   taskId: "microduck",
   genome: inp.genomes[0],
   seed: 0,
-  maxSteps: 60,
+  max_steps: 60,
   nudge: "fwd",
   includeActivations: true,
-  includeGeoms: true,
+  include_geoms: true,
 }});
 if (!roRes.ok) throw new Error(roRes.error);
 console.log(JSON.stringify({{
   engine: batchRes.engine,
   count: batchRes.items.length,
-  hasTraj: batchRes.items.every((x) => Array.isArray(x.trajSample) && x.trajSample.length > 0),
-  hasPoses: batchRes.items.every((x) => Array.isArray(x.primaryRollout.bodyPoses) && x.primaryRollout.bodyPoses[0].length === 15 * 7),
-  roFrames: roRes.rollout.bodyPoses.length,
+  hasTraj: batchRes.items.every((x) => Array.isArray(x.traj_sample) && x.traj_sample.length > 0),
+  hasPoses: batchRes.items.every((x) => Array.isArray(x.primary_rollout.body_poses) && x.primary_rollout.body_poses[0].length === 15 * 7),
+  roFrames: roRes.rollout.body_poses.length,
   roActLen: roRes.rollout.stepActivations.length,
   roActLayers: roRes.rollout.stepActivations[0].length,
 }}));
@@ -2896,13 +2896,13 @@ def test_unitree_go2_scene_assets_populora_and_wasm_worker(client, tmp_path):
     m_resp = client.get("/api/sim/scene/unitree_go2/")
     assert m_resp.status_code == 200
     manifest = m_resp.json()
-    assert manifest["sceneId"] == "unitree_go2"
-    assert manifest["physicsBytes"] < 20_000
-    assert manifest["collisionMeshes"] == []
-    assert manifest["visualStats"]["bodyMeshCount"] == 13
+    assert manifest["scene_id"] == "unitree_go2"
+    assert manifest["physics_bytes"] < 20_000
+    assert manifest["collision_meshes"] == []
+    assert manifest["visual_stats"]["body_mesh_count"] == 13
 
-    phys_resp = client.get(f"/assets/{manifest['physicsAsset']}", HTTP_ACCEPT_ENCODING="gzip")
-    vis_resp = client.get(f"/assets/{manifest['visualAsset']}", HTTP_ACCEPT_ENCODING="gzip")
+    phys_resp = client.get(f"/assets/{manifest['physics_asset']}", HTTP_ACCEPT_ENCODING="gzip")
+    vis_resp = client.get(f"/assets/{manifest['visual_asset']}", HTTP_ACCEPT_ENCODING="gzip")
     assert phys_resp.status_code == 200 and vis_resp.status_code == 200
 
     raw_phys = (pkg_dir / "assets" / "scenes" / "unitree_go2" / "physics.bin").read_bytes()
@@ -2914,8 +2914,8 @@ def test_unitree_go2_scene_assets_populora_and_wasm_worker(client, tmp_path):
     bm_resp = client.get("/api/sim/base-model/?task=unitree_go2&seed=1")
     assert bm_resp.status_code == 200
     bm_json = bm_resp.json()
-    assert bm_json["obsDim"] == 49
-    assert bm_json["actionDim"] == 12
+    assert bm_json["obs_dim"] == 49
+    assert bm_json["action_dim"] == 12
 
     torch.manual_seed(7)
     genomes = create_task_population("unitree_go2", 8)
@@ -2990,8 +2990,8 @@ function send(reqId, payload) {{
 }}
 const initRes = await send(1, {{
   type: "init",
-  taskSpecs: inp.specs,
-  mujocoWasmUrl: {json.dumps(wasm_js)},
+  task_specs: inp.specs,
+  mujoco_wasm_url: {json.dumps(wasm_js)},
   warmMujoco: true,
   warmTaskId: "unitree_go2",
   physicsBuffer: physBuf.buffer.slice(physBuf.byteOffset, physBuf.byteOffset + physBuf.byteLength),
@@ -3011,7 +3011,7 @@ const roRes = await send(3, {{
   taskId: "unitree_go2",
   genome: inp.genomes[0],
   seed: 0,
-  maxSteps: 60,
+  max_steps: 60,
   nudge: "fwd",
   includeActivations: true,
 }});
@@ -3020,9 +3020,9 @@ console.log(JSON.stringify({{
   engine: batchRes.engine,
   count: batchRes.items.length,
   summaries: batchRes.items.map((x) => x.summary),
-  trajs: batchRes.items.map((x) => x.trajSample),
-  poseRowLen: batchRes.items[0].primaryRollout.bodyPoses[0].length,
-  roFrames: roRes.rollout.bodyPoses.length,
+  trajs: batchRes.items.map((x) => x.traj_sample),
+  poseRowLen: batchRes.items[0].primary_rollout.body_poses[0].length,
+  roFrames: roRes.rollout.body_poses.length,
   roStepTraceLen: roRes.rollout.stepTrace[0].length,
   roActLayers: roRes.rollout.stepActivations[0].length,
 }}));
@@ -3038,7 +3038,7 @@ console.log(JSON.stringify({{
     assert wasm_out["roActLayers"] == 5
     assert all(len(t) == 16 and len(t[0]) == 22 for t in wasm_out["trajs"])
     assert all(
-        isinstance(s["return"], (int, float)) and math.isfinite(s["return"]) and s["minSteps"] > 0
+        isinstance(s["return"], (int, float)) and math.isfinite(s["return"]) and s["min_steps"] > 0
         for s in wasm_out["summaries"]
     )
 
@@ -3047,7 +3047,7 @@ console.log(JSON.stringify({{
     eval_map = {
         genomes[i]["hash"]: {
             "summary": wasm_out["summaries"][i],
-            "trajSample": wasm_out["trajs"][i],
+            "traj_sample": wasm_out["trajs"][i],
         }
         for i in range(8)
     }
@@ -3091,10 +3091,10 @@ def test_so101_arm_scene_assets_populora_and_wasm_worker(client, tmp_path):
 
     # 1. Verify _ensure_lobby_default_goals ALWAYS keeps Microduck as default tab #0
     partial_lobby = json.dumps({
-        "defaultParams": {"maxVotesPerUser": 20, "minVotes": 3, "mutSigma": 0.3, "eliteFrac": 0.25, "crossoverRate": 0.75},
+        "default_params": {"max_votes_per_user": 20, "min_votes": 3, "mut_sigma": 0.3, "elite_frac": 0.25, "crossover_rate": 0.75},
         "goals": [
-            {"name": "Unitree Go2", "task": "unitree_go2", "generation": 1, "genomes": create_task_population("unitree_go2", 8), "lineage": [], "params": {"maxVotesPerUser": 20, "minVotes": 3, "mutSigma": 0.3, "eliteFrac": 0.25, "crossoverRate": 0.75}},
-            {"name": "Microduck", "task": "microduck", "generation": 0, "genomes": create_task_population("microduck", 8), "lineage": [], "params": {"maxVotesPerUser": 20, "minVotes": 3, "mutSigma": 0.3, "eliteFrac": 0.25, "crossoverRate": 0.75}},
+            {"name": "Unitree Go2", "task": "unitree_go2", "generation": 1, "genomes": create_task_population("unitree_go2", 8), "lineage": [], "params": {"max_votes_per_user": 20, "min_votes": 3, "mut_sigma": 0.3, "elite_frac": 0.25, "crossover_rate": 0.75}},
+            {"name": "Microduck", "task": "microduck", "generation": 0, "genomes": create_task_population("microduck", 8), "lineage": [], "params": {"max_votes_per_user": 20, "min_votes": 3, "mut_sigma": 0.3, "elite_frac": 0.25, "crossover_rate": 0.75}},
         ],
     })
     upgraded_json, changed = _ensure_lobby_default_goals(partial_lobby, default_pop_size=8, default_max_votes=20)
@@ -3106,11 +3106,11 @@ def test_so101_arm_scene_assets_populora_and_wasm_worker(client, tmp_path):
     m_resp = client.get("/api/sim/scene/so101/")
     assert m_resp.status_code == 200
     manifest = m_resp.json()
-    assert manifest["sceneId"] == "so101"
-    assert manifest["physicsBytes"] < 15_000
-    assert manifest["collisionMeshes"] == []
-    assert manifest["visualStats"]["bodyMeshCount"] == 8
-    assert "cube" in manifest["bodyNames"]
+    assert manifest["scene_id"] == "so101"
+    assert manifest["physics_bytes"] < 15_000
+    assert manifest["collision_meshes"] == []
+    assert manifest["visual_stats"]["body_mesh_count"] == 8
+    assert "cube" in manifest["body_names"]
 
     raw_phys = (pkg_dir / "assets" / "scenes" / "so101" / "physics.bin").read_bytes()
     vfs = unpack_vfs_entries(raw_phys)
@@ -3121,8 +3121,8 @@ def test_so101_arm_scene_assets_populora_and_wasm_worker(client, tmp_path):
     bm_resp = client.get("/api/sim/base-model/?task=so101&seed=1")
     assert bm_resp.status_code == 200
     bm_json = bm_resp.json()
-    assert bm_json["obsDim"] == 33
-    assert bm_json["actionDim"] == 6
+    assert bm_json["obs_dim"] == 33
+    assert bm_json["action_dim"] == 6
 
     genomes = create_task_population("so101", 8)
     assert len(genomes) == 8
@@ -3186,18 +3186,18 @@ function send(reqId, payload) {{
 }}
 const initRes = await send(1, {{
   type: "init",
-  taskSpecs: inp.specs,
-  mujocoWasmUrl: {json.dumps(wasm_js)},
+  task_specs: inp.specs,
+  mujoco_wasm_url: {json.dumps(wasm_js)},
   warmMujoco: true,
   warmTaskId: "so101",
-  envParams: {{ arm_model: "so101" }},
+  env_params: {{ arm_model: "so101" }},
   physicsBuffer: physBuf.buffer.slice(physBuf.byteOffset, physBuf.byteOffset + physBuf.byteLength),
 }});
 if (!initRes.ok) throw new Error(initRes.error);
 const batchRes = await send(2, {{
   type: "evalBatch",
   taskId: "so101",
-  envParams: {{ arm_model: "so101" }},
+  env_params: {{ arm_model: "so101" }},
   genomes: inp.genomes,
   seeds: [0, 1],
   baseModel: inp.baseModel,
@@ -3207,10 +3207,10 @@ if (!batchRes.ok) throw new Error(batchRes.error);
 const roRes = await send(3, {{
   type: "rollout",
   taskId: "so101",
-  envParams: {{ arm_model: "so101" }},
+  env_params: {{ arm_model: "so101" }},
   genome: inp.genomes[0],
   seed: 0,
-  maxSteps: 60,
+  max_steps: 60,
   nudge: "left",
   includeActivations: true,
 }});
@@ -3219,9 +3219,9 @@ console.log(JSON.stringify({{
   engine: batchRes.engine,
   count: batchRes.items.length,
   summaries: batchRes.items.map((x) => x.summary),
-  trajs: batchRes.items.map((x) => x.trajSample),
-  poseRowLen: batchRes.items[0].primaryRollout.bodyPoses[0].length,
-  roFrames: roRes.rollout.bodyPoses.length,
+  trajs: batchRes.items.map((x) => x.traj_sample),
+  poseRowLen: batchRes.items[0].primary_rollout.body_poses[0].length,
+  roFrames: roRes.rollout.body_poses.length,
   roStepTraceLen: roRes.rollout.stepTrace[0].length,
   roActLayers: roRes.rollout.stepActivations[0].length,
 }}));
@@ -3246,7 +3246,7 @@ console.log(JSON.stringify({{
     eval_map = {
         genomes[i]["hash"]: {
             "summary": wasm_out["summaries"][i],
-            "trajSample": wasm_out["trajs"][i],
+            "traj_sample": wasm_out["trajs"][i],
         }
         for i in range(8)
     }
@@ -3293,30 +3293,30 @@ def test_lazy_active_tab_ws_loading_and_compact_crowd_wire(client):
             raw_lazy, evo_lazy = _recv_raw_type(ws_lazy, "evolution_state")
             raw_bfly, evo_bfly = _recv_raw_type(ws_bfly, "evolution_state")
 
-            assert all(g["genomesLoaded"] is True and len(g["genomes"]) > 0 for g in evo_eager["goals"])
+            assert all(g["genomes_loaded"] is True and len(g["genomes"]) > 0 for g in evo_eager["goals"])
             assert len(raw_eager) > 950_000
 
             # Default lazy client loads ONLY active first tab ("Microduck")
             assert evo_lazy["goals"][0]["name"] == "Microduck"
-            assert evo_lazy["goals"][0]["genomesLoaded"] is True
+            assert evo_lazy["goals"][0]["genomes_loaded"] is True
             assert len(evo_lazy["goals"][0]["genomes"]) == 8
             for stub in evo_lazy["goals"][1:]:
-                assert stub["genomesLoaded"] is False
+                assert stub["genomes_loaded"] is False
                 assert stub["genomes"] == []
                 assert stub["lineage"] == []
-                assert stub["populationSize"] >= 8
+                assert stub["population_size"] >= 8
             assert len(raw_lazy) < 360_000
 
             # Focused lazy client loads ONLY "Butterfly" (< 75 KB raw vs > 950 KB eager)
-            loaded_bfly = [g["name"] for g in evo_bfly["goals"] if g["genomesLoaded"]]
+            loaded_bfly = [g["name"] for g in evo_bfly["goals"] if g["genomes_loaded"]]
             assert loaded_bfly == ["Butterfly"]
             assert len(raw_bfly) < 75_000
 
             # Switching tab via select_goal hydrates "SO-102 Arm" on demand
-            ws_lazy.send(json.dumps({"type": "select_goal", "goal": "SO-102 Arm", "needGenomes": True}))
+            ws_lazy.send(json.dumps({"type": "select_goal", "goal": "SO-102 Arm", "need_genomes": True}))
             _, so_upd = _recv_raw_type(ws_lazy, "goal_updated")
             assert so_upd["goal"]["name"] == "SO-102 Arm"
-            assert so_upd["goal"]["genomesLoaded"] is True
+            assert so_upd["goal"]["genomes_loaded"] is True
             assert len(so_upd["goal"]["genomes"]) == 8
 
             # Evolving "Butterfly" sends full Gen 1 to ws_bfly, but a tiny stub (< 650 B) to ws_lazy on "SO-102 Arm"
@@ -3327,13 +3327,13 @@ def test_lazy_active_tab_ws_loading_and_compact_crowd_wire(client):
             raw_full_upd, msg_full_upd = _recv_raw_type(ws_bfly, "goal_updated", timeout=6.0)
             assert msg_stub_upd["goal"]["name"] == "Butterfly"
             assert msg_stub_upd["goal"]["generation"] == 1
-            assert msg_stub_upd["goal"]["genomesLoaded"] is False
+            assert msg_stub_upd["goal"]["genomes_loaded"] is False
             assert msg_stub_upd["goal"]["genomes"] == []
             assert len(raw_stub_upd) < 650
 
             assert msg_full_upd["goal"]["name"] == "Butterfly"
             assert msg_full_upd["goal"]["generation"] == 1
-            assert msg_full_upd["goal"]["genomesLoaded"] is True
+            assert msg_full_upd["goal"]["genomes_loaded"] is True
             assert len(msg_full_upd["goal"]["genomes"]) == 30
             assert len(raw_full_upd) > 15_000
 
@@ -3349,9 +3349,9 @@ def test_lazy_active_tab_ws_loading_and_compact_crowd_wire(client):
                     "generation": 0,
                     "results": [{
                         "hash": md_hash,
-                        "summary": {"primaryValue": 124.5, "return": 124.5, "meanDistance": 1.42},
-                        "trajSample": traj_sample,
-                        "replay": {"bodyPoses": dense_poses, "poseStride": 2, "vx_trace": [0.4] * 200},
+                        "summary": {"primary_value": 124.5, "return": 124.5, "mean_distance": 1.42},
+                        "traj_sample": traj_sample,
+                        "replay": {"body_poses": dense_poses, "pose_stride": 2, "vx_trace": [0.4] * 200},
                     }],
                 }),
                 content_type="application/json",
@@ -3359,18 +3359,18 @@ def test_lazy_active_tab_ws_loading_and_compact_crowd_wire(client):
             assert post_resp.status_code == 200
             assert len(post_resp.content) < 2500
             ack_item = post_resp.json()["items"][0]
-            assert "replay" not in ack_item and "trajSample" not in ack_item
+            assert "replay" not in ack_item and "traj_sample" not in ack_item
 
             get_resp = client.get("/api/rooms/lobby/crowd/evals/?goal=Microduck&generation=0")
             assert get_resp.status_code == 200
             fetched_item = next(x for x in get_resp.json()["items"] if x["hash"] == md_hash)
-            assert "trajSample" not in fetched_item
-            assert len(fetched_item["replay"]["bodyPoses"]) <= 32
-            assert fetched_item["replay"]["poseStride"] >= 12
+            assert "traj_sample" not in fetched_item
+            assert len(fetched_item["replay"]["body_poses"]) <= 32
+            assert fetched_item["replay"]["pose_stride"] >= 12
             assert len(fetched_item["replay"]["vx_trace"]) <= 48
 
             srv_map = fetch_room_eval_map("lobby", "Microduck", 0, trusted_only=False)
-            assert len(srv_map[md_hash]["trajSample"]) == 16
+            assert len(srv_map[md_hash]["traj_sample"]) == 16
 
 
 @pytest.mark.django_db
@@ -3447,7 +3447,7 @@ def test_public_assets_staging_nginx_template_and_static_base_model(client, sett
     assert media_resp["Content-Encoding"] == "gzip"
     assert "immutable" in media_resp["Cache-Control"]
     decoded = json.loads(gzip.decompress(media_resp.content).decode("utf-8"))
-    assert decoded["baseHash"] == b_hash and "tensors" in decoded
+    assert decoded["base_hash"] == b_hash and "tensors" in decoded
 
 
 @pytest.mark.django_db(transaction=True)
@@ -3521,7 +3521,7 @@ def test_individual_short_uuid_permalinks_and_expandable_left_panel(client, sett
             assert api_live["ok"] is True
             assert api_live["uuid"] == live_gen1_uuid
             assert api_live["room"] == "lobby" and api_live["goal"] == "Butterfly"
-            assert api_live["generation"] == 1 and api_live["isLive"] is True
+            assert api_live["generation"] == 1 and api_live["is_live"] is True
             assert api_live["permalink"] == f"/i/{live_gen1_uuid}/"
             assert len(api_live["genome"]["weights"]) > 100
 
@@ -3529,7 +3529,7 @@ def test_individual_short_uuid_permalinks_and_expandable_left_panel(client, sett
             api_anc = client.get(f"/api/rooms/lobby/individuals/{founder_uuid}/").json()
             assert api_anc["ok"] is True
             assert api_anc["uuid"] == founder_uuid
-            assert api_anc["generation"] == 0 and api_anc["isLive"] is False
+            assert api_anc["generation"] == 0 and api_anc["is_live"] is False
 
             # Resolve private room individual + HTML permalinks
             api_priv = client.get(f"/api/rooms/p-uuidroom/individuals/{priv_uuid}/").json()
@@ -3573,28 +3573,28 @@ def test_so102_arm_environment_hyperparameter_assets_and_wasm_worker(client, set
     # 1. Task specs expose arm_model environment hyperparameter pointing at SO-102 URDF + STL files
     specs = get_task_specs_payload()
     so_spec = specs["so101"]
-    assert so_spec["sceneId"] == "so102"
-    assert so_spec["envParams"]["arm_model"] == "so102"
-    hspecs = so_spec["hyperparamSpecs"]
+    assert so_spec["scene_id"] == "so102"
+    assert so_spec["env_params"]["arm_model"] == "so102"
+    hspecs = so_spec["hyperparam_specs"]
     assert len(hspecs) >= 1 and hspecs[0]["key"] == "arm_model" and hspecs[0]["default"] == "so102"
     opt_by_val = {o["value"]: o for o in hspecs[0]["options"]}
     assert set(opt_by_val) == {"so101", "so102"}
-    assert opt_by_val["so102"]["sceneId"] == "so102"
-    assert opt_by_val["so102"]["urdfAsset"] == "scenes/so102/so_arm_102.urdf"
+    assert opt_by_val["so102"]["scene_id"] == "so102"
+    assert opt_by_val["so102"]["urdf_asset"] == "scenes/so102/so_arm_102.urdf"
     so102_var = so_spec["variants"]["so102"]
-    assert so102_var["gripperKind"] == "parallel"
-    assert len(so102_var["stlAssets"]) == 8
-    assert all(p.startswith("scenes/so102/meshes/") and p.endswith(".stl") for p in so102_var["stlAssets"])
+    assert so102_var["gripper_kind"] == "parallel"
+    assert len(so102_var["stl_assets"]) == 8
+    assert all(p.startswith("scenes/so102/meshes/") and p.endswith(".stl") for p in so102_var["stl_assets"])
 
     # 2. Verify SO-102 URDF, STL meshes, physics.bin, visual.bin, & public asset staging
     m_resp = client.get("/api/sim/scene/so102/")
     assert m_resp.status_code == 200
     manifest = m_resp.json()
-    assert manifest["sceneId"] == "so102"
+    assert manifest["scene_id"] == "so102"
     assert manifest["nbody"] == 10
     assert manifest["nq"] == 14 and manifest["nv"] == 13 and manifest["nu"] == 6
-    assert manifest["visualStats"]["bodyMeshCount"] == 9
-    assert {"clamp_left", "clamp_right", "cube"} <= set(manifest["bodyNames"])
+    assert manifest["visual_stats"]["body_mesh_count"] == 9
+    assert {"clamp_left", "clamp_right", "cube"} <= set(manifest["body_names"])
 
     for asset_url, expected_ct in (
         ("/assets/scenes/so102/so_arm_102.urdf", "xml"),
@@ -3630,7 +3630,7 @@ def test_so102_arm_environment_hyperparameter_assets_and_wasm_worker(client, set
     rdata = room_resp.json()
     slug = rdata["slug"]
     assert rdata["env_params"]["arm_model"] == "so102"
-    assert rdata["env_params"]["sceneId"] == "so102"
+    assert rdata["env_params"]["scene_id"] == "so102"
 
     with _ws_server(seed=True, pop_size=6, max_votes=4) as port:
         settings.WS_HOST = "127.0.0.1"
@@ -3640,8 +3640,8 @@ def test_so102_arm_environment_hyperparameter_assets_and_wasm_worker(client, set
             evo = _recv_until(ws, "evolution_state")
             g_so102 = evo["goals"][0]
             assert g_so102["task"] == "so101"
-            assert g_so102["envParams"]["arm_model"] == "so102"
-            assert g_so102["envParams"]["sceneId"] == "so102"
+            assert g_so102["env_params"]["arm_model"] == "so102"
+            assert g_so102["env_params"]["scene_id"] == "so102"
             g0 = g_so102["genomes"][0]
 
     bun_resp = client.post(
@@ -3649,7 +3649,7 @@ def test_so102_arm_environment_hyperparameter_assets_and_wasm_worker(client, set
         data=json.dumps({
             "goal": "SO102 Parallel Jaw Lab",
             "task": "so101",
-            "envParams": {"arm_model": "so102"},
+            "env_params": {"arm_model": "so102"},
             "generation": 0,
             "index": 0,
             "genome": g0,
@@ -3669,9 +3669,9 @@ def test_so102_arm_environment_hyperparameter_assets_and_wasm_worker(client, set
     # 4. Verify BOTH native Python MuJoCo simulator & frontend/sim_worker.js WASM run SO-102 cleanly
     genomes = create_task_population("so101", 4)
     py_eval = evaluate_populora_genome("so101", genomes[0], env_params={"arm_model": "so102"})
-    assert py_eval["summary"]["armModel"] == "so102"
+    assert py_eval["summary"]["arm_model"] == "so102"
     assert math.isfinite(py_eval["summary"]["return"])
-    assert len(py_eval["trajSample"]) == 16 and len(py_eval["trajSample"][0]) == 15
+    assert len(py_eval["traj_sample"]) == 16 and len(py_eval["traj_sample"][0]) == 15
 
     _, _, base_payload = get_or_create_base_model(SO101_POLICY_SPEC, base_seed=1)
     worker_src = (pkg_dir / "frontend" / "sim_worker.js").read_text(encoding="utf-8")
@@ -3707,18 +3707,18 @@ function send(reqId, payload) {{
 }}
 const initRes = await send(1, {{
   type: "init",
-  taskSpecs: inp.specs,
-  mujocoWasmUrl: {json.dumps(wasm_js)},
+  task_specs: inp.specs,
+  mujoco_wasm_url: {json.dumps(wasm_js)},
   warmMujoco: true,
   warmTaskId: "so101",
-  envParams: {{ arm_model: "so102" }},
+  env_params: {{ arm_model: "so102" }},
   physicsBuffer: physBuf.buffer.slice(physBuf.byteOffset, physBuf.byteOffset + physBuf.byteLength),
 }});
 if (!initRes.ok) throw new Error(initRes.error);
 const batchRes = await send(2, {{
   type: "evalBatch",
   taskId: "so101",
-  envParams: {{ arm_model: "so102" }},
+  env_params: {{ arm_model: "so102" }},
   genomes: inp.genomes,
   seeds: [0, 1],
   baseModel: inp.baseModel,
@@ -3728,10 +3728,10 @@ if (!batchRes.ok) throw new Error(batchRes.error);
 const roRes = await send(3, {{
   type: "rollout",
   taskId: "so101",
-  envParams: {{ arm_model: "so102" }},
+  env_params: {{ arm_model: "so102" }},
   genome: inp.genomes[0],
   seed: 0,
-  maxSteps: 50,
+  max_steps: 50,
   nudge: "fwd",
   includeActivations: true,
 }});
@@ -3740,9 +3740,9 @@ console.log(JSON.stringify({{
   engine: batchRes.engine,
   count: batchRes.items.length,
   summaries: batchRes.items.map((x) => x.summary),
-  poseRowLen: batchRes.items[0].primaryRollout.bodyPoses[0].length,
-  roArmModel: roRes.rollout.armModel,
-  roFrames: roRes.rollout.bodyPoses.length,
+  poseRowLen: batchRes.items[0].primary_rollout.body_poses[0].length,
+  roArmModel: roRes.rollout.arm_model,
+  roFrames: roRes.rollout.body_poses.length,
 }}));
 """,
         encoding="utf-8",
@@ -3753,7 +3753,7 @@ console.log(JSON.stringify({{
     assert wasm_out["poseRowLen"] == 9 * 7
     assert wasm_out["roArmModel"] == "so102"
     assert wasm_out["roFrames"] >= 2
-    assert all(s["armModel"] == "so102" and math.isfinite(s["return"]) for s in wasm_out["summaries"])
+    assert all(s["arm_model"] == "so102" and math.isfinite(s["return"]) for s in wasm_out["summaries"])
 
 
 @pytest.mark.django_db(transaction=True)
@@ -3802,8 +3802,8 @@ def test_crowdsourced_large_population_sharding_ranking_and_evolution(client, se
             # 1. Because pop_size=20 > crowd_shard_threshold=16, WS omits bulky LoRA adapters!
             assert goal0["generation"] == 0
             assert goal0["phase"] == "simulating"
-            assert goal0["genomesSharded"] is True
-            assert goal0["crowdShardThreshold"] == 16
+            assert goal0["genomes_sharded"] is True
+            assert goal0["crowd_shard_threshold"] == 16
             assert len(goal0["genomes"]) == 20
             assert all("adapters" not in g and len(g["uuid"]) == 8 and g.get("hash") for g in goal0["genomes"])
 
@@ -3828,13 +3828,13 @@ def test_crowdsourced_large_population_sharding_ranking_and_evolution(client, se
                 for w_name, w_http in workers:
                     claim_res = w_http.post(
                         f"/api/rooms/{slug}/crowd/claim/",
-                        data=json.dumps({"goal": gname, "batchSize": 3, "peerId": w_name}),
+                        data=json.dumps({"goal": gname, "batch_size": 3, "peer_id": w_name}),
                         content_type="application/json",
                     )
                     assert claim_res.status_code == 200
                     claim_data = claim_res.json()
                     assert claim_data["sharded"] is True
-                    assert claim_data["envParams"]["arm_model"] == "so102"
+                    assert claim_data["env_params"]["arm_model"] == "so102"
                     shard = claim_data["shard"]
                     if not shard:
                         continue
@@ -3847,10 +3847,10 @@ def test_crowdsourced_large_population_sharding_ranking_and_evolution(client, se
                         shard,
                         seeds=(0,),
                         max_steps=40,
-                        env_params=claim_data["envParams"],
+                        env_params=claim_data["env_params"],
                     )
                     eval_batch = evaluated["results"]
-                    shard_ranked = evaluated["shardRanking"]
+                    shard_ranked = evaluated["shard_ranking"]
                     assert rank_eval_items(eval_batch) == shard_ranked
                     local_shard_rankings.setdefault(w_name, []).extend(shard_ranked)
                     assert [it["rank"] for it in shard_ranked] == list(range(1, len(shard) + 1))
@@ -3860,10 +3860,10 @@ def test_crowdsourced_large_population_sharding_ranking_and_evolution(client, se
                         data=json.dumps({
                             "goal": gname,
                             "generation": 0,
-                            "peerId": w_name,
+                            "peer_id": w_name,
                             "sharded": True,
                             "results": eval_batch,
-                            "shardRanking": shard_ranked,
+                            "shard_ranking": shard_ranked,
                         }),
                         content_type="application/json",
                     )
@@ -3888,7 +3888,7 @@ def test_crowdsourced_large_population_sharding_ranking_and_evolution(client, se
             rankings = evals_resp["rankings"]
             assert len(rankings) == 20
             assert [r["rank"] for r in rankings] == list(range(1, 21))
-            primary_vals = [float(r["primaryValue"]) for r in rankings]
+            primary_vals = [float(r["primary_value"]) for r in rankings]
             assert primary_vals == sorted(primary_vals, reverse=True)
 
             # 4. Verify WS transitioned to Phase 2 ("voting") once all 20/20 shards completed
@@ -3897,7 +3897,7 @@ def test_crowdsourced_large_population_sharding_ranking_and_evolution(client, se
             while time.monotonic() < deadline:
                 msg = _decode_ws_message(ws.recv(timeout=1.5))
                 if msg.get("type") == "votes_updated" and msg.get("goal") == gname and msg.get("phase") == "voting":
-                    assert msg["simCompleted"] == 20 and msg["simTotal"] == 20
+                    assert msg["sim_completed"] == 20 and msg["sim_total"] == 20
                     voting_ready = True
                     break
             assert voting_ready, "Room did not transition to voting after 20/20 crowd shards finished"
@@ -3918,9 +3918,9 @@ def test_crowdsourced_large_population_sharding_ranking_and_evolution(client, se
             assert gen1_goal is not None, "Evolution did not advance to Generation 1"
             assert gen1_goal["generation"] == 1
             assert gen1_goal["phase"] == "simulating"
-            assert gen1_goal["genomesSharded"] is True
+            assert gen1_goal["genomes_sharded"] is True
             assert len(gen1_goal["genomes"]) == 20
-            assert gen1_goal["lineageTotal"] == 40
+            assert gen1_goal["lineage_total"] == 40
             gen0_uuids = {g["uuid"] for g in goal0["genomes"]}
             gen1_uuids = {g["uuid"] for g in gen1_goal["genomes"]}
             assert len(gen1_uuids) == 20
@@ -3929,19 +3929,19 @@ def test_crowdsourced_large_population_sharding_ranking_and_evolution(client, se
 
 @pytest.mark.django_db(transaction=True)
 def test_centralized_hyperparameters_and_population_scaling_constraints(client, monkeypatch):
-    from direct_evolution_together.config import EnvPolicyConfig, build_config, reload_config
+    from direct_evolution_together.config import EnvPolicyConfig, build_config, get_config, reload_config
     from direct_evolution_together.environments import get_task_spec, sanitize_task_env_params
 
     # 1. Generic centralized env-var hyperparameter overrides (JSON + individual key) with bounds clamping
     monkeypatch.setenv("DET_HP_MICRODUCK_ACTION_SCALE", "2.5")
-    monkeypatch.setenv("DET_HYPERPARAMS_UNITREE_GO2", json.dumps({"actionScale": 0.05}))
+    monkeypatch.setenv("DET_HYPERPARAMS_UNITREE_GO2", json.dumps({"action_scale": 0.05}))
     monkeypatch.setenv("DET_HP_SO101_ARM_MODEL", "so101")
     cfg = build_config()
-    assert cfg.get_env("unitree_go2").env_hyperparams["actionScale"] == 0.05
+    assert cfg.get_env("unitree_go2").env_hyperparams["action_scale"] == 0.05
     assert cfg.get_env("so101").env_hyperparams["arm_model"] == "so101"
     reload_config()
-    assert get_task_spec("microduck").env_params["actionScale"] == 0.85  # clamped to [0.20, 0.85]
-    assert get_task_spec("unitree_go2").env_params["actionScale"] == 0.20  # clamped to [0.20, 0.75]
+    assert get_task_spec("microduck").env_params["action_scale"] == 0.85  # clamped to [0.20, 0.85]
+    assert get_task_spec("unitree_go2").env_params["action_scale"] == 0.20  # clamped to [0.20, 0.75]
     assert get_task_spec("so101").env_params["arm_model"] == "so101"
 
     monkeypatch.delenv("DET_HP_MICRODUCK_ACTION_SCALE", raising=False)
@@ -3950,9 +3950,9 @@ def test_centralized_hyperparameters_and_population_scaling_constraints(client, 
     reload_config()
 
     # 2. Room creator hyperparameter overrides are validated and clamped to declared [min, max] bounds
-    assert sanitize_task_env_params("microduck", {"actionScale": 99.0})["actionScale"] == 0.85
-    assert sanitize_task_env_params("microduck", {"actionScale": -1.0})["actionScale"] == 0.20
-    assert sanitize_task_env_params("unitree_go2", {"actionScale": 0.99})["actionScale"] == 0.75
+    assert sanitize_task_env_params("microduck", {"action_scale": 99.0})["action_scale"] == 0.85
+    assert sanitize_task_env_params("microduck", {"action_scale": -1.0})["action_scale"] == 0.20
+    assert sanitize_task_env_params("unitree_go2", {"action_scale": 0.99})["action_scale"] == 0.75
     assert sanitize_task_env_params("so101", {})["arm_model"] == "so102"
     assert sanitize_task_env_params("so101", {"arm_model": "so101"})["arm_model"] == "so101"
 
@@ -3961,7 +3961,7 @@ def test_centralized_hyperparameters_and_population_scaling_constraints(client, 
         data=json.dumps({
             "name": "Bounded Duck Swarm",
             "task": "microduck",
-            "env_params": {"actionScale": 42.0},
+            "env_params": {"action_scale": 42.0},
             "population_size": 24,
             "min_votes": 50,
             "max_votes_per_user": 6,
@@ -3971,7 +3971,7 @@ def test_centralized_hyperparameters_and_population_scaling_constraints(client, 
     assert room_resp.status_code == 200
     rdata = room_resp.json()
     assert rdata["population_size"] == 24
-    assert rdata["env_params"]["actionScale"] == 0.85
+    assert rdata["env_params"]["action_scale"] == 0.85
 
     # 3. Population-scaling constraints: unsharded control policy caps effective_max_pop_size before scaling
     unsharded = EnvPolicyConfig(
@@ -3993,9 +3993,30 @@ def test_centralized_hyperparameters_and_population_scaling_constraints(client, 
     }
 
     sharded_spec = get_task_spec("so101")
+    assert get_config().large_pop is False
+    assert get_task_spec("microduck").default_pop_size == 8
     assert sharded_spec.max_pop_size == 128
     assert sharded_spec.crowd_shard_threshold == 16
     assert sharded_spec.crowd_shard_size == 4
+    assert get_task_spec("image").max_pop_size == 64
+
+    # Feature flag DET_LARGE_POP=1 unlocks 250-member Microduck Gait + 1,024 room population cap
+    monkeypatch.setenv("DET_LARGE_POP", "1")
+    cfg_lp = build_config()
+    assert cfg_lp.large_pop is True
+    assert cfg_lp.to_public_dict()["large_pop"] is True
+    assert cfg_lp.get_env("microduck").default_pop_size == 250
+    assert cfg_lp.get_env("microduck").max_pop_size == 1024
+    assert cfg_lp.get_env("microduck").crowd_shard_size == 8
+    assert cfg_lp.get_env("so101").max_pop_size == 1024
+    assert cfg_lp.get_env("image").max_pop_size == 1024
+    monkeypatch.delenv("DET_LARGE_POP", raising=False)
+
+    # 2027 10k-scale ceiling via env override
+    monkeypatch.setenv("DET_MAX_POP_SIZE_MICRODUCK", "10000")
+    cfg_10k = build_config()
+    assert cfg_10k.get_env("microduck").max_pop_size == 10_000
+    assert cfg_10k.get_env("microduck").constrain_room_scale(10_000, 500, 100, is_control=True)["population_size"] == 10_000
 
 
 @pytest.mark.django_db(transaction=True)
@@ -4031,17 +4052,17 @@ def test_client_asset_registry_and_lazy_wire_optimization(client, tmp_path):
     embedded_specs = json.loads(lean_m.group(1))
     assert set(embedded_specs.keys()) >= {"image", "cartpole", "halfcheetah", "microduck", "unitree_go2", "so101"}
     for tid, spec in embedded_specs.items():
-        assert spec.get("isLean") is True, f"{tid} embedded spec should be lean"
-        assert "policySpec" not in spec
-        assert "layerCoords" not in spec
+        assert spec.get("is_lean") is True, f"{tid} embedded spec should be lean"
+        assert "policy_spec" not in spec
+        assert "layer_coords" not in spec
 
     cfg_default = client.get("/api/config/").json()
-    assert cfg_default["ok"] is True and "taskSpecs" not in cfg_default
+    assert cfg_default["ok"] is True and "task_specs" not in cfg_default
     cfg_full = client.get("/api/config/?task_specs=1").json()
-    assert cfg_full["ok"] is True and "taskSpecs" in cfg_full
-    assert "policySpec" in cfg_full["taskSpecs"]["microduck"]
-    assert "nudges" in cfg_full["taskSpecs"]["microduck"]
-    assert "layerCoords" in cfg_full["taskSpecs"]["cartpole"]
+    assert cfg_full["ok"] is True and "task_specs" in cfg_full
+    assert "policy_spec" in cfg_full["task_specs"]["microduck"]
+    assert "nudges" in cfg_full["task_specs"]["microduck"]
+    assert "layer_coords" in cfg_full["task_specs"]["cartpole"]
 
     css_resp = client.get("/assets/deferred_ui.css", HTTP_ACCEPT_ENCODING="gzip")
     assert css_resp.status_code == 200
@@ -4104,16 +4125,16 @@ const taskSpecs = {json.dumps(embedded_specs)};
   window.DetClientAssets.syncGoalSnapshot({{
     name: "Microduck",
     generation: 0,
-    populationSize: 8,
-    genomesLoaded: true,
-    genomesAdaptersLoaded: false,
-    lineageLoaded: false,
+    population_size: 8,
+    genomes_loaded: true,
+    genomes_adapters_loaded: false,
+    lineage_loaded: false,
     lineage: [],
     genomes: Array.from({{ length: 8 }}, (_, i) => ({{
       uuid: "0000000" + i,
       kind: "populora",
       hash: "h" + i,
-      baseHash: "b0",
+      base_hash: "b0",
     }})),
   }});
   const goalDeferred = window.DetClientAssets.getGoalState("Microduck");
@@ -4122,21 +4143,21 @@ const taskSpecs = {json.dumps(embedded_specs)};
   window.DetClientAssets.syncGoalSnapshot({{
     name: "Microduck",
     generation: 0,
-    populationSize: 8,
-    genomesLoaded: true,
-    genomesAdaptersLoaded: true,
-    lineageLoaded: true,
+    population_size: 8,
+    genomes_loaded: true,
+    genomes_adapters_loaded: true,
+    lineage_loaded: true,
     lineage: [{{ gen: 0, idx: 0 }}],
     genomes: Array.from({{ length: 8 }}, (_, i) => ({{
       uuid: "0000000" + i,
       kind: "populora",
       hash: "h" + i,
-      baseHash: "b0",
+      base_hash: "b0",
       adapters: {{ l0: {{ A: [1], B: [2] }} }},
     }})),
   }});
   const goalHydrated = window.DetClientAssets.getGoalState("Microduck");
-  window.DetClientAssets.setHistoryState({{ status: "loaded", loadedCount: 10, totalCount: 42, offset: 32, hasMore: true }});
+  window.DetClientAssets.setHistoryState({{ status: "loaded", loadedCount: 10, total_count: 42, offset: 32, has_more: true }});
   const snapFinal = window.DetClientAssets.snapshot();
 
   console.log(JSON.stringify({{
@@ -4170,13 +4191,13 @@ const taskSpecs = {json.dumps(embedded_specs)};
     assert reg_out["visBytes"] == 128
     assert reg_out["failedOnce"] is True
     assert reg_out["netVizFinal"] == "loaded"
-    assert reg_out["goalDeferred"]["genomesLoaded"] is True
+    assert reg_out["goalDeferred"]["genomes_loaded"] is True
     assert reg_out["goalDeferred"]["adaptersLoaded"] is False
     assert reg_out["indDeferred"] == {"loadedCount": 0, "unloadedCount": 8, "totalTracked": 8}
     assert reg_out["goalHydrated"]["adaptersLoaded"] is True
     assert reg_out["goalHydrated"]["lineageActiveLoaded"] is True
     assert reg_out["indHydrated"] == {"loadedCount": 8, "unloadedCount": 0, "totalTracked": 8}
-    assert reg_out["history"]["hasMore"] is True and reg_out["history"]["loadedCount"] == 10
+    assert reg_out["history"]["has_more"] is True and reg_out["history"]["loadedCount"] == 10
 
     # 3. WebSocket lazy wire flags: defer_adapters=1, defer_lineage=1, chat_limit, hydrate_genomes,
     #    lineage_active, and history_more (>150x smaller initial WS state on Microduck!)
@@ -4204,7 +4225,7 @@ const taskSpecs = {json.dumps(embedded_specs)};
             ws_eager.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 0, "index": 0, "vote": 1}))
             _, _, bfly_evolved = _recv_raw_type(ws_eager, "goal_updated", timeout=6.0)
             assert bfly_evolved["goal"]["generation"] == 1
-            assert bfly_evolved["goal"]["lineageTotal"] >= 30
+            assert bfly_evolved["goal"]["lineage_total"] >= 30
 
         with connect(
             f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=ultralazy&gzip=1&lazy=1&defer_adapters=1&defer_lineage=1&chat_limit=10"
@@ -4237,9 +4258,9 @@ const taskSpecs = {json.dumps(embedded_specs)};
 
             md_stub = evo_ul["goals"][0]
             assert md_stub["name"] == "Microduck"
-            assert md_stub["genomesLoaded"] is True
-            assert md_stub["genomesAdaptersLoaded"] is False
-            assert md_stub["lineageLoaded"] is False
+            assert md_stub["genomes_loaded"] is True
+            assert md_stub["genomes_adapters_loaded"] is False
+            assert md_stub["lineage_loaded"] is False
             assert md_stub["lineage"] == []
             assert len(md_stub["genomes"]) == 8
             assert [g["hash"] for g in md_stub["genomes"]] == md_full_hashes
@@ -4248,7 +4269,7 @@ const taskSpecs = {json.dumps(embedded_specs)};
             # Bounded chat history + history_more pagination
             assert len(hist_ul["messages"]) == 10
             assert hist_ul["total"] >= 35
-            assert hist_ul["hasMore"] is True
+            assert hist_ul["has_more"] is True
             ws_ul.send(json.dumps({"type": "history_more", "before": hist_ul["offset"], "limit": 12}))
             _, _, older = _recv_raw_type(ws_ul, "history_more")
             assert len(older["messages"]) == 12
@@ -4268,20 +4289,20 @@ const taskSpecs = {json.dumps(embedded_specs)};
             assert all(isinstance(it["genome"].get("adapters"), dict) and len(it["genome"]["adapters"]) == 6 for it in hydrated["items"])
 
             # Selecting evolved Butterfly with defer_lineage=1 omits lineage until lineage_active is requested
-            ws_ul.send(json.dumps({"type": "select_goal", "goal": "Butterfly", "needGenomes": True}))
+            ws_ul.send(json.dumps({"type": "select_goal", "goal": "Butterfly", "need_genomes": True}))
             _, _, bfly_sel = _recv_raw_type(ws_ul, "goal_updated")
             assert bfly_sel["goal"]["name"] == "Butterfly"
-            assert bfly_sel["goal"]["genomesLoaded"] is True
-            assert bfly_sel["goal"]["lineageLoaded"] is False
+            assert bfly_sel["goal"]["genomes_loaded"] is True
+            assert bfly_sel["goal"]["lineage_loaded"] is False
             assert bfly_sel["goal"]["lineage"] == []
-            assert bfly_sel["goal"]["lineageTotal"] >= 30
+            assert bfly_sel["goal"]["lineage_total"] >= 30
 
             ws_ul.send(json.dumps({"type": "lineage_active", "goal": "Butterfly"}))
             _, _, lin_act = _recv_raw_type(ws_ul, "lineage_active")
             assert lin_act["goal"] == "Butterfly"
             assert lin_act["generation"] == 1
             assert len(lin_act["lineage"]) > 0
-            assert lin_act["lineageTotal"] >= 30
+            assert lin_act["lineage_total"] >= 30
 
         # 4. Crowd evals active-population hash filter (?active_only=1) + weak ETag 304 Not Modified
         live_hash = md_full_hashes[0]
@@ -4291,7 +4312,7 @@ const taskSpecs = {json.dumps(embedded_specs)};
                 data=json.dumps({
                     "goal": "Microduck",
                     "generation": 0,
-                    "results": [{"hash": h_val, "summary": {"primaryValue": 10.0, "return": 10.0}}],
+                    "results": [{"hash": h_val, "summary": {"primary_value": 10.0, "return": 10.0}}],
                 }),
                 content_type="application/json",
             )
@@ -4782,7 +4803,7 @@ insp.setMode("matrices");
 assert.ok(insp.detailBar.textContent.includes("LoRA"));
 
 // 2. Archived adapter-less PopuLoRA lineage node renders clean notice instead of crashing
-const archivedPopulora = {{ id: 9, uuid: "deadbeef", kind: "populora", hash: "abc", baseHash: "def" }};
+const archivedPopulora = {{ id: 9, uuid: "deadbeef", kind: "populora", hash: "abc", base_hash: "def" }};
 insp.setData(archivedPopulora, specs.so101);
 assert.strictEqual(insp.model.hasAdapters, false);
 assert.ok(insp.detailBar.textContent.includes("Archived PopuLoRA"));
@@ -4825,6 +4846,357 @@ assert.strictEqual(insp.model.dims.join(","), "4,8,1");
     )
     proc2 = subprocess.run(["node", str(inspector_harness)], capture_output=True, text=True, timeout=15)
     assert proc2.returncode == 0, f"NetworkInspector DOM test failed:\n{proc2.stderr}\n{proc2.stdout}"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_one_thousand_population_sharding_evolution_and_slice_hydration(client, settings, monkeypatch, request):
+    """End-to-end 1,000-individual PopuLoRA scale test (behind `DET_LARGE_POP=1`): 250-duck lobby + 1k room evolution."""
+    import time
+    from django.test import Client
+    from direct_evolution_together.config import reload_config
+    from direct_evolution_together.environments import evaluate_populora_shard
+    from direct_evolution_together.models import ContributorTrust
+
+    request.addfinalizer(reload_config)
+    monkeypatch.setenv("DET_LARGE_POP", "1")
+    reload_config()
+
+    pop_n = 1000
+    t_create0 = time.perf_counter()
+    room_resp = client.post(
+        "/api/rooms/",
+        data=json.dumps({
+            "name": "Kilopop Duck Fleet",
+            "task": "microduck",
+            "population_size": pop_n,
+            "min_votes": 2,
+            "max_votes_per_user": 32,
+        }),
+        content_type="application/json",
+    )
+    assert room_resp.status_code == 200, room_resp.content
+    rdata = room_resp.json()
+    slug = rdata["slug"]
+    assert rdata["population_size"] == pop_n
+    create_sec = time.perf_counter() - t_create0
+    assert create_sec < 4.0, f"Creating 1,000-individual PopuLoRA room took too long: {create_sec:.2f}s"
+
+    # Verify UI pagination & auto-sim controls are present in rendered room HTML
+    room_html = client.get(f"/p/{slug}/").content.decode("utf-8")
+    assert 'id="grid-page-bar"' in room_html
+    assert 'id="crowd-shard-auto-btn"' in room_html
+    assert "const GRID_WINDOW_THRESHOLD = 96;" in room_html
+    assert "const GRID_PAGE_SIZE = 60;" in room_html
+
+    # Verify exported crowd_worker.py supports multi-threaded --workers and includeRankings=False
+    cw_src = client.get(f"/export/crowd-worker/?room={slug}").content.decode("utf-8")
+    assert "--workers" in cw_src
+    assert "'include_rankings': False" in cw_src
+    compile(cw_src, "crowd_worker_1k.py", "exec")
+
+    with _ws_server(seed=True, pop_size=30, pop_size_override=False, max_votes=32) as port:
+        settings.WS_HOST = "127.0.0.1"
+        settings.WS_PORT = port
+        mummy_ws.set_round_config(2, 60)
+
+        # Verify Lobby Microduck honors DET_LARGE_POP=1 (250 sharded individuals) even when image pop_size=30
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=lobby_probe&lazy=1") as ws_lob:
+            _recv_until(ws_lob, "identity")
+            lob_evo = _recv_until(ws_lob, "evolution_state")
+            lob_md = lob_evo["goals"][0]
+            assert lob_md["name"] == "Microduck"
+            assert lob_md["genomes_sharded"] is True
+            assert len(lob_md["genomes"]) == 250
+
+        with connect(
+            f"ws://127.0.0.1:{port}/ws/chat/{slug}/?username=jeff_dean&cid=kilopopcid001",
+            max_size=16 * 1024 * 1024,
+        ) as ws:
+            _recv_until(ws, "identity")
+            evo0 = _recv_until(ws, "evolution_state")
+            goal0 = evo0["goals"][0]
+            gname = goal0["name"]
+
+            # 1. Verify lightweight sharded stubs for all 1,000 individuals (zero bulky LoRA adapters on wire)
+            assert goal0["generation"] == 0
+            assert goal0["phase"] == "simulating"
+            assert goal0["genomes_sharded"] is True
+            assert len(goal0["genomes"]) == pop_n
+            assert all("adapters" not in g and len(g["uuid"]) == 8 and g.get("hash") for g in goal0["genomes"])
+
+            # 2. Verify zero-parseJson WS hydrate_genomes on boundary + middle indices [0, 500, 999]
+            t_hyd0 = time.perf_counter()
+            ws.send(json.dumps({"type": "hydrate_genomes", "goal": gname, "indices": [0, 500, 999]}))
+            hyd_msg = _recv_until(ws, "genomes_hydrated")
+            hyd_ms = (time.perf_counter() - t_hyd0) * 1000.0
+            assert hyd_ms < 250.0, f"WS hydrate_genomes took too long at 1k: {hyd_ms:.1f}ms"
+            hyd_items = hyd_msg["items"]
+            assert [it["index"] for it in hyd_items] == [0, 500, 999]
+            for it in hyd_items:
+                expected_idx = int(it["index"])
+                g_full = it["genome"]
+                assert g_full["uuid"] == goal0["genomes"][expected_idx]["uuid"]
+                assert isinstance(g_full.get("adapters"), dict) and len(g_full["adapters"]) == 6
+
+            # 3. Verify O(1) UUID lookup endpoint for #999 (tail of 40 MB population)
+            tail_uuid = goal0["genomes"][999]["uuid"]
+            t_uuid0 = time.perf_counter()
+            uuid_resp = client.get(f"/api/rooms/{slug}/individuals/{tail_uuid}/").json()
+            uuid_ms = (time.perf_counter() - t_uuid0) * 1000.0
+            assert uuid_resp["ok"] is True
+            assert uuid_resp["index"] == 999
+            assert uuid_resp["is_live"] is True
+            assert len(uuid_resp["genome"]["adapters"]) == 6
+            assert uuid_ms < 250.0, f"O(1) UUID lookup took too long at 1k: {uuid_ms:.1f}ms"
+
+            # 4. Quarantined contributor cannot starve/lease shards
+            ContributorTrust.objects.create(
+                room=slug,
+                contributor_id="cli_quarantined_bot",
+                reputation=0.05,
+                quarantined=True,
+            )
+            q_claim = Client().post(
+                f"/api/rooms/{slug}/crowd/claim/",
+                data=json.dumps({"goal": gname, "batch_size": 32, "peer_id": "quarantined_bot"}),
+                content_type="application/json",
+            ).json()
+            assert q_claim["ok"] is True and q_claim["shard"] == []
+
+            # 5. Four concurrent workers partition all 1,000 individuals in 250-item shards with ZERO overlap
+            workers = [(f"fleet_w{i}", Client()) for i in range(4)]
+            all_claimed: list[int] = []
+            for w_idx, (w_name, w_http) in enumerate(workers):
+                claim_res = w_http.post(
+                    f"/api/rooms/{slug}/crowd/claim/",
+                    data=json.dumps({"goal": gname, "batch_size": 250, "peer_id": w_name}),
+                    content_type="application/json",
+                )
+                assert claim_res.status_code == 200
+                cdata = claim_res.json()
+                shard = cdata["shard"]
+                assert len(shard) == 250, f"Worker {w_name} expected 250 items, got {len(shard)}"
+                all_claimed.extend(int(s["index"]) for s in shard)
+
+                # Run real multi-threaded MuJoCo rollout on first 4 items of worker 0 to exercise cached MjModel + ThreadPool
+                results_payload = []
+                if w_idx == 0:
+                    real_eval = evaluate_populora_shard(
+                        cdata["task"],
+                        shard[:4],
+                        seeds=(0,),
+                        max_steps=20,
+                        env_params=cdata["env_params"],
+                        max_workers=2,
+                    )
+                    assert len(real_eval["results"]) == 4
+                    results_payload.extend(real_eval["results"])
+                    rem_shard = shard[4:]
+                else:
+                    rem_shard = shard
+
+                for s in rem_shard:
+                    idx_val = int(s["index"])
+                    val = round(10.0 - idx_val * 0.005, 4)
+                    results_payload.append({
+                        "hash": s["hash"],
+                        "uuid": s["uuid"],
+                        "index": idx_val,
+                        "summary": {
+                            "task": "microduck",
+                            "primary_value": val,
+                            "primary_display": f"{val:+.2f}m",
+                            "badge_text": f"{val:+.2f}m",
+                            "mean_distance": val,
+                            "mean_steps": 200,
+                            "solved": val > 8.0,
+                        },
+                        "traj_sample": [round((idx_val % 17) * 0.05 + k * 0.01, 4) for k in range(16)],
+                    })
+
+                post_res = w_http.post(
+                    f"/api/rooms/{slug}/crowd/results/",
+                    data=json.dumps({
+                        "goal": gname,
+                        "generation": 0,
+                        "peer_id": w_name,
+                        "sharded": True,
+                        "include_rankings": False,
+                        "results": results_payload,
+                    }),
+                    content_type="application/json",
+                )
+                assert post_res.status_code == 200
+                pdata = post_res.json()
+                assert pdata["ok"] is True
+                assert pdata["rankings"] == []  # fast worker path skips redundant O(P log P) ranking build
+
+            assert len(all_claimed) == pop_n
+            assert set(all_claimed) == set(range(pop_n))
+
+            # 6. Verify all 1,000 evaluations & global 1..1000 rankings
+            evals_resp = client.get(f"/api/rooms/{slug}/crowd/evals/?goal={gname}&generation=0").json()
+            assert evals_resp["ok"] is True
+            assert len(evals_resp["items"]) == pop_n
+            assert len(evals_resp["rankings"]) == pop_n
+            assert evals_resp["rankings"][0]["rank"] == 1
+            assert evals_resp["rankings"][-1]["rank"] == pop_n
+
+            # 7. Verify WS automatically unlocked Phase 2 ("voting") with simCompleted == 1000
+            voting_ready = False
+            deadline = time.monotonic() + 4.0
+            while time.monotonic() < deadline:
+                msg = _decode_ws_message(ws.recv(timeout=2.0))
+                if msg.get("type") == "votes_updated" and msg.get("goal") == gname and msg.get("phase") == "voting":
+                    assert msg["sim_completed"] == pop_n and msg["sim_total"] == pop_n
+                    voting_ready = True
+                    break
+            assert voting_ready, "1,000-individual goal did not unlock voting after 1000/1000 shard evaluations"
+
+            # 8. Vote on top-2 candidates and verify 1,000-individual PopuLoRA evolution completes rapidly (< 3.5s)
+            top1_idx = int(evals_resp["rankings"][0]["index"])
+            top2_idx = int(evals_resp["rankings"][1]["index"])
+            t_evo0 = time.perf_counter()
+            ws.send(json.dumps({"type": "cast_vote", "goal": gname, "generation": 0, "index": top1_idx, "vote": 1}))
+            ws.send(json.dumps({"type": "cast_vote", "goal": gname, "generation": 0, "index": top2_idx, "vote": 1}))
+
+            gen1_goal = None
+            deadline = time.monotonic() + 8.0
+            while time.monotonic() < deadline:
+                msg = _decode_ws_message(ws.recv(timeout=4.0))
+                if msg.get("type") == "goal_updated" and msg.get("goal", {}).get("name") == gname:
+                    gen1_goal = msg["goal"]
+                    break
+            evo_wall_sec = time.perf_counter() - t_evo0
+            assert gen1_goal is not None, "1,000-individual PopuLoRA evolution did not complete"
+            assert evo_wall_sec < 3.5, f"1,000-individual evolution round-trip took too long: {evo_wall_sec:.2f}s"
+            assert gen1_goal["generation"] == 1
+            assert gen1_goal["phase"] == "simulating"
+            assert gen1_goal["genomes_sharded"] is True
+            assert len(gen1_goal["genomes"]) == pop_n
+            assert gen1_goal["lineage_total"] == pop_n * 2  # 2,000 total nodes (not truncated at old 300 cap!)
+
+            # Verify active lineage preserves all 1,000 live Gen-1 nodes + their Gen-0 ancestors
+            ws.send(json.dumps({"type": "lineage_active", "goal": gname}))
+            lin_msg = _recv_until(ws, "lineage_active")
+            gen1_lin_nodes = [n for n in lin_msg["lineage"] if n.get("gen") == 1]
+            gen0_lin_nodes = [n for n in lin_msg["lineage"] if n.get("gen") == 0]
+            assert len(gen1_lin_nodes) == pop_n
+            assert len(gen0_lin_nodes) >= 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_non_crowdsourced_mode_and_legacy_production_migration(client, settings, monkeypatch, tmp_path):
+    from direct_evolution_together.config import reload_config
+    from direct_evolution_together.crowd_trust import fetch_room_evals
+    from direct_evolution_together.environments import get_task_spec
+    from direct_evolution_together.models import ExternalEvalResult
+    from direct_evolution_together.populora_engine import _persist_base_model_static_json
+
+    # 1. Disabling crowd trust or per-task crowd_contribute disables Phase 1 sim lock so voting never deadlocks
+    monkeypatch.setenv("DET_CROWD_TRUST_ENABLED", "0")
+    reload_config()
+    try:
+        spec = get_task_spec("microduck")
+        assert spec.crowd_contribute is False
+        assert spec.sim_phase_enabled is False
+        html = client.get("/").content.decode("utf-8")
+        assert 'const EVAL_DB_PREFIX = "eval:v2:";' in html
+        assert "hasSceneReplayPoses" in html
+    finally:
+        monkeypatch.delenv("DET_CROWD_TRUST_ENABLED", raising=False)
+        reload_config()
+
+    monkeypatch.setenv("DET_CROWD_CONTRIBUTE_MICRODUCK", "0")
+    reload_config()
+    try:
+        spec_no_crowd = get_task_spec("microduck")
+        assert spec_no_crowd.crowd_contribute is False
+        assert spec_no_crowd.sim_phase_enabled is False
+    finally:
+        monkeypatch.delenv("DET_CROWD_CONTRIBUTE_MICRODUCK", raising=False)
+        reload_config()
+
+    # 2. Legacy camelCase RoomEvolutionState JSON migrates seamlessly to snake_case keys
+    legacy_state = json.dumps(
+        {
+            "params": {"minVotes": 4, "maxVotesPerUser": 12, "mutSigma": 0.35, "eliteFrac": 0.25, "crossoverRate": 0.75},
+            "goals": [
+                {
+                    "name": "Microduck",
+                    "task": "microduck",
+                    "generation": 0,
+                    "envParams": {"variant": "default"},
+                    "simPhaseEnabled": True,
+                    "genomes": [{"id": 1, "kind": "populora", "baseHash": "abcd1234", "baseSeed": 1, "lowRank": 8, "adapters": {}}],
+                    "lineage": [{"id": 1, "gen": 0, "parents": [], "op": "random", "kind": "populora", "baseHash": "abcd1234"}],
+                }
+            ],
+        }
+    )
+    migrated_raw, did_change = ws_bridge._ensure_state_uuids(legacy_state)
+    assert did_change is True
+    migrated = json.loads(migrated_raw)
+    assert migrated["params"]["min_votes"] == 4
+    assert migrated["params"]["max_votes_per_user"] == 12
+    g0 = migrated["goals"][0]
+    assert g0["env_params"] == {"variant": "default"}
+    assert g0["sim_phase_enabled"] is True
+    assert g0["genomes"][0]["base_hash"] == "abcd1234"
+    assert g0["genomes"][0]["low_rank"] == 8
+    assert g0["lineage"][0]["base_hash"] == "abcd1234"
+
+    # 3. Legacy camelCase ExternalEvalResult rows normalize summary & replay keys on read
+    ExternalEvalResult.objects.create(
+        room="legacy_room",
+        goal="Microduck",
+        generation=0,
+        genome_hash="deadbeef12345678",
+        status="verified",
+        attestations_json="[]",
+        payload_json=json.dumps(
+            {
+                "hash": "deadbeef12345678",
+                "summary": {
+                    "primaryValue": 42.5,
+                    "primaryDisplay": "+42 (+0.08m)",
+                    "badgeText": "+42 · +0.08m",
+                    "secondaryText": "steps 400/400",
+                    "solved": False,
+                },
+                "replay": {
+                    "bodyPoses": [[0.0, 0.0, 0.14, 1.0, 0.0, 0.0, 0.0]],
+                    "poseStride": 2,
+                    "vxTrace": [0.1, 0.2],
+                },
+                "trust": {"status": "verified", "attestations": 2, "quorum": 2},
+            }
+        ),
+    )
+    eval_items = fetch_room_evals("legacy_room", "Microduck", 0)
+    assert len(eval_items) == 1
+    assert eval_items[0]["summary"]["badge_text"] == "+42 · +0.08m"
+    assert eval_items[0]["summary"]["primary_value"] == 42.5
+    assert eval_items[0]["replay"]["body_poses"] == [[0.0, 0.0, 0.14, 1.0, 0.0, 0.0, 0.0]]
+    assert eval_items[0]["replay"]["pose_stride"] == 2
+    assert eval_items[0]["replay"]["vx_trace"] == [0.1, 0.2]
+
+    # 4. Legacy camelCase media/base_models/<hash>.json is rewritten cleanly to snake_case on startup
+    media_root = tmp_path / "media"
+    settings.MEDIA_ROOT = media_root
+    bm_dir = media_root / "base_models"
+    bm_dir.mkdir(parents=True, exist_ok=True)
+    stale_path = bm_dir / "abc12345.json"
+    stale_path.write_text(json.dumps({"ok": True, "obsDim": 55, "actionDim": 14, "tensors": {}}))
+    _persist_base_model_static_json(
+        "abc12345",
+        {"obs_dim": 55, "action_dim": 14, "hidden_dim": 128, "head_dim": 128, "low_rank": 8, "tensors": {}},
+    )
+    rewritten = json.loads(stale_path.read_text())
+    assert rewritten["obs_dim"] == 55 and rewritten["action_dim"] == 14
+    assert "obsDim" not in rewritten
+
+
 
 
 

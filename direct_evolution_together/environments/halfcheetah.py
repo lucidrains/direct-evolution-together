@@ -71,10 +71,10 @@ HALFCHEETAH_SOLVED_UPRIGHT = 0.35
 HALFCHEETAH_TIER_DISTANCE = 2.5
 HALFCHEETAH_TIER_UPRIGHT = 0.2
 
-_CHEETAH_MODEL: mujoco.MjModel | None = None
-_CHEETAH_BFOOT_GEOM: int = -1
-_CHEETAH_FFOOT_GEOM: int = -1
-_CHEETAH_MODEL_LOCK = threading.Lock()
+_cheetah_model: mujoco.MjModel | None = None
+_cheetah_bfoot_geom: int = -1
+_cheetah_ffoot_geom: int = -1
+_cheetah_model_LOCK = threading.Lock()
 _CHEETAH_TLS = threading.local()
 
 _INV_OBS_SCALE = np.asarray([1.0 / s for s in HALFCHEETAH_OBS_SCALE], dtype=np.float64)
@@ -96,17 +96,17 @@ _PHASE_TABLE = np.ascontiguousarray(
 
 
 def get_halfcheetah_model() -> mujoco.MjModel:
-    global _CHEETAH_MODEL, _CHEETAH_BFOOT_GEOM, _CHEETAH_FFOOT_GEOM
-    model = _CHEETAH_MODEL
+    global _cheetah_model, _cheetah_bfoot_geom, _cheetah_ffoot_geom
+    model = _cheetah_model
     if model is not None:
         return model
-    with _CHEETAH_MODEL_LOCK:
-        if _CHEETAH_MODEL is None:
+    with _cheetah_model_LOCK:
+        if _cheetah_model is None:
             m = mujoco.MjModel.from_xml_path(str(HALFCHEETAH_XML_PATH))
-            _CHEETAH_BFOOT_GEOM = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "bfoot")
-            _CHEETAH_FFOOT_GEOM = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "ffoot")
-            _CHEETAH_MODEL = m
-        return _CHEETAH_MODEL
+            _cheetah_bfoot_geom = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "bfoot")
+            _cheetah_ffoot_geom = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "ffoot")
+            _cheetah_model = m
+        return _cheetah_model
 
 
 def get_thread_halfcheetah_data(model: mujoco.MjModel | None = None) -> mujoco.MjData:
@@ -182,8 +182,8 @@ def halfcheetah_rollout(
         qvel[1] += 2.6
 
     start_x = float(qpos[0])
-    bfoot_geom = _CHEETAH_BFOOT_GEOM
-    ffoot_geom = _CHEETAH_FFOOT_GEOM
+    bfoot_geom = _cheetah_bfoot_geom
+    ffoot_geom = _cheetah_ffoot_geom
     contact = data.contact
 
     def _capture_frame(ctrl_rms: float) -> list[float]:
@@ -464,22 +464,22 @@ class HalfCheetahAdapter:
         return {
             "task": self.task_id,
             "seeds": list(eval_seeds),
-            "distancesPerSeed": dists,
-            "meanDistance": round(mean_dx, 2),
-            "minDistance": round(min_dx, 2),
-            "meanVx": round(mean_vx, 2),
-            "meanUpright": round(mean_up, 2),
+            "distances_per_seed": dists,
+            "mean_distance": round(mean_dx, 2),
+            "min_distance": round(min_dx, 2),
+            "mean_vx": round(mean_vx, 2),
+            "mean_upright": round(mean_up, 2),
             "return": round(mean_ret, 1),
             "solved": solved,
-            "primaryValue": round(mean_dx, 2),
-            "primaryDisplay": f"{mean_dx:+.1f}m",
-            "badgeText": f"{mean_dx:+.1f}m",
+            "primary_value": round(mean_dx, 2),
+            "primary_display": f"{mean_dx:+.1f}m",
+            "badge_text": f"{mean_dx:+.1f}m",
             "tier": tier,
-            "secondaryText": f"vx={mean_vx:+.2f}m/s, up={mean_up:+.2f}",
+            "secondary_text": f"vx={mean_vx:+.2f}m/s, up={mean_up:+.2f}",
         }
 
     def is_gen0_presolved(self, summary: dict[str, object]) -> bool:
-        return float(summary.get("meanDistance", 0.0)) >= HALFCHEETAH_PRESOLVED_DISTANCE
+        return float(summary.get("mean_distance", 0.0)) >= HALFCHEETAH_PRESOLVED_DISTANCE
 
     def render_frame(
         self,

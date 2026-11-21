@@ -48,16 +48,16 @@ SO101_OBS_LABELS = (
 
 SO101_POLICY_SPEC: dict[str, object] = {
     "arch": "gru_mlp",
-    "obsDim": SO101_OBS_DIM,
-    "actionDim": SO101_ACTION_DIM,
-    "hiddenDim": SO101_HIDDEN_DIM,
-    "headDim": SO101_HEAD_DIM,
-    "lowRank": SO101_LOW_RANK,
-    "loraTargets": list(SO101_LORA_TARGETS),
-    "actionDist": "squashed_gaussian",
-    "actionBounds": [-1.0, 1.0],
-    "oscillatoryInit": False,
-    "initStdUp": 0.35,
+    "obs_dim": SO101_OBS_DIM,
+    "action_dim": SO101_ACTION_DIM,
+    "hidden_dim": SO101_HIDDEN_DIM,
+    "head_dim": SO101_HEAD_DIM,
+    "low_rank": SO101_LOW_RANK,
+    "lora_targets": list(SO101_LORA_TARGETS),
+    "action_dist": "squashed_gaussian",
+    "action_bounds": [-1.0, 1.0],
+    "oscillatory_init": False,
+    "init_std_up": 0.35,
 }
 
 SO102_STL_ASSETS: tuple[str, ...] = (
@@ -74,40 +74,40 @@ SO102_URDF_ASSET = "scenes/so102/so_arm_102.urdf"
 
 SO101_ANGULAR_ENV_PARAMS: dict[str, object] = {
     "arm_model": "so101",
-    "sceneId": "so101",
-    "shortLabel": "SO-101",
-    "gripperKind": "angular",
-    "urdfAsset": None,
-    "stlAssets": [],
-    "physicsDt": SO101_PHYSICS_DT,
-    "nSubsteps": SO101_N_SUBSTEPS,
-    "ctrlDt": SO101_DT,
-    "actionScales": [0.65, 0.65, 0.65, 0.65, 0.55, 0.95],
-    "goalPos": [0.23, 0.012, 0.14],
-    "cubeRestZ": 0.016,
-    "reachWeight": 12.0,
-    "reachProgressWeight": 45.0,
-    "preGraspAlignWeight": 5.0,
-    "singleTouchWeight": 2.5,
-    "pinchGraspWeight": 16.0,
-    "liftWeight": 220.0,
-    "liftHighWaterWeight": 650.0,
-    "goalHoldWeight": 24.0,
-    "knockPenaltyWeight": 15.0,
-    "floorScrapeWeight": 8.0,
-    "actionRateWeight": 0.04,
+    "scene_id": "so101",
+    "short_label": "SO-101",
+    "gripper_kind": "angular",
+    "urdf_asset": None,
+    "stl_assets": [],
+    "physics_dt": SO101_PHYSICS_DT,
+    "n_substeps": SO101_N_SUBSTEPS,
+    "ctrl_dt": SO101_DT,
+    "action_scales": [0.65, 0.65, 0.65, 0.65, 0.55, 0.95],
+    "goal_pos": [0.23, 0.012, 0.14],
+    "cube_rest_z": 0.016,
+    "reach_weight": 12.0,
+    "reach_progress_weight": 45.0,
+    "pre_grasp_align_weight": 5.0,
+    "single_touch_weight": 2.5,
+    "pinch_grasp_weight": 16.0,
+    "lift_weight": 220.0,
+    "lift_high_water_weight": 650.0,
+    "goal_hold_weight": 24.0,
+    "knock_penalty_weight": 15.0,
+    "floor_scrape_weight": 8.0,
+    "action_rate_weight": 0.04,
 }
 
 SO102_ENV_PARAMS: dict[str, object] = {
     **SO101_ANGULAR_ENV_PARAMS,
     "arm_model": "so102",
-    "sceneId": "so102",
-    "shortLabel": "SO-ARM102",
-    "gripperKind": "parallel",
-    "urdfAsset": SO102_URDF_ASSET,
-    "stlAssets": list(SO102_STL_ASSETS),
-    "actionScales": [0.65, 0.65, 0.65, 0.65, 0.55, 0.028],
-    "goalPos": [0.238, 0.0, 0.14],
+    "scene_id": "so102",
+    "short_label": "SO-ARM102",
+    "gripper_kind": "parallel",
+    "urdf_asset": SO102_URDF_ASSET,
+    "stl_assets": list(SO102_STL_ASSETS),
+    "action_scales": [0.65, 0.65, 0.65, 0.65, 0.55, 0.028],
+    "goal_pos": [0.238, 0.0, 0.14],
 }
 
 # Default arm environment hyperparameters point at SO-ARM102 (parallel 2-jaw gripper)
@@ -124,7 +124,7 @@ SO102_ALIASES = ("so102", "so_102", "so_arm_102", "soarm102")
 SO101_HYPERPARAM_SPECS: tuple[dict[str, Any], ...] = (
     {
         "key": "arm_model",
-        "aliases": ["armModel", "sceneId"],
+        "aliases": ["arm_model", "scene_id"],
         "label": "Arm Hardware Model",
         "type": "select",
         "default": "so102",
@@ -134,15 +134,15 @@ SO101_HYPERPARAM_SPECS: tuple[dict[str, Any], ...] = (
                 "value": "so102",
                 "aliases": list(SO102_ALIASES),
                 "label": "SO-ARM102 (Parallel Gripper · URDF/STL)",
-                "sceneId": "so102",
-                "urdfAsset": SO102_URDF_ASSET,
+                "scene_id": "so102",
+                "urdf_asset": SO102_URDF_ASSET,
             },
             {
                 "value": "so101",
                 "aliases": list(SO101_ALIASES),
                 "label": "SO-101 (Angular Jaw)",
-                "sceneId": "so101",
-                "urdfAsset": None,
+                "scene_id": "so101",
+                "urdf_asset": None,
             },
         ],
     },
@@ -158,11 +158,11 @@ def normalize_so_arm_model(raw: object) -> str:
 def resolve_so_arm_env_params(overrides: Mapping[str, object] | None = None) -> dict[str, Any]:
     """Return canonical arm environment hyperparameters pointing at SO-101 or SO-102 scene/URDF/STL files."""
     ov = overrides or {}
-    arm_model = normalize_so_arm_model(ov.get("arm_model") or ov.get("armModel") or ov.get("sceneId"))
+    arm_model = normalize_so_arm_model(ov.get("arm_model") or ov.get("arm_model") or ov.get("scene_id"))
     resolved = dict(SO_ARM_VARIANTS[arm_model])
     return {
         **resolved,
-        "actionScales": list(resolved["actionScales"]),
-        "goalPos": list(resolved["goalPos"]),
-        "stlAssets": list(resolved["stlAssets"]),
+        "action_scales": list(resolved["action_scales"]),
+        "goal_pos": list(resolved["goal_pos"]),
+        "stl_assets": list(resolved["stl_assets"]),
     }

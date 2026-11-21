@@ -35,10 +35,13 @@ def normalize_task_id(raw: str | None) -> str:
 def get_task_spec(task_id: str | None) -> TaskSpec:
     clean = normalize_task_id(task_id)
     base = TASK_SPECS[clean]
-    env_cfg = get_config().get_env(clean)
+    cfg = get_config()
+    env_cfg = cfg.get_env(clean)
+    eff_crowd_contribute = bool(env_cfg.crowd_contribute and cfg.trust.enabled)
+    eff_sim_phase = bool(env_cfg.sim_phase_enabled and eff_crowd_contribute)
     resolved_env_params = base.resolve_env_params(env_cfg.env_hyperparams or None) if base.env_params else None
     resolved_scene_id = (
-        str(resolved_env_params.get("sceneId") or base.scene_id)
+        str(resolved_env_params.get("scene_id") or base.scene_id)
         if resolved_env_params and base.scene_id
         else base.scene_id
     )
@@ -50,8 +53,8 @@ def get_task_spec(task_id: str | None) -> TaskSpec:
         sim_modes=env_cfg.sim_modes,
         default_sim_mode=env_cfg.default_sim_mode,
         client_sim=env_cfg.client_sim,
-        crowd_contribute=env_cfg.crowd_contribute,
-        sim_phase_enabled=env_cfg.sim_phase_enabled,
+        crowd_contribute=eff_crowd_contribute,
+        sim_phase_enabled=eff_sim_phase,
         default_auto_evolve=env_cfg.default_auto_evolve,
         allow_server_video=env_cfg.allow_server_video,
         min_pop_size=env_cfg.min_pop_size,
@@ -72,7 +75,7 @@ def extract_task_env_overrides(task_id: str | None, source: Mapping[str, Any] | 
         return {}
     spec = get_task_spec(task_id)
     out: dict[str, object] = {}
-    for container_key in ("env_params", "envParams"):
+    for container_key in ("env_params",):
         raw_box = source.get(container_key)
         if isinstance(raw_box, Mapping):
             out.update({str(k): v for k, v in raw_box.items() if v is not None and v != ""})

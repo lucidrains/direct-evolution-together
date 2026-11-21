@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass, field
 import json
 import math
 import statistics
 import threading
 import time
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from django.db import OperationalError, transaction
 from django.utils import timezone
@@ -15,6 +16,8 @@ from direct_evolution_together.config import TrustPolicyConfig, get_config
 from direct_evolution_together.models import ContributorTrust, ExternalEvalResult
 
 MAX_WORKER_POSTER_B64 = 350_000
+MAX_ATTESTATION_BATCH = 1024
+MAX_SHARD_CLAIM_BATCH = 256
 SQLITE_SYNC_LOCK = threading.RLock()
 
 
@@ -28,7 +31,7 @@ def _loads_safe(raw: str, expected: type) -> object:
 
 def sanitize_summary(raw_sum: dict) -> dict[str, object]:
     try:
-        pval = float(raw_sum.get("primaryValue", 0.0))
+        pval = float(raw_sum.get("primary_value", 0.0))
     except (TypeError, ValueError):
         pval = 0.0
     if not math.isfinite(pval) or abs(pval) >= 1e12:
@@ -36,13 +39,13 @@ def sanitize_summary(raw_sum: dict) -> dict[str, object]:
 
     tier = str(raw_sum.get("tier") or "")
     tier = tier if tier in ("", "mid", "solved") else ""
-    badge = str(raw_sum.get("badgeText") or f"{pval:.2f}")[:24]
+    badge = str(raw_sum.get("badge_text") or f"{pval:.2f}")[:24]
     out: dict[str, object] = {
-        "primaryValue": round(pval, 4),
-        "primaryDisplay": str(raw_sum.get("primaryDisplay") or badge)[:32],
-        "badgeText": badge,
+        "primary_value": round(pval, 4),
+        "primary_display": str(raw_sum.get("primary_display") or badge)[:32],
+        "badge_text": badge,
         "tier": tier,
-        "secondaryText": str(raw_sum.get("secondaryText") or "")[:120],
+        "secondary_text": str(raw_sum.get("secondary_text") or "")[:120],
         "solved": bool(raw_sum.get("solved", tier == "solved")),
     }
     extra_kept = 0
@@ -87,7 +90,7 @@ def sanitize_replay(raw_replay: object) -> dict[str, object] | None:
     """Validate optional compact subsampled pose replay for peer 3D card/fullscreen playback."""
     if not isinstance(raw_replay, dict):
         return None
-    body_poses = raw_replay.get("bodyPoses")
+    body_poses = raw_replay.get("body_poses")
     if not isinstance(body_poses, list) or not body_poses or len(body_poses) > 220:
         return None
     row_len = len(body_poses[0]) if isinstance(body_poses[0], list) else 0
@@ -113,14 +116,14 @@ def sanitize_replay(raw_replay: object) -> dict[str, object] | None:
                 return None
             clean_row.append(round(float(v), 3))
         clean_poses.append(clean_row)
-    out: dict[str, object] = {"bodyPoses": clean_poses}
-    raw_stride = raw_replay.get("poseStride")
+    out: dict[str, object] = {"body_poses": clean_poses}
+    raw_stride = raw_replay.get("pose_stride")
     base_stride = int(raw_stride) if isinstance(raw_stride, int) and 1 <= raw_stride <= 64 else 1
     if orig_len > len(clean_poses) and len(clean_poses) > 1:
         eff_stride = max(1, min(64, round(base_stride * (orig_len - 1) / (len(clean_poses) - 1))))
     else:
         eff_stride = base_stride
-    out["poseStride"] = eff_stride
+    out["pose_stride"] = eff_stride
     vxt = raw_replay.get("vx_trace")
     if isinstance(vxt, list) and vxt and len(vxt) <= 450:
         clean_vxt = [
@@ -189,21 +192,21 @@ def _aggregate_cluster(cluster: list[dict], trust_cfg: TrustPolicyConfig) -> dic
         target = statistics.median(float(c.get("val", 0.0)) for c in cluster)
 
     rep_sum = dict(min(cluster, key=lambda c: abs(float(c.get("val", 0.0)) - target)).get("summary") or {})
-    prev_primary = float(rep_sum.get("primaryValue", target))
-    rep_sum["primaryValue"] = round(target, 4)
+    prev_primary = float(rep_sum.get("primary_value", target))
+    rep_sum["primary_value"] = round(target, 4)
     if "return" in rep_sum and abs(float(rep_sum["return"]) - prev_primary) <= 1e-2:
         rep_sum["return"] = round(target, 2)
-        if "meanDistance" in rep_sum:
-            mdx = float(rep_sum["meanDistance"])
+        if "mean_distance" in rep_sum:
+            mdx = float(rep_sum["mean_distance"])
             disp = f"{target:+.0f}"
-            rep_sum["primaryDisplay"] = f"{disp} ({mdx:+.2f}m)"
-            rep_sum["badgeText"] = f"{disp} \u00b7 {mdx:+.2f}m"
-    elif "meanDistance" in rep_sum:
-        rep_sum["meanDistance"] = round(target, 2)
-        rep_sum["primaryDisplay"] = f"{target:+.1f}m"
-        rep_sum["badgeText"] = f"{target:+.1f}m"
-    elif "meanSteps" in rep_sum:
-        rep_sum["meanSteps"] = round(target, 1)
+            rep_sum["primary_display"] = f"{disp} ({mdx:+.2f}m)"
+            rep_sum["badge_text"] = f"{disp} \u00b7 {mdx:+.2f}m"
+    elif "mean_distance" in rep_sum:
+        rep_sum["mean_distance"] = round(target, 2)
+        rep_sum["primary_display"] = f"{target:+.1f}m"
+        rep_sum["badge_text"] = f"{target:+.1f}m"
+    elif "mean_steps" in rep_sum:
+        rep_sum["mean_steps"] = round(target, 1)
     return rep_sum
 
 
@@ -282,7 +285,7 @@ def _ingest_authority(
     existing_payload: dict,
     contributor_id: str,
 ) -> tuple[str, list[dict], dict[str, object]]:
-    pval = float(clean_sum["primaryValue"])  # type: ignore[arg-type]
+    pval = float(clean_sum["primary_value"])  # type: ignore[arg-type]
     atts = [{"cid": contributor_id, "val": pval, "weight": 1.0, "summary": clean_sum, "authority": True}]
     entry: dict[str, object] = {
         "hash": gh,
@@ -295,18 +298,18 @@ def _ingest_authority(
     elif "topology" in existing_payload:
         entry["topology"] = existing_payload["topology"]
 
-    poster_b64 = raw_item.get("posterPngB64")
+    poster_b64 = raw_item.get("poster_png_b64")
     if isinstance(poster_b64, str) and poster_b64 and len(poster_b64) <= MAX_WORKER_POSTER_B64:
         try:
             if base64.b64decode(poster_b64, validate=True).startswith(b"\x89PNG\r\n\x1a\n"):
-                entry["posterDataUrl"] = f"data:image/png;base64,{poster_b64}"
+                entry["poster_data_url"] = f"data:image/png;base64,{poster_b64}"
         except Exception:
             pass
-    elif "posterDataUrl" in existing_payload:
-        entry["posterDataUrl"] = existing_payload["posterDataUrl"]
-    traj = sanitize_traj_sample(raw_item.get("trajSample"))
+    elif "poster_data_url" in existing_payload:
+        entry["poster_data_url"] = existing_payload["poster_data_url"]
+    traj = sanitize_traj_sample(raw_item.get("traj_sample"))
     if traj is not None:
-        entry["trajSample"] = traj
+        entry["traj_sample"] = traj
     rep = sanitize_replay(raw_item.get("replay"))
     if rep is not None:
         entry["replay"] = rep
@@ -325,7 +328,7 @@ def _ingest_peer(
     eff_quorum: int,
     rep_deltas: dict[str, list[bool]],
 ) -> tuple[str, list[dict], dict[str, object]]:
-    pval = float(clean_sum["primaryValue"])  # type: ignore[arg-type]
+    pval = float(clean_sum["primary_value"])  # type: ignore[arg-type]
     already_idx = next((i for i, a in enumerate(atts) if a.get("cid") == contrib.contributor_id), None)
     att_entry = {
         "cid": contrib.contributor_id,
@@ -359,13 +362,13 @@ def _ingest_peer(
                 _queue_reputation_delta(
                     rep_deltas,
                     [contrib.contributor_id],
-                    values_agree(pval, float(eff_summary["primaryValue"]), trust_cfg),
+                    values_agree(pval, float(eff_summary["primary_value"]), trust_cfg),
                 )
     elif prev_status == "verified" and existing_payload.get("summary"):
         status = "verified"
         eff_summary = existing_payload["summary"]
-        if already_idx is None and eff_quorum >= 2:
-            matches = values_agree(pval, float(eff_summary.get("primaryValue", 0.0)), trust_cfg)
+        if already_idx is None:
+            matches = values_agree(pval, float(eff_summary.get("primary_value", 0.0)), trust_cfg)
             _queue_reputation_delta(rep_deltas, [contrib.contributor_id], matches)
             for a in atts:
                 if a.get("cid") == contrib.contributor_id:
@@ -385,10 +388,10 @@ def _ingest_peer(
             "authority": bool(existing_payload.get("trust", {}).get("authority")),
         },
     }
-    if "trajSample" not in entry or status == "verified":
-        traj = sanitize_traj_sample(raw_item.get("trajSample"))
+    if "traj_sample" not in entry or status == "verified":
+        traj = sanitize_traj_sample(raw_item.get("traj_sample"))
         if traj is not None:
-            entry["trajSample"] = traj
+            entry["traj_sample"] = traj
     if "replay" not in entry:
         rep = sanitize_replay(raw_item.get("replay"))
         if rep is not None:
@@ -420,6 +423,10 @@ def submit_eval_attestations(
     authority: bool = False,
     active_peers: int | None = None,
     sharded: bool = False,
+    max_batch_size: int = MAX_ATTESTATION_BATCH,
+    max_hash_len: int = 32,
+    max_db_retries: int = 4,
+    retry_backoff_sec: float = 0.02,
 ) -> dict[str, object]:
     trust_cfg = get_config().trust
     eff_quorum = resolve_effective_quorum(trust_cfg, active_peers=active_peers, sharded=sharded)
@@ -429,10 +436,10 @@ def submit_eval_attestations(
     contrib: ContributorTrust | None = None
 
     parsed_batch: list[tuple[str, dict, dict[str, object]]] = []
-    for raw_item in results[:128]:
+    for raw_item in results[:max_batch_size]:
         if not isinstance(raw_item, dict):
             continue
-        gh = str(raw_item.get("hash") or "").strip()[:32]
+        gh = str(raw_item.get("hash") or "").strip()[:max_hash_len]
         raw_sum = raw_item.get("summary")
         if not gh or not isinstance(raw_sum, dict):
             continue
@@ -441,13 +448,13 @@ def submit_eval_attestations(
     if not parsed_batch:
         return {
             "items": [],
-            "changedItems": [],
-            "contributorReputation": 1.0 if authority else float(trust_cfg.initial_reputation),
+            "changed_items": [],
+            "contributor_reputation": 1.0 if authority else float(trust_cfg.initial_reputation),
             "quarantined": False,
-            "verifiedCount": 0,
+            "verified_count": 0,
         }
 
-    for attempt in range(4):
+    for attempt in range(max_db_retries):
         stored_items.clear()
         changed_items.clear()
         verified_count = 0
@@ -462,10 +469,10 @@ def submit_eval_attestations(
                     if contrib.quarantined or contrib.reputation < trust_cfg.min_trusted_reputation:
                         return {
                             "items": [],
-                            "changedItems": [],
-                            "contributorReputation": float(contrib.reputation),
+                            "changed_items": [],
+                            "contributor_reputation": float(contrib.reputation),
                             "quarantined": True,
-                            "verifiedCount": 0,
+                            "verified_count": 0,
                         }
 
                 unique_hashes = list({gh for gh, _, _ in parsed_batch})
@@ -547,25 +554,28 @@ def submit_eval_attestations(
                         rep_deltas,
                         trust_cfg,
                         seed_contrib=contrib,
-                        submission_count=len(results[:128]),
+                        submission_count=len(parsed_batch),
                     )
             break
         except OperationalError as exc:
-            if "locked" not in str(exc).lower() or attempt == 3:
+            if "locked" not in str(exc).lower() or attempt == max_db_retries - 1:
                 raise
-            time.sleep(0.02 * (attempt + 1))
+            time.sleep(retry_backoff_sec * (attempt + 1))
 
     rep_val, quarantined = 1.0, False
     if contrib is not None:
         rep_val = float(contrib.reputation)
         quarantined = bool(contrib.quarantined)
 
+    if stored_items:
+        _record_shard_eval_updates(room, goal, generation, stored_items)
+
     return {
         "items": stored_items,
-        "changedItems": changed_items,
-        "contributorReputation": rep_val,
+        "changed_items": changed_items,
+        "contributor_reputation": rep_val,
         "quarantined": quarantined,
-        "verifiedCount": verified_count,
+        "verified_count": verified_count,
         "quorum": eff_quorum,
     }
 
@@ -579,6 +589,51 @@ def count_verified_room_evals(room: str, goal: str, generation: int) -> int:
 def fetch_room_eval_map(room: str, goal: str, generation: int, *, trusted_only: bool = True) -> dict[str, dict]:
     items = fetch_room_evals(room, goal, generation, trusted_only=trusted_only)
     return {str(it["hash"]): it for it in items if isinstance(it, dict) and it.get("hash")}
+
+
+_LEGACY_SUMMARY_KEYS = (
+    ("primaryValue", "primary_value"),
+    ("primaryDisplay", "primary_display"),
+    ("badgeText", "badge_text"),
+    ("secondaryText", "secondary_text"),
+    ("meanDistance", "mean_distance"),
+    ("minDistance", "min_distance"),
+    ("meanSteps", "mean_steps"),
+    ("minSteps", "min_steps"),
+    ("meanVx", "mean_vx"),
+    ("meanUpright", "mean_upright"),
+)
+_LEGACY_REPLAY_KEYS = (
+    ("bodyPoses", "body_poses"),
+    ("poseStride", "pose_stride"),
+    ("vxTrace", "vx_trace"),
+)
+
+
+def _normalize_legacy_eval_payload(payload: dict) -> dict:
+    """Upgrade any pre-snake_case persisted eval payload dict to canonical snake_case keys."""
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    if "trajSample" in out and "traj_sample" not in out:
+        out["traj_sample"] = out.pop("trajSample")
+    raw_sum = out.get("summary")
+    if isinstance(raw_sum, dict) and any(k in raw_sum for k, _ in _LEGACY_SUMMARY_KEYS):
+        clean_sum = dict(raw_sum)
+        for old_k, new_k in _LEGACY_SUMMARY_KEYS:
+            if old_k in clean_sum:
+                v = clean_sum.pop(old_k)
+                clean_sum.setdefault(new_k, v)
+        out["summary"] = clean_sum
+    raw_rep = out.get("replay")
+    if isinstance(raw_rep, dict) and any(k in raw_rep for k, _ in _LEGACY_REPLAY_KEYS):
+        clean_rep = dict(raw_rep)
+        for old_k, new_k in _LEGACY_REPLAY_KEYS:
+            if old_k in clean_rep:
+                v = clean_rep.pop(old_k)
+                clean_rep.setdefault(new_k, v)
+        out["replay"] = clean_rep
+    return out
 
 
 def fetch_room_evals(
@@ -606,15 +661,192 @@ def fetch_room_evals(
     for row in rows:
         payload = _loads_safe(row.payload_json, dict)
         if payload:
-            if not include_traj and "trajSample" in payload:
-                payload = {k: v for k, v in payload.items() if k != "trajSample"}
+            payload = _normalize_legacy_eval_payload(payload)
+            if not include_traj and "traj_sample" in payload:
+                payload = {k: v for k, v in payload.items() if k != "traj_sample"}
             payload.setdefault("trust", {"status": row.status})
             items.append(payload)
     return items
 
 
+@dataclass
+class _GenEvalCache:
+    verified: set[str] = field(default_factory=set)
+    evals: dict[str, dict] = field(default_factory=dict)
+
+
 _SHARD_LOCK = threading.Lock()
 _SHARD_LEASES: dict[tuple[str, str, int], dict[str, tuple[str, float]]] = {}
+_SHARD_CURSORS: dict[tuple[str, str, int], int] = {}
+_GEN_EVAL_STATE: dict[tuple[str, str, int], _GenEvalCache] = {}
+
+
+def reset_goal_shard_state(room: str, goal: str = "") -> None:
+    clean_goal = (goal or "").strip()
+    match_all = not clean_goal or clean_goal == "*"
+    with _SHARD_LOCK:
+        for store in (_SHARD_LEASES, _SHARD_CURSORS, _GEN_EVAL_STATE):
+            for k in [k for k in store if k[0] == room and (match_all or k[1] == clean_goal)]:
+                store.pop(k, None)
+
+
+def is_contributor_quarantined(room: str, contributor_id: str) -> bool:
+    if not contributor_id or contributor_id.startswith("worker:"):
+        return False
+    min_rep = get_config().trust.min_trusted_reputation
+    with SQLITE_SYNC_LOCK:
+        row = (
+            ContributorTrust.objects.filter(room=room, contributor_id=contributor_id)
+            .values("quarantined", "reputation")
+            .first()
+        )
+    return bool(row and (row["quarantined"] or float(row["reputation"]) < min_rep))
+
+
+def _ensure_gen_eval_state(
+    room: str,
+    goal: str,
+    generation: int,
+    *,
+    max_cache_entries: int = 128,
+) -> _GenEvalCache:
+    key = (room, goal, int(generation))
+    with _SHARD_LOCK:
+        if (st := _GEN_EVAL_STATE.get(key)) is not None:
+            return st
+
+    verified: set[str] = set()
+    evals: dict[str, dict] = {}
+    with SQLITE_SYNC_LOCK:
+        rows = list(
+            ExternalEvalResult.objects.filter(room=room, goal=goal, generation=generation)
+            .values_list("genome_hash", "status", "payload_json")
+        )
+    for gh, status, payload_json in rows:
+        if not gh:
+            continue
+        if status == "verified":
+            verified.add(gh)
+        parsed = _loads_safe(payload_json, dict)
+        if isinstance(parsed, dict) and parsed.get("summary"):
+            parsed = _normalize_legacy_eval_payload(parsed)
+            evals[gh] = {
+                "hash": gh,
+                "summary": parsed["summary"],
+                "trust": parsed.get("trust") or {"status": status},
+            }
+
+    with _SHARD_LOCK:
+        if len(_GEN_EVAL_STATE) > max_cache_entries:
+            _GEN_EVAL_STATE.pop(next(iter(_GEN_EVAL_STATE)), None)
+        st = _GEN_EVAL_STATE.setdefault(key, _GenEvalCache())
+        st.verified.update(verified)
+        for gh, ev in evals.items():
+            st.evals.setdefault(gh, ev)
+        return st
+
+
+def _record_shard_eval_updates(room: str, goal: str, generation: int, stored_items: Iterable[dict]) -> None:
+    key = (room, goal, int(generation))
+    with _SHARD_LOCK:
+        st = _GEN_EVAL_STATE.get(key)
+        leases = _SHARD_LEASES.get(key)
+        for it in stored_items:
+            if not isinstance(it, dict) or not (gh := str(it.get("hash") or "")):
+                continue
+            status = str((it.get("trust") or {}).get("status") or "")
+            if st is not None:
+                if status == "verified":
+                    st.verified.add(gh)
+                if it.get("summary"):
+                    st.evals[gh] = {
+                        "hash": gh,
+                        "summary": it["summary"],
+                        "trust": it.get("trust") or {"status": status},
+                    }
+            if status == "verified" and leases is not None:
+                leases.pop(gh, None)
+        if leases is not None and not leases:
+            _SHARD_LEASES.pop(key, None)
+
+
+def get_cached_gen_eval_state(room: str, goal: str, generation: int) -> tuple[set[str], dict[str, dict]]:
+    st = _ensure_gen_eval_state(room, goal, generation)
+    with _SHARD_LOCK:
+        return set(st.verified), dict(st.evals)
+
+
+def count_verified_population(
+    done_hashes: set[str],
+    pop_hashes: Sequence[str],
+    pop_hash_set: frozenset[str] | set[str] | None = None,
+) -> int:
+    if pop_hash_set is not None and len(pop_hash_set) == len(pop_hashes):
+        return len(done_hashes & pop_hash_set)
+    return sum(1 for h in pop_hashes if h and h in done_hashes)
+
+
+def claim_crowd_eval_shard_indices(
+    room: str,
+    goal: str,
+    generation: int,
+    pop_hashes: Sequence[str],
+    *,
+    peer_id: str,
+    batch_size: int = 4,
+    lease_ttl_sec: float = 45.0,
+    done_hashes: set[str] | None = None,
+    pop_hash_set: frozenset[str] | set[str] | None = None,
+    max_batch_size: int = MAX_SHARD_CLAIM_BATCH,
+    max_lease_buckets: int = 256,
+) -> tuple[list[int], int]:
+    """O(batch_size) roving-cursor shard allocator returning ``(chosen_indices, completed_count)``."""
+    total = len(pop_hashes)
+    if total == 0 or batch_size <= 0:
+        return [], 0
+
+    done = done_hashes if done_hashes is not None else get_cached_gen_eval_state(room, goal, generation)[0]
+    completed_cnt = count_verified_population(done, pop_hashes, pop_hash_set)
+    if completed_cnt >= total:
+        return [], completed_cnt
+
+    now = time.monotonic()
+    key = (room, goal, int(generation))
+    eff_batch = max(1, min(max_batch_size, int(batch_size)))
+
+    with _SHARD_LOCK:
+        if len(_SHARD_LEASES) > max_lease_buckets:
+            for sk in [k for k, lm in _SHARD_LEASES.items() if not lm or all(exp <= now for _, exp in lm.values())]:
+                _SHARD_LEASES.pop(sk, None)
+                _SHARD_CURSORS.pop(sk, None)
+
+        leases = _SHARD_LEASES.setdefault(key, {})
+        for gh in [gh for gh, (_, exp) in leases.items() if gh in done or exp <= now]:
+            leases.pop(gh, None)
+
+        chosen: list[int] = []
+        start_cur = _SHARD_CURSORS.get(key, 0) % total
+        for step in range(total):
+            idx = (start_cur + step) % total
+            gh = pop_hashes[idx]
+            if not gh or gh in done or gh in leases:
+                continue
+            leases[gh] = (peer_id, now + lease_ttl_sec)
+            chosen.append(idx)
+            if len(chosen) >= eff_batch:
+                break
+
+        if chosen:
+            _SHARD_CURSORS[key] = (chosen[-1] + 1) % total
+            return chosen, completed_cnt
+
+        # Tail straggler fallback: re-issue oldest leased undone slots
+        leased_undone = sorted(
+            (1 if leases[gh][0] == peer_id else 0, leases[gh][1], idx)
+            for idx, gh in enumerate(pop_hashes)
+            if gh and gh not in done and gh in leases
+        )
+        return [idx for _, _, idx in leased_undone[:eff_batch]], completed_cnt
 
 
 def claim_crowd_eval_shard(
@@ -631,55 +863,18 @@ def claim_crowd_eval_shard(
     """Assign a disjoint batch of unevaluated candidates to ``peer_id`` with TTL lease expiry."""
     if not candidates or batch_size <= 0:
         return []
-    done = done_hashes or set()
-    now = time.monotonic()
-    key = (room, goal, int(generation))
-    eff_batch = max(1, min(32, int(batch_size)))
-
-    with _SHARD_LOCK:
-        # Prune stale generation keys if map grows large
-        if len(_SHARD_LEASES) > 256:
-            stale_keys = [
-                k for k, lmap in _SHARD_LEASES.items()
-                if not lmap or all(exp <= now for _, exp in lmap.values())
-            ]
-            for sk in stale_keys:
-                _SHARD_LEASES.pop(sk, None)
-
-        leases = _SHARD_LEASES.setdefault(key, {})
-        for gh in list(leases.keys()):
-            _, exp = leases[gh]
-            if gh in done or exp <= now:
-                leases.pop(gh, None)
-
-        chosen: list[dict] = []
-        # 1. Prefer completely unleased, undone candidates so peers divvy up disjoint work
-        for cand in candidates:
-            gh = str(cand.get("hash") or "")
-            if not gh or gh in done or gh in leases:
-                continue
-            leases[gh] = (peer_id, now + lease_ttl_sec)
-            chosen.append(cand)
-            if len(chosen) >= eff_batch:
-                return chosen
-
-        # 2. If all remaining undone candidates are currently leased by other peers (tail straggler),
-        #    hand out oldest leased items so stalled clients cannot block completion.
-        if not chosen:
-            leased_undone = [
-                cand for cand in candidates
-                if str(cand.get("hash") or "") not in done
-                and str(cand.get("hash") or "") in leases
-            ]
-            leased_undone.sort(
-                key=lambda c: (
-                    1 if leases[str(c["hash"])][0] == peer_id else 0,
-                    leases[str(c["hash"])][1],
-                )
-            )
-            for cand in leased_undone[:eff_batch]:
-                chosen.append(cand)
-        return chosen
+    pop_hashes = [str(c.get("hash") or "") for c in candidates]
+    chosen_idxs, _ = claim_crowd_eval_shard_indices(
+        room,
+        goal,
+        generation,
+        pop_hashes,
+        peer_id=peer_id,
+        batch_size=batch_size,
+        lease_ttl_sec=lease_ttl_sec,
+        done_hashes=done_hashes,
+    )
+    return [candidates[i] for i in chosen_idxs]
 
 
 def release_completed_shard_leases(
@@ -702,6 +897,8 @@ def release_completed_shard_leases(
 def compute_goal_eval_rankings(
     genomes: list[dict],
     eval_map: dict[str, dict],
+    *,
+    value_digits: int = 4,
 ) -> list[dict[str, object]]:
     """Build global 1..K leaderboard across evaluated individuals in ``genomes``."""
     scored: list[tuple[float, int, dict[str, object]]] = []
@@ -714,7 +911,7 @@ def compute_goal_eval_rankings(
             continue
         summ = rec.get("summary") if isinstance(rec.get("summary"), dict) else {}
         try:
-            pval = float(summ.get("primaryValue", 0.0))
+            pval = float(summ.get("primary_value", 0.0))
         except (TypeError, ValueError):
             pval = 0.0
         if not math.isfinite(pval):
@@ -729,9 +926,9 @@ def compute_goal_eval_rankings(
                     "id": g.get("id", 0),
                     "uuid": str(g.get("uuid") or ""),
                     "hash": gh,
-                    "primaryValue": round(pval, 4),
-                    "primaryDisplay": str(summ.get("primaryDisplay") or ""),
-                    "badgeText": str(summ.get("badgeText") or ""),
+                    "primary_value": round(pval, value_digits),
+                    "primary_display": str(summ.get("primary_display") or ""),
+                    "badge_text": str(summ.get("badge_text") or ""),
                     "tier": str(summ.get("tier") or ""),
                     "status": str(trust.get("status") or "verified"),
                 },

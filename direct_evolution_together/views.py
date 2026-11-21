@@ -1,4 +1,5 @@
 import base64
+from dataclasses import dataclass
 import gzip
 import hashlib
 import hmac
@@ -33,12 +34,15 @@ from django.views.decorators.http import require_GET, require_POST, require_http
 from direct_evolution_together import mummy_ws, ws_bridge
 from direct_evolution_together.config import get_config
 from direct_evolution_together.crowd_trust import (
+    MAX_SHARD_CLAIM_BATCH,
     SQLITE_SYNC_LOCK,
-    claim_crowd_eval_shard,
+    claim_crowd_eval_shard_indices,
     compute_goal_eval_rankings,
-    fetch_room_eval_map,
+    count_verified_population,
     fetch_room_evals,
-    release_completed_shard_leases,
+    get_cached_gen_eval_state,
+    is_contributor_quarantined,
+    reset_goal_shard_state,
     resolve_effective_quorum,
     submit_eval_attestations,
 )
@@ -208,9 +212,9 @@ def index(
     initial_pop = _parse_clamped_int_param(
         request.GET.get("pop"), default_pop, MIN_POPULATION_SIZE, task_spec.max_pop_size
     )
-    initial_min_votes = _parse_clamped_int_param(raw_min_votes, default_min_votes, 1, 256)
+    initial_min_votes = _parse_clamped_int_param(raw_min_votes, default_min_votes, 1, 1024)
     initial_max_votes = _parse_clamped_int_param(
-        request.GET.get("max_votes"), settings.MAX_VOTES_PER_USER, 1, 128
+        request.GET.get("max_votes"), settings.MAX_VOTES_PER_USER, 1, 256
     )
     initial_mut_sigma = _parse_clamped_float_param(
         request.GET.get("sigma"), settings.MUTATION_SIGMA, 0.05, 1.0
@@ -271,7 +275,7 @@ def index(
             "task_specs": get_lean_task_specs_payload(),
             "crowd_config": {
                 **cfg.trust.to_client_dict(),
-                "contributorId": contributor_id,
+                "contributor_id": contributor_id,
             },
         },
     )
@@ -722,12 +726,12 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
         default_elite = default_elite_for_task(task, settings.ELITE_FRAC)
         raw_min_votes = payload.get("min_votes")
         min_votes_val = (
-            _parse_clamped_int_param(raw_min_votes, task_spec.default_min_votes, 1, 256)
+            _parse_clamped_int_param(raw_min_votes, task_spec.default_min_votes, 1, 1024)
             if (raw_min_votes is not None and str(raw_min_votes).strip() != "")
             else task_spec.default_min_votes
         )
         max_votes_val = _parse_clamped_int_param(
-            payload.get("max_votes_per_user"), settings.MAX_VOTES_PER_USER, 1, 128
+            payload.get("max_votes_per_user"), settings.MAX_VOTES_PER_USER, 1, 256
         )
         scaled = env_policy.constrain_room_scale(
             pop_size,
@@ -883,8 +887,8 @@ def export_bundle(request: HttpRequest) -> HttpResponse:
         zf.writestr(f"{slug}/run.py", script_text)
         spec = get_task_spec(task)
         resolved_env = spec.resolve_env_params(env_params)
-        eff_scene_id = str(resolved_env.get("sceneId") or spec.scene_id or "")
-        urdf_rel = resolved_env.get("urdfAsset")
+        eff_scene_id = str(resolved_env.get("scene_id") or spec.scene_id or "")
+        urdf_rel = resolved_env.get("urdf_asset")
         if spec.mjcf_asset:
             xml_path = _PKG_DIR / "assets" / spec.mjcf_asset
             if xml_path.is_file():
@@ -937,14 +941,14 @@ def api_render_video(request: HttpRequest) -> JsonResponse:
     base_path = _resolve_base_path(request)
     out_payload: dict[str, object] = {
         "ok": True,
-        "videoUrl": f"{base_path}/media/{res['mp4_rel']}",
-        "posterUrl": f"{base_path}/media/{res['png_rel']}",
+        "video_url": f"{base_path}/media/{res['mp4_rel']}",
+        "poster_url": f"{base_path}/media/{res['png_rel']}",
         "steps": res["steps"],
         "return": res["return"],
         "seed": res["seed"],
     }
-    if "meanAbsX" in res:
-        out_payload["meanAbsX"] = res["meanAbsX"]
+    if "mean_abs_x" in res:
+        out_payload["mean_abs_x"] = res["mean_abs_x"]
     if "distance" in res:
         out_payload["distance"] = res["distance"]
     return JsonResponse(out_payload)
@@ -988,7 +992,7 @@ def api_sim_eval_batch(request: HttpRequest) -> JsonResponse:
         except (TypeError, ValueError):
             return JsonResponse({"ok": False, "error": "Invalid seed list."}, status=400)
 
-    include_rollout = bool(payload.get("includeRollout", True))
+    include_rollout = bool(payload.get("include_rollout", True))
     items = evaluate_control_batch(
         task,
         genomes,
@@ -1023,9 +1027,9 @@ def api_sim_rollout(request: HttpRequest) -> JsonResponse:
 
     raw_nudge = str(payload.get("nudge") or "").strip().lower()
     nudge = raw_nudge if raw_nudge in ("left", "right", "back", "fwd", "hop") else None
-    raw_steps = payload.get("maxSteps")
+    raw_steps = payload.get("max_steps")
     max_steps = int(raw_steps) if isinstance(raw_steps, int) else None
-    include_geoms = bool(payload.get("includeGeoms", True))
+    include_geoms = bool(payload.get("include_geoms", True))
 
     rollout = rollout_control_episode(
         task,
@@ -1084,18 +1088,61 @@ def _verify_worker_token(request: HttpRequest, room_obj: Room | None) -> bool:
     return hmac.compare_digest(digest, room_obj.worker_token_hash)
 
 
-def _fetch_room_snapshot(room: str, goal: str = "") -> dict | None:
+@dataclass(frozen=True)
+class _GoalIndex:
+    stubs: tuple[dict, ...]
+    hashes: tuple[str, ...]
+    hash_set: frozenset[str]
+    base_hash: str
+
+
+_GOAL_INDEX_LOCK = threading.Lock()
+_GOAL_INDEX_CACHE: dict[tuple[str, str, int, int, str], _GoalIndex] = {}
+
+
+def _invalidate_goal_index_cache(room: str, goal: str = "") -> None:
+    clean_goal = (goal or "").strip()
+    match_all = not clean_goal or clean_goal == "*"
+    with _GOAL_INDEX_LOCK:
+        for k in [k for k in _GOAL_INDEX_CACHE if k[0] == room and (match_all or k[1] == clean_goal)]:
+            _GOAL_INDEX_CACHE.pop(k, None)
+
+
+def _goal_from_snap(snap: dict | None, goal: str = "") -> dict | None:
+    goals = (snap or {}).get("goals") or []
+    return next((g for g in goals if isinstance(g, dict) and (not goal or g.get("name") == goal)), None)
+
+
+def _fetch_room_snapshot(
+    room: str,
+    goal: str = "",
+    *,
+    stubs_only: bool = False,
+    head_only: bool = False,
+) -> dict | None:
     clean_goal = (goal or "").strip()
     if ws_bridge.is_running():
-        raw = (
-            mummy_ws.get_room_goal_snapshot_json(room, clean_goal)
-            if clean_goal
-            else mummy_ws.get_room_snapshot_json(room)
-        )
+        if head_only:
+            raw = mummy_ws.get_room_goal_head_json(room, clean_goal)
+        elif stubs_only:
+            raw = mummy_ws.get_room_goal_stubs_json(room, clean_goal)
+        else:
+            raw = (
+                mummy_ws.get_room_goal_snapshot_json(room, clean_goal)
+                if clean_goal
+                else mummy_ws.get_room_snapshot_json(room)
+            )
         return json.loads(raw)
     configured = _configured_admin_password()
     if configured:
-        qs = f"?goal={urllib.parse.quote(clean_goal, safe='')}" if clean_goal else ""
+        qparts: list[str] = []
+        if clean_goal:
+            qparts.append(f"goal={urllib.parse.quote(clean_goal, safe='')}")
+        if stubs_only:
+            qparts.append("stubs=1")
+        if head_only:
+            qparts.append("head=1")
+        qs = f"?{'&'.join(qparts)}" if qparts else ""
         status, text = _ws_internal_request(
             "GET",
             f"/internal/room-snapshot/{urllib.parse.quote(room, safe='')}{qs}",
@@ -1114,7 +1161,98 @@ def _fetch_room_snapshot(room: str, goal: str = "") -> dict | None:
     return None
 
 
-def _get_live_room_peer_count(room: str) -> int | None:
+def _get_cached_goal_index(
+    room: str,
+    target_head: dict,
+    *,
+    hash_length: int = 20,
+    max_cache_entries: int = 128,
+) -> _GoalIndex:
+    """Return cached `_GoalIndex` for `(room, goal, generation)`, parsing stubs once per generation."""
+    goal_name = str(target_head.get("name") or "")
+    generation = int(target_head.get("generation", 0))
+    head_genomes = target_head.get("genomes")
+    has_inline = isinstance(head_genomes, list) and len(head_genomes) > 0
+    pop_size = int(target_head.get("population_size") or (len(head_genomes) if isinstance(head_genomes, list) else 0))
+    head_uuid = str(
+        target_head.get("head_uuid")
+        or ((head_genomes[0].get("uuid") if isinstance(head_genomes[0], dict) else "") if has_inline else "")
+    )
+    cache_key = (room, goal_name, generation, pop_size, head_uuid)
+    if head_uuid:
+        with _GOAL_INDEX_LOCK:
+            if (hit := _GOAL_INDEX_CACHE.get(cache_key)) is not None:
+                return hit
+
+    if has_inline:
+        raw_genomes = [g for g in head_genomes if isinstance(g, dict)]
+    else:
+        stub_goal = _goal_from_snap(_fetch_room_snapshot(room, goal_name, stubs_only=True), goal_name)
+        raw_genomes = [g for g in ((stub_goal or {}).get("genomes") or []) if isinstance(g, dict)]
+
+    stubs: list[dict] = []
+    hashes: list[str] = []
+    base_hash = ""
+    for g in raw_genomes:
+        gh = str(g.get("hash") or genome_content_hash(g, length=hash_length))
+        guuid = ensure_genome_uuid(g)
+        if not base_hash and g.get("base_hash"):
+            base_hash = str(g["base_hash"])
+        stubs.append({"id": int(g.get("id", 0) or 0), "uuid": guuid, "hash": gh})
+        hashes.append(gh)
+
+    resolved_head_uuid = head_uuid or (stubs[0]["uuid"] if stubs else "")
+    hash_tuple = tuple(hashes)
+    entry = _GoalIndex(
+        stubs=tuple(stubs),
+        hashes=hash_tuple,
+        hash_set=frozenset(h for h in hash_tuple if h),
+        base_hash=base_hash,
+    )
+    if resolved_head_uuid:
+        with _GOAL_INDEX_LOCK:
+            if len(_GOAL_INDEX_CACHE) > max_cache_entries:
+                _GOAL_INDEX_CACHE.pop(next(iter(_GOAL_INDEX_CACHE)), None)
+            _GOAL_INDEX_CACHE[(room, goal_name, generation, len(stubs), str(resolved_head_uuid))] = entry
+    return entry
+
+
+def _parse_slice_response(raw: str) -> dict[int, dict] | None:
+    parsed = json.loads(raw)
+    if not (isinstance(parsed, dict) and parsed.get("ok") and isinstance(parsed.get("items"), list)):
+        return None
+    return {
+        int(it["index"]): it["genome"]
+        for it in parsed["items"]
+        if isinstance(it, dict) and isinstance(it.get("index"), int) and isinstance(it.get("genome"), dict)
+    }
+
+
+def _fetch_room_goal_slice(room: str, goal: str, generation: int, indices: list[int]) -> dict[int, dict]:
+    """Fetch full genome dicts ONLY for `indices` in O(len(indices)) without reparsing all P genomes."""
+    if not indices:
+        return {}
+    if ws_bridge.is_running():
+        hit = _parse_slice_response(mummy_ws.get_room_goal_slice_json(room, goal, int(generation), json.dumps(indices)))
+        if hit is not None:
+            return hit
+    if configured := _configured_admin_password():
+        status, text = _ws_internal_request(
+            "POST",
+            "/internal/room-slice",
+            configured,
+            {"room": room, "goal": goal, "generation": int(generation), "indices": indices},
+        )
+        if status == 200 and text and (hit := _parse_slice_response(text)) is not None:
+            return hit
+    g_obj = _goal_from_snap(_fetch_room_snapshot(room, goal), goal)
+    if g_obj is None or int(g_obj.get("generation", -1)) != int(generation):
+        return {}
+    all_g = g_obj.get("genomes") or []
+    return {idx: all_g[idx] for idx in indices if 0 <= idx < len(all_g) and isinstance(all_g[idx], dict)}
+
+
+def _get_live_room_peer_count(room: str, *, timeout_sec: float = 1.5) -> int | None:
     """Return active WS peer count in `room` when WS server is active, else None."""
     if ws_bridge.is_running():
         cnt = int(mummy_ws.get_room_peer_count(room))
@@ -1125,7 +1263,7 @@ def _get_live_room_peer_count(room: str) -> int | None:
             "GET",
             f"/internal/room-peers/{urllib.parse.quote(room, safe='')}",
             configured,
-            timeout=1.5,
+            timeout=timeout_sec,
         )
         if status == 200 and text:
             try:
@@ -1136,7 +1274,14 @@ def _get_live_room_peer_count(room: str) -> int | None:
     return None
 
 
-def _notify_goal_sim_progress(room: str, goal_name: str, generation: int, verified_count: int) -> str:
+def _notify_goal_sim_progress(
+    room: str,
+    goal_name: str,
+    generation: int,
+    verified_count: int,
+    *,
+    timeout_sec: float = 1.5,
+) -> str:
     if ws_bridge.is_running():
         return str(mummy_ws.notify_goal_sim_progress(room, goal_name, int(generation), int(verified_count)))
     configured = _configured_admin_password()
@@ -1149,9 +1294,9 @@ def _notify_goal_sim_progress(room: str, goal_name: str, generation: int, verifi
                 "room": room,
                 "goal": goal_name,
                 "generation": int(generation),
-                "verifiedCount": int(verified_count),
+                "verified_count": int(verified_count),
             },
-            timeout=1.5,
+            timeout=timeout_sec,
         )
         if status == 200 and text:
             try:
@@ -1161,39 +1306,34 @@ def _notify_goal_sim_progress(room: str, goal_name: str, generation: int, verifi
     return ""
 
 
-def _sync_goal_sim_phase(room: str, goal_name: str, generation: int) -> tuple[int, str]:
+def _sync_goal_sim_phase(
+    room: str,
+    goal_name: str,
+    generation: int,
+    *,
+    goal_index: _GoalIndex | None = None,
+) -> tuple[int, str]:
     """Count verified genomes belonging to the active goal population and advance phase if ready."""
-    snapshot = _fetch_room_snapshot(room, goal_name)
-    goals = (snapshot or {}).get("goals") or []
-    target = next((g for g in goals if g.get("name") == goal_name), None)
-    if not isinstance(target, dict) or int(target.get("generation", -1)) != int(generation):
+    if goal_index is None:
+        target = _goal_from_snap(_fetch_room_snapshot(room, goal_name, head_only=True), goal_name)
+        if target is None or int(target.get("generation", -1)) != int(generation):
+            return 0, ""
+        goal_index = _get_cached_goal_index(room, target)
+    if not goal_index.hashes:
         return 0, ""
-    genomes = target.get("genomes") or []
-    if not genomes:
-        return 0, ""
-    pop_hashes = [
-        str(g["hash"]) if (isinstance(g, dict) and g.get("hash")) else genome_content_hash(g, length=20)
-        for g in genomes
-        if isinstance(g, dict)
-    ]
-    if not pop_hashes:
-        return 0, ""
-    with SQLITE_SYNC_LOCK:
-        verified_hashes = set(
-            ExternalEvalResult.objects.filter(
-                room=room,
-                goal=goal_name,
-                generation=generation,
-                status="verified",
-                genome_hash__in=set(pop_hashes),
-            ).values_list("genome_hash", flat=True)
-        )
-    verified_in_pop = sum(1 for h in pop_hashes if h in verified_hashes)
+    verified_hashes, _ = get_cached_gen_eval_state(room, goal_name, generation)
+    verified_in_pop = count_verified_population(verified_hashes, goal_index.hashes, goal_index.hash_set)
     phase = _notify_goal_sim_progress(room, goal_name, generation, verified_in_pop)
     return verified_in_pop, phase
 
 
-def _broadcast_room_event(room: str, payload: dict, *, goal: str = "") -> None:
+def _broadcast_room_event(
+    room: str,
+    payload: dict,
+    *,
+    goal: str = "",
+    timeout_sec: float = 1.5,
+) -> None:
     clean_goal = (goal or "").strip()
     if ws_bridge.is_running():
         raw_payload = json.dumps(payload, separators=(",", ":"))
@@ -1212,7 +1352,7 @@ def _broadcast_room_event(room: str, payload: dict, *, goal: str = "") -> None:
             "/internal/room-broadcast",
             configured,
             body,
-            timeout=1.5,
+            timeout=timeout_sec,
         )
 
 
@@ -1229,7 +1369,7 @@ def api_worker_jobs(request: HttpRequest, room: str) -> JsonResponse:
     if not goals:
         if req_goal:
             return JsonResponse({"ok": False, "error": f"Goal '{req_goal}' not found."}, status=404)
-        return JsonResponse({"ok": True, "room": room, "goal": None, "generation": 0, "pending": [], "totalCount": 0})
+        return JsonResponse({"ok": True, "room": room, "goal": None, "generation": 0, "pending": [], "total_count": 0})
 
     target = next((g for g in goals if g.get("name") == req_goal), None) if req_goal else goals[0]
     if target is None:
@@ -1256,8 +1396,8 @@ def api_worker_jobs(request: HttpRequest, room: str) -> JsonResponse:
             "goal": goal_name,
             "task": target.get("task", "external"),
             "generation": generation,
-            "totalCount": len(genomes),
-            "completedCount": len(genomes) - len(pending),
+            "total_count": len(genomes),
+            "completed_count": len(genomes) - len(pending),
             "pending": pending,
         }
     )
@@ -1302,7 +1442,7 @@ def api_worker_results(request: HttpRequest, room: str) -> JsonResponse:
     )
     stored_items = outcome["items"]
     if stored_items:
-        ws_items = [{k: v for k, v in it.items() if k != "trajSample"} for it in stored_items]
+        ws_items = [{k: v for k, v in it.items() if k != "traj_sample"} for it in stored_items]
         _broadcast_room_event(
             room,
             {
@@ -1322,7 +1462,7 @@ def api_config(request: HttpRequest) -> JsonResponse:
     """Return active centralized environment, execution-lock, and crowd-trust config."""
     payload: dict[str, object] = {"ok": True, **get_config().to_public_dict()}
     if request.GET.get("task_specs", "").strip().lower() in ("1", "true", "yes", "full"):
-        payload["taskSpecs"] = get_task_specs_payload()
+        payload["task_specs"] = get_task_specs_payload()
     return JsonResponse(payload)
 
 
@@ -1345,58 +1485,95 @@ def _is_goal_sharded(spec: object, pop_size: int) -> bool:
 
 
 def _strip_traj_sample(ev_rec: dict | None) -> dict | None:
-    if isinstance(ev_rec, dict) and "trajSample" in ev_rec:
-        return {k: v for k, v in ev_rec.items() if k != "trajSample"}
+    if isinstance(ev_rec, dict) and "traj_sample" in ev_rec:
+        return {k: v for k, v in ev_rec.items() if k != "traj_sample"}
     return ev_rec
 
 
-def _search_goals_for_uuid(
-    room_slug: str,
-    goals: list,
+def _format_uuid_hit(
+    *,
     clean_uuid: str,
-) -> dict[str, object] | None:
+    room_slug: str,
+    goal_name: str,
+    task_id: str,
+    env_params: dict,
+    entry_gen: int,
+    idx: int | None,
+    is_live: bool,
+    entry: dict,
+    gh: str,
+) -> dict[str, object]:
+    evs = (
+        fetch_room_evals(room_slug, goal_name, entry_gen, trusted_only=False, include_traj=False, genome_hashes=[gh])
+        if gh
+        else []
+    )
+    return {
+        "uuid": clean_uuid,
+        "id": int(entry.get("id", 0) or 0),
+        "room": room_slug,
+        "goal": goal_name,
+        "task": task_id,
+        "env_params": env_params,
+        "generation": entry_gen,
+        "index": idx,
+        "is_live": is_live,
+        "op": str(entry.get("op") or "random"),
+        "parents": [int(p) for p in (entry.get("parents") or []) if isinstance(p, int)],
+        "hash": gh,
+        "genome": entry,
+        "eval": _strip_traj_sample(evs[0] if evs else None),
+    }
+
+
+def _search_goals_for_uuid(room_slug: str, goals: list, clean_uuid: str) -> dict[str, object] | None:
     for goal in goals:
         if not isinstance(goal, dict):
             continue
         g_name = str(goal.get("name") or "")
         task_id = normalize_task_id(str(goal.get("task") or "image"))
         gen_num = int(goal.get("generation", 0))
-        env_params = goal.get("envParams") if isinstance(goal.get("envParams"), dict) else {}
-
-        def _pack_hit(entry: dict, *, entry_gen: int, idx: int | None, is_live: bool, gh: str) -> dict[str, object]:
-            eval_map = fetch_room_eval_map(room_slug, g_name, entry_gen, trusted_only=False) if gh else {}
-            return {
-                "uuid": clean_uuid,
-                "id": int(entry.get("id", 0) or 0),
-                "room": room_slug,
-                "goal": g_name,
-                "task": task_id,
-                "envParams": env_params,
-                "generation": entry_gen,
-                "index": idx,
-                "isLive": is_live,
-                "op": str(entry.get("op") or "random"),
-                "parents": [int(p) for p in (entry.get("parents") or []) if isinstance(p, int)],
-                "hash": gh,
-                "genome": entry,
-                "eval": _strip_traj_sample(eval_map.get(gh)),
-            }
+        env_params = goal.get("env_params") if isinstance(goal.get("env_params"), dict) else {}
 
         for idx, g in enumerate(goal.get("genomes") or []):
             if isinstance(g, dict) and normalize_short_uuid(g.get("uuid")) == clean_uuid:
                 gh = str(g.get("hash") or genome_content_hash(g, length=20))
-                return _pack_hit(g, entry_gen=gen_num, idx=idx, is_live=True, gh=gh)
+                return _format_uuid_hit(
+                    clean_uuid=clean_uuid, room_slug=room_slug, goal_name=g_name, task_id=task_id,
+                    env_params=env_params, entry_gen=gen_num, idx=idx, is_live=True, entry=g, gh=gh,
+                )
 
         for node in goal.get("lineage") or []:
             if isinstance(node, dict) and normalize_short_uuid(node.get("uuid")) == clean_uuid:
-                return _pack_hit(
-                    node,
-                    entry_gen=int(node.get("gen", 0)),
-                    idx=None,
-                    is_live=False,
-                    gh=str(node.get("hash") or ""),
+                return _format_uuid_hit(
+                    clean_uuid=clean_uuid, room_slug=room_slug, goal_name=g_name, task_id=task_id,
+                    env_params=env_params, entry_gen=int(node.get("gen", 0)), idx=None, is_live=False,
+                    entry=node, gh=str(node.get("hash") or ""),
                 )
     return None
+
+
+def _pack_uuid_hit_from_raw(raw_hit: dict, clean_uuid: str) -> dict[str, object] | None:
+    entry = raw_hit.get("genome")
+    if not isinstance(entry, dict):
+        return None
+    raw_idx = raw_hit.get("index")
+    gh = str(
+        entry.get("hash")
+        or (genome_content_hash(entry, length=20) if ("weights" in entry or "adapters" in entry) else "")
+    )
+    return _format_uuid_hit(
+        clean_uuid=clean_uuid,
+        room_slug=str(raw_hit.get("room") or ""),
+        goal_name=str(raw_hit.get("goal") or ""),
+        task_id=normalize_task_id(str(raw_hit.get("task") or "image")),
+        env_params=raw_hit.get("env_params") if isinstance(raw_hit.get("env_params"), dict) else {},
+        entry_gen=int(raw_hit.get("generation", 0)),
+        idx=int(raw_idx) if isinstance(raw_idx, int) else None,
+        is_live=bool(raw_hit.get("is_live", False)),
+        entry=entry,
+        gh=gh,
+    )
 
 
 def _find_individual_by_uuid(ind_uuid: str, room_hint: str = "") -> dict[str, object] | None:
@@ -1419,10 +1596,20 @@ def _find_individual_by_uuid(ind_uuid: str, room_hint: str = "") -> dict[str, ob
                 continue
             checked_live.add(r_slug)
             try:
-                snap = json.loads(mummy_ws.get_room_snapshot_with_lineage_json(r_slug) or "{}")
+                fast_raw = mummy_ws.get_room_individual_by_uuid_json(r_slug, clean_uuid)
+                if fast_raw:
+                    fast_parsed = json.loads(fast_raw)
+                    if isinstance(fast_parsed, dict) and fast_parsed.get("ok"):
+                        packed = _pack_uuid_hit_from_raw(fast_parsed, clean_uuid)
+                        if packed is not None:
+                            return packed
             except ValueError:
                 continue
-            hit = _search_goals_for_uuid(r_slug, snap.get("goals") or [], clean_uuid)
+
+    elif hint:
+        snap = _fetch_room_snapshot(hint)
+        if isinstance(snap, dict):
+            hit = _search_goals_for_uuid(hint, snap.get("goals") or [], clean_uuid)
             if hit is not None:
                 return hit
 
@@ -1488,11 +1675,11 @@ def api_crowd_claim(request: HttpRequest, room: str) -> JsonResponse:
             return JsonResponse({"ok": False, "error": "Invalid JSON."}, status=400)
 
     req_goal = str(payload.get("goal") or request.GET.get("goal", "")).strip()[:64]
-    explicit_peer = str(payload.get("peerId") or request.GET.get("peer_id", "")).strip()
+    explicit_peer = str(payload.get("peer_id") or request.GET.get("peer_id", "")).strip()
     cid, cid_is_new = _resolve_contributor_id(request, explicit_peer_id=explicit_peer)
 
-    snapshot = _fetch_room_snapshot(room, req_goal)
-    goals = (snapshot or {}).get("goals") or []
+    head_snap = _fetch_room_snapshot(room, req_goal, head_only=True)
+    goals = (head_snap or {}).get("goals") or []
     if not goals:
         resp = JsonResponse(
             {
@@ -1501,9 +1688,9 @@ def api_crowd_claim(request: HttpRequest, room: str) -> JsonResponse:
                 "goal": req_goal or None,
                 "generation": 0,
                 "shard": [],
-                "totalCount": 0,
-                "completedCount": 0,
-                "remainingCount": 0,
+                "total_count": 0,
+                "completed_count": 0,
+                "remaining_count": 0,
             }
         )
         return _attach_contributor_cookie(resp, cid, cid_is_new)
@@ -1521,68 +1708,62 @@ def api_crowd_claim(request: HttpRequest, room: str) -> JsonResponse:
     goal_name = str(target.get("name") or "")
     task_id = normalize_task_id(str(target.get("task") or "image"))
     spec = get_task_spec(task_id)
-    raw_batch = payload.get("batchSize", request.GET.get("batch_size", spec.crowd_shard_size))
-    batch_size = _parse_clamped_int_param(raw_batch, spec.crowd_shard_size, 1, 32)
+    raw_batch = payload.get("batch_size", request.GET.get("batch_size", spec.crowd_shard_size))
+    batch_size = _parse_clamped_int_param(raw_batch, spec.crowd_shard_size, 1, MAX_SHARD_CLAIM_BATCH)
     generation = int(target.get("generation", 0))
-    genomes = [g for g in (target.get("genomes") or []) if isinstance(g, dict)]
-    goal_env_raw = target.get("envParams") if isinstance(target.get("envParams"), dict) else None
+    goal_env_raw = target.get("env_params") if isinstance(target.get("env_params"), dict) else None
     resolved_env = spec.resolve_env_params(goal_env_raw)
 
-    candidates: list[dict] = []
-    pop_hashes: list[str] = []
-    for idx, g in enumerate(genomes):
-        gh = str(g.get("hash") or genome_content_hash(g, length=20))
-        guuid = ensure_genome_uuid(g)
-        pop_hashes.append(gh)
-        candidates.append(
-            {
-                "index": idx,
-                "id": int(g.get("id", 0) or 0),
-                "uuid": guuid,
-                "hash": gh,
-                "genome": g,
-            }
+    g_index = _get_cached_goal_index(room, target)
+    stubs = g_index.stubs
+    pop_total = len(stubs)
+
+    if is_contributor_quarantined(room, cid):
+        done_set, _ = get_cached_gen_eval_state(room, goal_name, generation)
+        completed_cnt = count_verified_population(done_set, g_index.hashes, g_index.hash_set)
+        chosen_idxs: list[int] = []
+    else:
+        chosen_idxs, completed_cnt = claim_crowd_eval_shard_indices(
+            room,
+            goal_name,
+            generation,
+            g_index.hashes,
+            peer_id=cid,
+            batch_size=batch_size,
+            pop_hash_set=g_index.hash_set,
         )
 
-    with SQLITE_SYNC_LOCK:
-        done_hashes = set(
-            ExternalEvalResult.objects.filter(
-                room=room,
-                goal=goal_name,
-                generation=generation,
-                status="verified",
-                genome_hash__in=set(pop_hashes),
-            ).values_list("genome_hash", flat=True)
-        )
+    slice_map = _fetch_room_goal_slice(room, goal_name, generation, chosen_idxs) if chosen_idxs else {}
+    shard = [
+        {
+            "index": idx,
+            "id": stubs[idx]["id"],
+            "uuid": stubs[idx]["uuid"],
+            "hash": stubs[idx]["hash"],
+            "genome": g_full,
+        }
+        for idx in chosen_idxs
+        if idx < pop_total and isinstance(g_full := slice_map.get(idx), dict)
+    ]
 
-    shard = claim_crowd_eval_shard(
-        room,
-        goal_name,
-        generation,
-        candidates,
-        peer_id=cid,
-        batch_size=batch_size,
-        done_hashes=done_hashes,
-    )
-    completed_cnt = sum(1 for h in pop_hashes if h in done_hashes)
     resp = JsonResponse(
         {
             "ok": True,
             "room": room,
             "goal": goal_name,
             "task": task_id,
-            "envParams": resolved_env,
+            "env_params": resolved_env,
             "generation": generation,
             "phase": str(target.get("phase") or "simulating"),
-            "sharded": _is_goal_sharded(spec, len(genomes)),
-            "crowdShardThreshold": spec.crowd_shard_threshold,
-            "crowdShardSize": spec.crowd_shard_size,
-            "evalSeeds": list(spec.eval_seeds or [0, 1]),
-            "baseHash": str(genomes[0].get("baseHash") or "") if genomes else "",
-            "contributorId": cid,
-            "totalCount": len(genomes),
-            "completedCount": completed_cnt,
-            "remainingCount": max(0, len(genomes) - completed_cnt),
+            "sharded": _is_goal_sharded(spec, pop_total),
+            "crowd_shard_threshold": spec.crowd_shard_threshold,
+            "crowd_shard_size": spec.crowd_shard_size,
+            "eval_seeds": list(spec.eval_seeds or [0, 1]),
+            "base_hash": g_index.base_hash,
+            "contributor_id": cid,
+            "total_count": pop_total,
+            "completed_count": completed_cnt,
+            "remaining_count": max(0, pop_total - completed_cnt),
             "shard": shard,
         }
     )
@@ -1602,22 +1783,19 @@ def api_crowd_evals(request: HttpRequest, room: str) -> HttpResponse:
     trusted_only = request.GET.get("trusted_only", "").strip().lower() in ("1", "true", "yes")
     active_only = request.GET.get("active_only", "").strip().lower() in ("1", "true", "yes")
 
-    g_list: list[dict] = []
-    pop_hashes: list[str] | None = None
+    g_stubs: tuple[dict, ...] = ()
+    pop_hashes: tuple[str, ...] | None = None
     rankings: list[dict[str, object]] = []
     sharded = False
     if goal_name:
-        snap = _fetch_room_snapshot(room, goal_name)
-        g_obj = next((g for g in ((snap or {}).get("goals") or []) if g.get("name") == goal_name), None)
-        if isinstance(g_obj, dict) and int(g_obj.get("generation", -1)) == generation:
-            g_list = [g for g in (g_obj.get("genomes") or []) if isinstance(g, dict)]
+        g_obj = _goal_from_snap(_fetch_room_snapshot(room, goal_name, head_only=True), goal_name)
+        if g_obj is not None and int(g_obj.get("generation", -1)) == generation:
+            g_index = _get_cached_goal_index(room, g_obj)
+            g_stubs = g_index.stubs
             spec = get_task_spec(str(g_obj.get("task") or "image"))
-            sharded = _is_goal_sharded(spec, len(g_list))
-            if active_only and g_list:
-                pop_hashes = [
-                    str(g.get("hash") or genome_content_hash(g, length=20))
-                    for g in g_list
-                ]
+            sharded = _is_goal_sharded(spec, len(g_stubs))
+            if active_only and g_stubs:
+                pop_hashes = g_index.hashes
 
     items = (
         fetch_room_evals(
@@ -1631,9 +1809,9 @@ def api_crowd_evals(request: HttpRequest, room: str) -> HttpResponse:
         if goal_name
         else []
     )
-    if g_list:
+    if g_stubs:
         eval_map = {str(it["hash"]): it for it in items if isinstance(it, dict) and it.get("hash")}
-        rankings = compute_goal_eval_rankings(g_list, eval_map)
+        rankings = compute_goal_eval_rankings(list(g_stubs), eval_map)
 
     live_peers = _get_live_room_peer_count(room)
     eff_quorum = resolve_effective_quorum(cfg, active_peers=live_peers, sharded=sharded)
@@ -1644,7 +1822,7 @@ def api_crowd_evals(request: HttpRequest, room: str) -> HttpResponse:
         "generation": generation,
         "sharded": sharded,
         "quorum": eff_quorum,
-        "contributorId": cid,
+        "contributor_id": cid,
         "items": items,
         "rankings": rankings,
     }
@@ -1690,14 +1868,14 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
     if not goal_name or not isinstance(results, list) or not results:
         return JsonResponse({"ok": False, "error": "goal, generation, and non-empty results are required."}, status=400)
 
-    explicit_peer = str(payload.get("peerId") or "").strip()
+    explicit_peer = str(payload.get("peer_id") or "").strip()
     cid, cid_is_new = _resolve_contributor_id(request, explicit_peer_id=explicit_peer)
 
-    snapshot = _fetch_room_snapshot(room, goal_name)
-    goal_obj = next((g for g in ((snapshot or {}).get("goals") or []) if g.get("name") == goal_name), None)
-    goal_genomes = [g for g in ((goal_obj or {}).get("genomes") or []) if isinstance(g, dict)]
+    goal_obj = _goal_from_snap(_fetch_room_snapshot(room, goal_name, head_only=True), goal_name)
+    g_idx = _get_cached_goal_index(room, goal_obj) if goal_obj is not None else None
+    goal_stubs = g_idx.stubs if g_idx is not None else ()
     task_spec = get_task_spec(str((goal_obj or {}).get("task") or "image"))
-    pop_total = len(goal_genomes)
+    pop_total = len(goal_stubs)
     is_sharded = bool(payload.get("sharded")) or _is_goal_sharded(task_spec, pop_total)
 
     live_peers = _get_live_room_peer_count(room)
@@ -1712,17 +1890,9 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
         sharded=is_sharded,
     )
     items = outcome["items"]
-    verified_batch_hashes = [
-        str(it["hash"])
-        for it in items
-        if isinstance(it, dict) and (it.get("trust") or {}).get("status") == "verified"
-    ]
-    if verified_batch_hashes:
-        release_completed_shard_leases(room, goal_name, generation, verified_batch_hashes)
-
-    changed_items = outcome.get("changedItems") or []
+    changed_items = outcome.get("changed_items") or []
     if changed_items:
-        ws_items = [{k: v for k, v in it.items() if k != "trajSample"} for it in changed_items]
+        ws_items = [{k: v for k, v in it.items() if k != "traj_sample"} for it in changed_items]
         _broadcast_room_event(
             room,
             {
@@ -1733,11 +1903,13 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
             },
             goal=goal_name,
         )
-    pop_verified, phase = _sync_goal_sim_phase(room, goal_name, generation)
+    active_gen_idx = g_idx if goal_obj is not None and int(goal_obj.get("generation", -1)) == generation else None
+    pop_verified, phase = _sync_goal_sim_phase(room, goal_name, generation, goal_index=active_gen_idx)
+    include_rankings = payload.get("include_rankings", True) is not False
     rankings: list[dict[str, object]] = []
-    if goal_genomes and int((goal_obj or {}).get("generation", -1)) == generation:
-        eval_map = fetch_room_eval_map(room, goal_name, generation, trusted_only=False)
-        rankings = compute_goal_eval_rankings(goal_genomes, eval_map)
+    if include_rankings and active_gen_idx is not None and goal_stubs:
+        _, cached_eval_map = get_cached_gen_eval_state(room, goal_name, generation)
+        rankings = compute_goal_eval_rankings(list(goal_stubs), cached_eval_map)
 
     ack_items = [
         {
@@ -1751,13 +1923,13 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
         "ok": True,
         "accepted": len(ack_items),
         "sharded": is_sharded,
-        "verifiedCount": outcome["verifiedCount"],
-        "goalVerifiedCount": pop_verified,
-        "completedCount": pop_verified,
-        "totalCount": pop_total,
+        "verified_count": outcome["verified_count"],
+        "goal_verified_count": pop_verified,
+        "completed_count": pop_verified,
+        "total_count": pop_total,
         "phase": phase,
         "quorum": outcome.get("quorum", trust_cfg.quorum),
-        "contributorReputation": outcome["contributorReputation"],
+        "contributor_reputation": outcome["contributor_reputation"],
         "quarantined": outcome["quarantined"],
         "items": ack_items,
         "rankings": rankings,
@@ -1765,19 +1937,34 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
     return _attach_contributor_cookie(resp, cid, cid_is_new)
 
 
+def _recommended_shard_batch(
+    default_shard_size: int,
+    pop_size: int,
+    *,
+    scale_threshold: int = 128,
+    pop_divisor: int = 32,
+    min_scaled: int = 4,
+    max_scaled: int = 32,
+) -> int:
+    if pop_size < scale_threshold:
+        return default_shard_size
+    return max(default_shard_size, min(max_scaled, max(min_scaled, pop_size // pop_divisor)))
+
+
 @require_GET
 def export_crowd_worker_script(request: HttpRequest) -> HttpResponse:
     """Download a standalone PEP 723 ``uv run`` local MuJoCo crowd shard simulator script."""
     room = request.GET.get("room", "lobby").strip()[:64] or "lobby"
     goal = request.GET.get("goal", "").strip()[:64]
-    snap = _fetch_room_snapshot(room, goal)
-    g_obj = next((g for g in ((snap or {}).get("goals") or []) if not goal or g.get("name") == goal), None)
+    g_obj = _goal_from_snap(_fetch_room_snapshot(room, goal, head_only=True), goal)
     spec = get_task_spec(str((g_obj or {}).get("task") or "microduck"))
+    pop_sz = int((g_obj or {}).get("population_size") or spec.default_pop_size)
+    rec_batch = _recommended_shard_batch(spec.crowd_shard_size, pop_sz)
     base_path = _resolve_base_path(request)
     scheme = request.scheme or "http"
     host = request.get_host()
     server_url = f"{scheme}://{host}{base_path}"
-    script = build_crowd_worker_script(room, server_url, goal_name=goal, default_batch_size=spec.crowd_shard_size)
+    script = build_crowd_worker_script(room, server_url, goal_name=goal, default_batch_size=rec_batch)
     resp = HttpResponse(script, content_type="text/x-python; charset=utf-8")
     resp["Content-Disposition"] = f'attachment; filename="crowd_worker_{slugify(room) or "room"}.py"'
     return resp
@@ -2067,6 +2254,8 @@ def _perform_admin_reset(room: str, goal: str, configured: str) -> tuple[bool, i
     reset_goals: list[str] = []
     for goal_name, pop_size in targets:
         reset_populora_goal_runtime(room, goal_name)
+        reset_goal_shard_state(room, goal_name)
+        _invalidate_goal_index_cache(room, goal_name)
         genomes = create_task_population(task_map.get(goal_name, "image"), int(pop_size))
         r_status, r_err = _apply_goal_reset_dispatch(room, goal_name, genomes, configured)
         if r_status != 200:
@@ -2084,10 +2273,13 @@ def _perform_admin_clear(room: str, goal: str, configured: str) -> tuple[bool, i
     if status != 200:
         return False, status, err, []
 
+    reset_goal_shard_state(room, "" if is_all else goal)
+    _invalidate_goal_index_cache(room, "" if is_all else goal)
     if room == "lobby":
-        known_goals = list(pop_map.keys()) if pop_map else list(ws_bridge.DEFAULT_GOALS)
+        lobby_specs = get_config().get_lobby_goal_specs()
+        known_goals = list(pop_map.keys()) if pop_map else [name for name, _, _ in lobby_specs]
         task_by_goal = _room_goal_tasks(room)
-        cap_by_goal = {name: cap for name, _, cap in ws_bridge.DEFAULT_GOAL_SPECS}
+        cap_by_goal = {name: cap for name, _, cap in lobby_specs}
         if is_all:
             goals_payload = [
                 ws_bridge._build_goal_entry(

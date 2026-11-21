@@ -26,11 +26,15 @@ from populora import (
     Population,
     preserve_rng,
     quality_dominated_novelty,
+    quality_gated_fitness,
     sketch_trajectories,
 )
+from populora._utils import default, exists
+from populora.operators import _efficient_svd_of_lora
 import torch
 from torch import Tensor
 import torch.nn as nn
+from torch_einops_utils import z_score
 
 from direct_evolution_together.cppn import _alloc_genome_id, alloc_short_uuid, normalize_short_uuid
 
@@ -64,6 +68,10 @@ class GRUMLPPolicy(nn.Module):
         action_dim: int = 14,
         hidden_dim: int = 128,
         head_dim: int = 128,
+        *,
+        hh_init_scale: float = 0.08,
+        reset_bias_init: float = 0.8,
+        update_bias_bounds: tuple[float, float] = (0.3, 1.3),
     ) -> None:
         super().__init__()
         self.obs_dim = obs_dim
@@ -86,10 +94,10 @@ class GRUMLPPolicy(nn.Module):
         self.log_std = nn.Parameter(torch.zeros(action_dim))
 
         with torch.no_grad():
-            self.cell.linear_hh.weight.mul_(0.08)
+            self.cell.linear_hh.weight.mul_(hh_init_scale)
             self.cell.linear_ih.bias.zero_()
-            self.cell.linear_ih.bias[:hidden_dim].fill_(0.8)
-            self.cell.linear_ih.bias[hidden_dim : 2 * hidden_dim].uniform_(0.3, 1.3)
+            self.cell.linear_ih.bias[:hidden_dim].fill_(reset_bias_init)
+            self.cell.linear_ih.bias[hidden_dim : 2 * hidden_dim].uniform_(*update_bias_bounds)
             for m in (self.encoder[0], self.encoder[2], self.decoder[0], self.decoder[2]):
                 m.bias.zero_()
             self.decoder[2].weight.zero_()
@@ -133,9 +141,58 @@ class MLPPolicy(nn.Module):
         return torch.cat((mean, self.log_std.expand_as(mean)), dim=-1)
 
 
+# serialization & tensor helpers
+
+
 def _encode_f16_b64(tensor: Tensor) -> str:
     arr = np.ascontiguousarray(tensor.detach().cpu().numpy().astype("<f2"))
     return base64.b64encode(arr.tobytes()).decode("ascii")
+
+
+def _encode_f16_batch_b64(tensor: Tensor) -> list[str]:
+    # encode all (p, d, r) float16 matrices in a single C base64 pass via RFC-4648 3-byte alignment
+    raw = np.ascontiguousarray(tensor.detach().cpu().numpy().astype("<f2")).view(np.uint8)
+    raw = raw.reshape(raw.shape[0], -1)
+    p, n_bytes = raw.shape
+    pad = (3 - n_bytes % 3) % 3
+    if pad:
+        raw = np.pad(raw, ((0, 0), (0, pad)), mode="constant")
+    stride = 4 * (raw.shape[1] // 3)
+    keep = stride - pad
+    suffix = "=" * pad
+    joined = base64.b64encode(raw.tobytes()).decode("ascii")
+    return [joined[i * stride : i * stride + keep] + suffix for i in range(p)]
+
+
+def _decode_f16_batch_b64(b64_list: Sequence[str], shape: tuple[int, int]) -> Tensor:
+    # decode all p float16 adapter matrices in a single C base64 pass
+    p = len(b64_list)
+    dim, r = shape
+    n_bytes = dim * r * 2
+    pad = (3 - n_bytes % 3) % 3
+    stride = 4 * ((n_bytes + pad) // 3)
+    suffix = "=" * pad
+
+    for s in b64_list:
+        if len(s) != stride or (pad and (not s.endswith(suffix) or "=" in s[:-pad])) or (not pad and "=" in s):
+            raise ValueError("Invalid float16 base64 buffer.")
+
+    joined = "".join(b64_list)
+    if pad:
+        joined = joined.replace("=", "A")
+
+    raw = np.frombuffer(base64.b64decode(joined, validate=True), dtype=np.uint8)
+    raw = np.ascontiguousarray(raw.reshape(p, n_bytes + pad)[:, :n_bytes])
+    arr = raw.view("<f2").astype(np.float32).reshape(p, dim, r)
+    if not np.isfinite(arr).all():
+        raise ValueError("Adapter tensor contains non-finite values.")
+    return torch.from_numpy(arr)
+
+
+def _lora_frob_norms(wd: Tensor, wu: Tensor) -> Tensor:
+    # cyclic trace identity: ||wu @ wd.T||_F^2 = <wu.T @ wu, wd.T @ wd>_F
+    wu_f, wd_f = wu.float(), wd.float()
+    return ((wu_f.transpose(-1, -2) @ wu_f) * (wd_f.transpose(-1, -2) @ wd_f)).sum(dim=(-2, -1)).clamp(min=0.0).sqrt()
 
 
 def _decode_f16_b64(b64_str: str, shape: tuple[int, ...]) -> Tensor:
@@ -157,10 +214,10 @@ def _encode_f32_b64(tensor: Tensor) -> str:
 def build_policy_module(policy_spec: dict[str, object], *, base_seed: int = 1) -> nn.Module:
     """Instantiate a deterministic base policy module from a declarative ``policy_spec``."""
     arch = str(policy_spec.get("arch") or "gru_mlp")
-    obs_dim = int(policy_spec["obsDim"])
-    act_dim = int(policy_spec["actionDim"])
-    hidden_dim = int(policy_spec.get("hiddenDim", 128))
-    head_dim = int(policy_spec.get("headDim", hidden_dim))
+    obs_dim = int(policy_spec["obs_dim"])
+    act_dim = int(policy_spec["action_dim"])
+    hidden_dim = int(policy_spec.get("hidden_dim", 128))
+    head_dim = int(policy_spec.get("head_dim", hidden_dim))
 
     with preserve_rng():
         torch.manual_seed(int(base_seed))
@@ -195,16 +252,16 @@ def serialize_base_model_payload(model: nn.Module, policy_spec: dict[str, object
             "b64": _encode_f32_b64(val) if use_f32 else _encode_f16_b64(val),
         }
     return {
-        "baseHash": base_hash,
+        "base_hash": base_hash,
         "arch": str(policy_spec.get("arch") or "gru_mlp"),
-        "obsDim": int(policy_spec["obsDim"]),
-        "actionDim": int(policy_spec["actionDim"]),
-        "hiddenDim": int(policy_spec.get("hiddenDim", 128)),
-        "headDim": int(policy_spec.get("headDim", 128)),
-        "lowRank": int(policy_spec.get("lowRank", 8)),
-        "loraTargets": list(policy_spec.get("loraTargets") or []),
-        "actionDist": str(policy_spec.get("actionDist") or "squashed_gaussian"),
-        "actionBounds": list(policy_spec.get("actionBounds") or [-1.0, 1.0]),
+        "obs_dim": int(policy_spec["obs_dim"]),
+        "action_dim": int(policy_spec["action_dim"]),
+        "hidden_dim": int(policy_spec.get("hidden_dim", 128)),
+        "head_dim": int(policy_spec.get("head_dim", 128)),
+        "low_rank": int(policy_spec.get("low_rank", 8)),
+        "lora_targets": list(policy_spec.get("lora_targets") or []),
+        "action_dist": str(policy_spec.get("action_dist") or "squashed_gaussian"),
+        "action_bounds": list(policy_spec.get("action_bounds") or [-1.0, 1.0]),
         "tensors": tensors,
     }
 
@@ -227,14 +284,23 @@ def _custom_base_dir() -> Path | None:
     return None
 
 
-def _persist_base_model_static_json(base_hash: str, payload: dict[str, object]) -> None:
+def _persist_base_model_static_json(
+    base_hash: str,
+    payload: dict[str, object],
+    *,
+    compresslevel: int = 6,
+) -> None:
     """Write `<MEDIA_ROOT>/base_models/<base_hash>.json(.gz)` so Nginx/media can serve it statically."""
     b_dir = _custom_base_dir()
     if b_dir is None or not base_hash:
         return
     json_path = b_dir / f"{base_hash}.json"
     if json_path.is_file():
-        return
+        try:
+            if b'"obs_dim"' in json_path.read_bytes():
+                return
+        except OSError:
+            pass
     try:
         from direct_evolution_together.public_assets import write_gzip_sidecar
 
@@ -243,7 +309,7 @@ def _persist_base_model_static_json(base_hash: str, payload: dict[str, object]) 
         tmp = json_path.with_name(json_path.name + ".tmp")
         tmp.write_bytes(raw)
         tmp.replace(json_path)
-        write_gzip_sidecar(json_path, compresslevel=6)
+        write_gzip_sidecar(json_path, compresslevel=compresslevel)
     except Exception:
         pass
 
@@ -305,7 +371,7 @@ def get_or_create_base_model(
 
 def populora_genome_hash(genome: dict, length: int = 20) -> str:
     """Deterministic SHA-256 content hash of a PopuLoRA genome's baseHash + adapter weights."""
-    base_hash = str(genome.get("baseHash") or "")
+    base_hash = str(genome.get("base_hash") or "")
     adapters = genome.get("adapters") or {}
     parts = [base_hash]
     if isinstance(adapters, dict):
@@ -318,12 +384,33 @@ def populora_genome_hash(genome: dict, length: int = 20) -> str:
 
 
 @torch.no_grad()
-def _seed_oscillatory_population_(pop: Population, has_warmstart: bool = False) -> None:
+def _rescale_init_up_(pop: Population, std_up: float) -> None:
+    # Population.__init__ already draws w_down ~ N(0, d^-0.5) and w_up ~ N(0, r^-0.5)
+    scale = float(std_up) * math.sqrt(pop.low_rank)
+    for wu in pop.weight_up.values():
+        wu.data.mul_(scale)
+
+
+@torch.no_grad()
+def _seed_oscillatory_population_(
+    pop: Population,
+    has_warmstart: bool = False,
+    *,
+    warmstart_std_up: float = 0.04,
+    init_std_up: float = 1.0,
+    noise_scale: float = 0.35,
+    freq_range: tuple[float, float] = (3.6, 4.6),
+    diag_range: tuple[float, float] = (1.38, 1.18),
+    gate_scale: float = 0.10,
+    ih_scale: float = 0.12,
+    enc_scale: float = 0.14,
+    dec_hidden_scale: float = 0.50,
+    dec_out_range: tuple[float, float] = (0.18, 0.44),
+    norm_eps: float = 1e-6,
+) -> None:
     """Apply QR orthogonal recurrent basis + oscillatory skew-symmetric modes from train_microduck.py."""
-    pop.repopulate_(save_champion=False, std_down=None, std_up=0.04 if has_warmstart else 1.0)
-    if has_warmstart:
-        return
-    if "net_cell_linear_hh" not in pop.weight_down:
+    _rescale_init_up_(pop, warmstart_std_up if has_warmstart else init_std_up)
+    if has_warmstart or "net_cell_linear_hh" not in pop.weight_down:
         return
 
     p, r = pop.pop_size, pop.low_rank
@@ -336,28 +423,28 @@ def _seed_oscillatory_population_(pop: Population, has_warmstart: bool = False) 
     q, _ = torch.linalg.qr(hh_down)
     hh_down.copy_(q)
 
-    g = torch.randn(1, r, r) + 0.35 * torch.randn(p, r, r)
+    g = torch.randn(1, r, r) + noise_scale * torch.randn(p, r, r)
     w = g - g.transpose(1, 2)
-    w = w / w.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-6) * rearrange(
-        torch.linspace(3.6, 4.6, p), "p -> p 1 1"
+    w = w / w.norm(dim=(-2, -1), keepdim=True).clamp(min=norm_eps) * rearrange(
+        torch.linspace(freq_range[0], freq_range[1], p), "p -> p 1 1"
     )
-    s = w + rearrange(torch.linspace(1.38, 1.18, p), "p -> p 1 1") * torch.eye(r)
+    s = w + rearrange(torch.linspace(diag_range[0], diag_range[1], p), "p -> p 1 1") * torch.eye(r)
 
-    hh_up[:, : 2 * hidden, :].mul_(0.10)
+    hh_up[:, : 2 * hidden, :].mul_(gate_scale)
     hh_up[:, 2 * hidden : 3 * hidden, :].copy_(torch.bmm(q, s))
 
     for k, scale in (
-        ("net_cell_linear_ih", 0.12),
-        ("net_encoder_0", 0.14),
-        ("net_encoder_2", 0.14),
-        ("net_decoder_0", 0.50),
+        ("net_cell_linear_ih", ih_scale),
+        ("net_encoder_0", enc_scale),
+        ("net_encoder_2", enc_scale),
+        ("net_decoder_0", dec_hidden_scale),
     ):
         if k in pop.weight_up:
             pop.weight_up[k].data.mul_(scale)
 
     if "net_decoder_2" in pop.weight_up:
         pop.weight_up["net_decoder_2"].data.mul_(
-            rearrange(torch.linspace(0.18, 0.44, p), "p -> p 1 1")
+            rearrange(torch.linspace(dec_out_range[0], dec_out_range[1], p), "p -> p 1 1")
         )
 
 
@@ -369,6 +456,101 @@ def _quantize_pop_f16_roundtrip_(pop: Population) -> None:
         wu = pop.weight_up[key].data
         wd.copy_(wd.to(torch.float16).to(wd.dtype))
         wu.copy_(wu.to(torch.float16).to(wu.dtype))
+
+
+# lora gauge canonicalization & population serialization
+
+
+@torch.no_grad()
+def _canonicalize_lora_gauge_(pop: Population) -> None:
+    # place each individual's LoRA factors into canonical singular-mode gauge in O(P),
+    # preserving wu @ wd.T while eliminating O(F * E) pairwise Procrustes SVDs in Firefly
+    if pop.pop_size <= 0:
+        return
+
+    for key, wd_param in pop.weight_down.items():
+        wu_param = pop.weight_up[key]
+        wd, wu = wd_param.data, wu_param.data
+        u, s, v = _efficient_svd_of_lora(wd, wu)
+        sign = torch.where(v.gather(1, v.abs().argmax(dim=1, keepdim=True)) >= 0.0, 1.0, -1.0)
+        scale = sign * rearrange(s.clamp(min=0.0).sqrt(), "p r -> p 1 r")
+        wd.copy_((u * scale).to(wd.dtype))
+        wu.copy_((v * scale).to(wu.dtype))
+
+
+@torch.no_grad()
+def _population_to_genome_dicts(
+    pop: Population,
+    *,
+    task_id: str,
+    base_hash: str,
+    base_seed: int,
+    indices: Sequence[int] | None = None,
+    genome_ids: Sequence[int | None] | None = None,
+    uuids: Sequence[str | None] | None = None,
+    parents_per_slot: Sequence[list[int]] | None = None,
+    ops_per_slot: Sequence[str] | None = None,
+    norm_digits: int = 4,
+    hash_length: int = 20,
+) -> list[dict[str, object]]:
+    slots = list(default(indices, range(int(pop.pop_size))))
+    if not slots:
+        return []
+
+    low_rank = int(pop.low_rank)
+    idx_t = None if not exists(indices) else torch.as_tensor(slots, dtype=torch.long, device=pop.device)
+    target_keys = [path.replace(".", "_") for path in pop.lora_targets]
+    hash_key_order = sorted(target_keys)
+
+    encoded_layers: dict[str, tuple[list[str], list[str], int, int, list[float]]] = {}
+    for key in target_keys:
+        wd = pop.weight_down[key].data
+        wu = pop.weight_up[key].data
+        if exists(idx_t):
+            wd, wu = wd[idx_t], wu[idx_t]
+        norms = _lora_frob_norms(wd, wu).cpu().tolist()
+        encoded_layers[key] = (
+            _encode_f16_batch_b64(wd),
+            _encode_f16_batch_b64(wu),
+            int(wd.shape[1]),
+            int(wu.shape[1]),
+            norms,
+        )
+
+    sha256 = hashlib.sha256
+    out: list[dict[str, object]] = []
+
+    for pos, _ in enumerate(slots):
+        adapters = {
+            key: {
+                "down": downs[pos],
+                "up": ups[pos],
+                "in_dim": in_dim,
+                "out_dim": out_dim,
+                "norm": round(float(norms[pos]), norm_digits),
+            }
+            for key, (downs, ups, in_dim, out_dim, norms) in encoded_layers.items()
+        }
+        digest_input = "|".join(
+            [base_hash, *(f"{hk}:{adapters[hk]['down']}:{adapters[hk]['up']}" for hk in hash_key_order)]
+        )
+        gid = genome_ids[pos] if exists(genome_ids) else None
+        raw_uuid = uuids[pos] if exists(uuids) else None
+        out.append({
+            "id": int(gid if exists(gid) else _alloc_genome_id()),
+            "uuid": normalize_short_uuid(raw_uuid) or alloc_short_uuid(),
+            "kind": "populora",
+            "task": task_id,
+            "parents": [int(p) for p in parents_per_slot[pos]] if exists(parents_per_slot) else [],
+            "op": str(ops_per_slot[pos]) if exists(ops_per_slot) else "random",
+            "base_hash": base_hash,
+            "base_seed": int(base_seed),
+            "low_rank": low_rank,
+            "adapters": adapters,
+            "hash": sha256(digest_input.encode("ascii")).hexdigest()[:hash_length],
+        })
+
+    return out
 
 
 @torch.no_grad()
@@ -384,87 +566,99 @@ def _individual_to_genome_dict(
     parents: list[int] | None = None,
     op: str = "random",
 ) -> dict[str, object]:
-    adapters: dict[str, dict[str, object]] = {}
-    for path in pop.lora_targets:
-        key = path.replace(".", "_")
-        wd = pop.weight_down[key].data[idx]
-        wu = pop.weight_up[key].data[idx]
-        delta = einsum(wu.float(), wd.float(), "o r, i r -> o i")
-        frob = float(delta.norm().item())
-        adapters[key] = {
-            "down": _encode_f16_b64(wd),
-            "up": _encode_f16_b64(wu),
-            "inDim": int(wd.shape[0]),
-            "outDim": int(wu.shape[0]),
-            "norm": round(frob, 4),
-        }
-    out: dict[str, object] = {
-        "id": int(genome_id if genome_id is not None else _alloc_genome_id()),
-        "uuid": normalize_short_uuid(uuid) or alloc_short_uuid(),
-        "kind": "populora",
-        "task": task_id,
-        "parents": [int(p) for p in (parents or [])],
-        "op": op,
-        "baseHash": base_hash,
-        "baseSeed": int(base_seed),
-        "lowRank": int(pop.low_rank),
-        "adapters": adapters,
-    }
-    out["hash"] = populora_genome_hash(out, length=20)
-    return out
+    return _population_to_genome_dicts(
+        pop,
+        task_id=task_id,
+        base_hash=base_hash,
+        base_seed=base_seed,
+        indices=[idx],
+        genome_ids=[genome_id],
+        uuids=[uuid],
+        parents_per_slot=[list(default(parents, []))],
+        ops_per_slot=[op],
+    )[0]
 
 
 @torch.no_grad()
 def _load_genomes_into_population(
     genome_dicts: Sequence[dict],
     policy_spec: dict[str, object],
+    *,
+    cached_pop: Population | None = None,
+    cached_base_hash: str = "",
 ) -> tuple[Population, str, int]:
     if not genome_dicts:
         raise ValueError("Cannot reconstruct empty PopuLoRA population.")
-    first = genome_dicts[0]
-    base_seed = int(first.get("baseSeed", 1))
-    base_hash = str(first.get("baseHash") or "")
-    low_rank = int(first.get("lowRank") or policy_spec.get("lowRank", 8))
-    lora_targets = tuple(policy_spec.get("loraTargets") or ())
 
-    base_model, resolved_hash, _ = get_or_create_base_model(
-        policy_spec, base_seed=base_seed, base_hash=base_hash or None
-    )
-    pop = Population(
-        base_model,
-        pop_size=len(genome_dicts),
-        low_rank=low_rank,
-        lora_targets=lora_targets,
-    )
-    for idx, g in enumerate(genome_dicts):
-        adapters = g.get("adapters") or {}
-        for path in lora_targets:
-            key = path.replace(".", "_")
-            entry = adapters.get(key)
+    first = genome_dicts[0]
+    base_seed = int(first.get("base_seed", 1))
+    base_hash = str(first.get("base_hash") or "")
+    low_rank = int(first.get("low_rank") or policy_spec.get("low_rank", 8))
+    lora_targets = tuple(policy_spec.get("lora_targets") or ())
+    p_cnt = len(genome_dicts)
+
+    if (
+        exists(cached_pop)
+        and cached_pop.pop_size == p_cnt
+        and cached_pop.low_rank == low_rank
+        and tuple(cached_pop.lora_targets) == lora_targets
+        and cached_base_hash
+        and (not base_hash or base_hash == cached_base_hash)
+    ):
+        pop = cached_pop
+        resolved_hash = cached_base_hash
+    else:
+        base_model, resolved_hash, _ = get_or_create_base_model(
+            policy_spec, base_seed=base_seed, base_hash=base_hash or None
+        )
+        pop = Population(base_model, pop_size=p_cnt, low_rank=low_rank, lora_targets=lora_targets)
+
+    for path in lora_targets:
+        key = path.replace(".", "_")
+        wd_all, wu_all = pop.weight_down[key].data, pop.weight_up[key].data
+        in_dim, r_d = int(wd_all.shape[1]), int(wd_all.shape[2])
+        out_dim, _ = int(wu_all.shape[1]), int(wu_all.shape[2])
+        downs, ups = [], []
+
+        for idx, g in enumerate(genome_dicts):
+            adapters = g.get("adapters")
+            entry = adapters.get(key) if isinstance(adapters, dict) else None
             if not isinstance(entry, dict):
                 raise ValueError(f"Missing LoRA adapter '{key}' in genome #{idx}.")
-            wd_target = pop.weight_down[key].data[idx]
-            wu_target = pop.weight_up[key].data[idx]
-            wd_target.copy_(_decode_f16_b64(str(entry["down"]), tuple(wd_target.shape)))
-            wu_target.copy_(_decode_f16_b64(str(entry["up"]), tuple(wu_target.shape)))
+            downs.append(str(entry["down"]))
+            ups.append(str(entry["up"]))
+
+        wd_all.copy_(_decode_f16_batch_b64(downs, (in_dim, r_d)))
+        wu_all.copy_(_decode_f16_batch_b64(ups, (out_dim, r_d)))
+
     return pop, resolved_hash, base_seed
 
 
-def validate_populora_genome_dict(raw: object, policy_spec: dict[str, object] | None = None) -> dict:
+def validate_populora_genome_dict(
+    raw: object,
+    policy_spec: dict[str, object] | None = None,
+    *,
+    default_low_rank: int = 8,
+    max_low_rank: int = 64,
+    max_dim: int = 2048,
+    norm_digits: int = 4,
+    max_base_hash_len: int = 32,
+    hash_length: int = 20,
+) -> dict:
     """Validate an untrusted PopuLoRA genome dictionary."""
     if not isinstance(raw, dict) or raw.get("kind") != "populora":
         raise ValueError("Invalid PopuLoRA genome payload.")
     adapters_raw = raw.get("adapters")
     if not isinstance(adapters_raw, dict) or not adapters_raw:
         raise ValueError("PopuLoRA genome missing adapters.")
-    low_rank = int(raw.get("lowRank", 8))
-    if not (1 <= low_rank <= 64):
+    low_rank = int(raw.get("low_rank", default_low_rank))
+    if not (1 <= low_rank <= max_low_rank):
         raise ValueError("Invalid PopuLoRA lowRank.")
 
     expected_shapes: dict[str, tuple[int, int]] = {}
     if policy_spec is not None:
-        base_model = build_policy_module(policy_spec, base_seed=int(raw.get("baseSeed", 1)))
-        for path in policy_spec.get("loraTargets") or ():
+        base_model = build_policy_module(policy_spec, base_seed=int(raw.get("base_seed", 1)))
+        for path in policy_spec.get("lora_targets") or ():
             lin = base_model.get_submodule(str(path))
             expected_shapes[str(path).replace(".", "_")] = (int(lin.in_features), int(lin.out_features))
         if set(adapters_raw.keys()) != set(expected_shapes.keys()):
@@ -477,19 +671,18 @@ def validate_populora_genome_dict(raw: object, policy_spec: dict[str, object] | 
         if key in expected_shapes:
             in_dim, out_dim = expected_shapes[key]
         else:
-            in_dim = int(val.get("inDim", 0))
-            out_dim = int(val.get("outDim", 0))
-        if in_dim <= 0 or out_dim <= 0 or in_dim > 2048 or out_dim > 2048:
+            in_dim = int(val.get("in_dim", 0))
+            out_dim = int(val.get("out_dim", 0))
+        if in_dim <= 0 or out_dim <= 0 or in_dim > max_dim or out_dim > max_dim:
             raise ValueError(f"Invalid adapter dimensions on '{key}'.")
         wd = _decode_f16_b64(str(val.get("down", "")), (in_dim, low_rank))
         wu = _decode_f16_b64(str(val.get("up", "")), (out_dim, low_rank))
-        delta = einsum(wu.float(), wd.float(), "o r, i r -> o i")
         clean_adapters[str(key)] = {
             "down": _encode_f16_b64(wd),
             "up": _encode_f16_b64(wu),
-            "inDim": in_dim,
-            "outDim": out_dim,
-            "norm": round(float(delta.norm().item()), 4),
+            "in_dim": in_dim,
+            "out_dim": out_dim,
+            "norm": round(float(_lora_frob_norms(wd, wu).item()), norm_digits),
         }
 
     out: dict[str, object] = {
@@ -499,12 +692,12 @@ def validate_populora_genome_dict(raw: object, policy_spec: dict[str, object] | 
         "task": str(raw.get("task") or "microduck"),
         "parents": [int(p) for p in raw.get("parents", []) if isinstance(p, int)],
         "op": str(raw.get("op") or "random"),
-        "baseHash": str(raw.get("baseHash") or "")[:32],
-        "baseSeed": int(raw.get("baseSeed", 1)),
-        "lowRank": low_rank,
+        "base_hash": str(raw.get("base_hash") or "")[:max_base_hash_len],
+        "base_seed": int(raw.get("base_seed", 1)),
+        "low_rank": low_rank,
         "adapters": clean_adapters,
     }
-    out["hash"] = populora_genome_hash(out, length=20)
+    out["hash"] = populora_genome_hash(out, length=hash_length)
     return out
 
 
@@ -516,11 +709,15 @@ def create_populora_population(
     *,
     base_seed: int = 1,
     seed_genomes: Sequence[dict] | None = None,
+    min_pop_size: int = 3,
+    default_low_rank: int = 8,
+    warmstart_std_up: float = 0.04,
+    default_init_std_up: float = 0.35,
 ) -> list[dict[str, object]]:
     """Create a Gen-0 PopuLoRA population (optionally seeded with uploaded strains)."""
-    eff_pop = max(3, int(pop_size))
-    low_rank = int(policy_spec.get("lowRank", 8))
-    lora_targets = tuple(policy_spec.get("loraTargets") or ())
+    eff_pop = max(min_pop_size, int(pop_size))
+    low_rank = int(policy_spec.get("low_rank", default_low_rank))
+    lora_targets = tuple(policy_spec.get("lora_targets") or ())
 
     custom_state = None
     if seed_genomes and len(seed_genomes) == 1 and isinstance(seed_genomes[0].get("_warmstart_state"), dict):
@@ -535,11 +732,13 @@ def create_populora_population(
         low_rank=low_rank,
         lora_targets=lora_targets,
     )
-    if policy_spec.get("oscillatoryInit"):
-        _seed_oscillatory_population_(pop, has_warmstart=custom_state is not None)
+    if policy_spec.get("oscillatory_init"):
+        _seed_oscillatory_population_(pop, has_warmstart=exists(custom_state), warmstart_std_up=warmstart_std_up)
     else:
-        std_up = 0.04 if custom_state is not None else float(policy_spec.get("initStdUp", 0.35))
-        pop.repopulate_(save_champion=False, std_down=None, std_up=std_up)
+        _rescale_init_up_(
+            pop,
+            warmstart_std_up if exists(custom_state) else float(policy_spec.get("init_std_up", default_init_std_up)),
+        )
 
     seeded_slots = 0
     if seed_genomes:
@@ -560,29 +759,39 @@ def create_populora_population(
                 seeded_slots += 1
 
     _quantize_pop_f16_roundtrip_(pop)
-    return [
-        _individual_to_genome_dict(
-            pop,
-            i,
-            task_id=task_id,
-            base_hash=base_hash,
-            base_seed=base_seed,
-            op="seed" if i < seeded_slots else "random",
-        )
-        for i in range(eff_pop)
-    ]
+    ops = ["seed" if i < seeded_slots else "random" for i in range(eff_pop)]
+    return _population_to_genome_dicts(
+        pop,
+        task_id=task_id,
+        base_hash=base_hash,
+        base_seed=base_seed,
+        ops_per_slot=ops,
+    )
 
 
 @dataclass
 class _GoalPopuloraRuntime:
+    pop: Population | None = None
+    pop_base_hash: str = ""
     aurora: Aurora | None = None
     aurora_feat_dim: int = 0
-    eps_schedule: CosineAnnealingSchedule = field(
-        default_factory=lambda: CosineAnnealingSchedule(eps_min=0.005, eps_max=0.015, period=35, decay=0.82)
-    )
+    eps_min: float = 0.005
+    eps_max: float = 0.015
+    eps_period: int = 35
+    eps_decay: float = 0.82
+    eps_schedule: CosineAnnealingSchedule | None = None
     best_fitness: float = float("-inf")
     champ_backup: dict | None = None
     champ_parent_id: int = 0
+
+    def __post_init__(self) -> None:
+        if self.eps_schedule is None:
+            self.eps_schedule = CosineAnnealingSchedule(
+                eps_min=self.eps_min,
+                eps_max=self.eps_max,
+                period=self.eps_period,
+                decay=self.eps_decay,
+            )
 
 
 _RUNTIME_LOCK = threading.Lock()
@@ -594,14 +803,110 @@ def reset_populora_goal_runtime(room: str, goal: str) -> None:
         _GOAL_RUNTIMES.pop((room, goal), None)
 
 
-def _get_goal_runtime(room: str, goal: str) -> _GoalPopuloraRuntime:
+def _get_goal_runtime(
+    room: str,
+    goal: str,
+    *,
+    eps_min: float = 0.005,
+    eps_max: float = 0.015,
+    eps_period: int = 35,
+    eps_decay: float = 0.82,
+) -> _GoalPopuloraRuntime:
     key = (room, goal)
     with _RUNTIME_LOCK:
         rt = _GOAL_RUNTIMES.get(key)
         if rt is None:
-            rt = _GoalPopuloraRuntime()
+            rt = _GoalPopuloraRuntime(
+                eps_min=eps_min,
+                eps_max=eps_max,
+                eps_period=eps_period,
+                eps_decay=eps_decay,
+            )
             _GOAL_RUNTIMES[key] = rt
         return rt
+
+
+# dominated novelty search (tiled for 1k - 10k+)
+
+
+@torch.no_grad()
+def _sketch_population_trajectories(
+    traj_tensors: list[Tensor],
+    *,
+    num_subsamples: int = 8,
+    max_horizon: int = 400,
+    device: torch.device | str | None = None,
+) -> Tensor:
+    # fast batched trajectory sketching when trajectories share a uniform (T, D) shape
+    shapes = {tuple(t.shape) for t in traj_tensors}
+    if len(shapes) == 1:
+        t_len, _ = next(iter(shapes))
+        if t_len >= 1:
+            stacked = torch.stack(traj_tensors).float()
+            idx = torch.linspace(0, max(t_len - 1, 0), steps=num_subsamples).round().long()
+            sub = rearrange(stacked[:, idx], "p s d -> p (s d)")
+            mean_s = stacked.mean(dim=1)
+            std_s = stacked.std(dim=1, unbiased=False) if t_len > 1 else torch.zeros_like(mean_s)
+            len_col = torch.full((stacked.shape[0], 1), t_len / max(float(max_horizon), 1.0))
+            out = torch.cat((sub, mean_s, std_s, len_col), dim=-1)
+            return out.to(device) if exists(device) else out
+
+    return sketch_trajectories(traj_tensors, num_subsamples=num_subsamples, max_horizon=max_horizon, device=device)
+
+
+@torch.no_grad()
+def _tiled_quality_dominated_novelty(
+    fitnesses: Tensor,
+    descriptors: Tensor,
+    *,
+    k: int = 5,
+    weight: float = 0.65,
+    quantile: float = 0.30,
+    sharpness: float = 2.0,
+    chunk_size: int = 512,
+    exact_threshold: int = 1024,
+    non_dominated_tiebreak: float = 0.01,
+    eps: float = 1e-6,
+) -> Tensor:
+    p = int(fitnesses.shape[0])
+    if p <= exact_threshold:
+        return quality_dominated_novelty(
+            fitnesses,
+            descriptors,
+            k=min(k, max(1, p - 1)),
+            weight=weight,
+            quantile=quantile,
+            sharpness=sharpness,
+        )
+
+    device = fitnesses.device
+    desc = z_score(rearrange(descriptors.float(), "n ... -> n (...)").to(device), dim=0)
+    f = fitnesses.float().to(device)
+    eff_k = min(k, p - 1)
+
+    dns = torch.zeros(p, dtype=torch.float32, device=device)
+    dominated = torch.zeros(p, dtype=torch.bool, device=device)
+    rank_idx = rearrange(torch.arange(eff_k, device=device), "k -> 1 k")
+
+    for start in range(0, p, chunk_size):
+        end = min(p, start + chunk_size)
+        d_chunk = torch.cdist(desc[start:end], desc, p=2.0)
+        fitter = rearrange(f, "j -> 1 j") > rearrange(f[start:end], "i -> i 1")
+        num_fitter = fitter.sum(dim=-1)
+        dominated[start:end] = num_fitter > 0
+        nearest = d_chunk.masked_fill(~fitter, float("inf")).topk(k=eff_k, dim=-1, largest=False).values
+        valid = rank_idx < rearrange(num_fitter, "i -> i 1")
+        dns[start:end] = torch.where(valid, nearest, 0.0).sum(dim=-1) / num_fitter.clamp(min=1, max=eff_k).float()
+
+    if dominated.any():
+        dom_vals = dns[dominated]
+        max_dom, span = dom_vals.max(), (dom_vals.max() - dom_vals.min()).clamp(min=1.0)
+    else:
+        max_dom = span = torch.tensor(1.0, device=device)
+
+    f_norm = (f - f.min()) / f.std(unbiased=False).clamp(min=eps)
+    nov = torch.where(dominated, dns, max_dom + span + 1.0 + non_dominated_tiebreak * f_norm)
+    return quality_gated_fitness(f, nov, weight=weight, quantile=quantile, sharpness=sharpness)
 
 
 @torch.no_grad()
@@ -620,11 +925,54 @@ def evolve_populora_population(
     pop_size: int = 8,
     elite_frac: float = 0.25,
     max_horizon: int = 400,
+    min_pop_size: int = 3,
+    max_elite_frac: float = 0.50,
+    hash_length: int = 20,
+    default_traj_dim: int = 20,
+    default_traj_steps: int = 4,
+    unsimulated_penalty: float = 25.0,
+    min_vote_weight: float = 25.0,
+    vote_std_scale: float = 0.75,
+    fallback_vote_scale: float = 50.0,
+    fallback_up_scale: float = 5.0,
+    aurora_latent_bounds: tuple[int, int] = (4, 8),
+    aurora_hidden_dim: int = 64,
+    aurora_buf_bounds: tuple[int, int] = (512, 4096),
+    aurora_batch_small: int = 64,
+    aurora_batch_large: int = 128,
+    aurora_update_steps: int = 4,
+    large_pop_threshold: int = 64,
+    exact_dns_threshold: int = 1024,
+    min_dns_pop: int = 4,
+    dns_k_small: int = 5,
+    dns_k_large: int = 8,
+    dns_weight: float = 0.65,
+    dns_quantile: float = 0.30,
+    dns_sharpness: float = 2.0,
+    dns_chunk_size: int = 512,
+    ref_mut_sigma: float = 0.30,
+    sigma_mult_bounds: tuple[float, float] = (0.25, 3.0),
+    survive_frac: float = 0.70,
+    small_pop_survive_frac: float = 0.50,
+    small_pop_cutoff: int = 5,
+    tournament_size_small: int = 4,
+    tournament_size_large: int = 6,
+    niche_k_small: int = 8,
+    niche_k_large: int = 12,
+    eta_min: float = 0.20,
+    eta_max: float = 1.25,
+    weight_decay: float = 1e-4,
+    consolidate_alpha: float = 0.0,
+    swarm_bottom_dns: float = 0.60,
+    swarm_beta0: float = 0.50,
+    swarm_gamma: float = 1.0,
+    swarm_alpha: float = 0.035,
+    max_swarm_elites: int = 32,
 ) -> tuple[list[dict[str, object]], int]:
     """Evolve a PopuLoRA population using crowdsourced WASM fitnesses, AURORA DNS, Firefly PSO, & votes."""
     genomes = list(genome_dicts)
     cur_n = len(genomes)
-    target_pop = max(3, int(pop_size))
+    target_pop = max(min_pop_size, int(pop_size))
     if cur_n != target_pop:
         genomes = resize_populora_population(
             genomes,
@@ -633,27 +981,32 @@ def evolve_populora_population(
             task_id=task_id,
             scores=scores,
             up_counts=up_counts,
+            min_pop_size=min_pop_size,
         )
         scores = (list(scores) + [0] * target_pop)[:target_pop]
         up_counts = (list(up_counts) + [0] * target_pop)[:target_pop]
         cur_n = target_pop
 
-    pop, base_hash, base_seed = _load_genomes_into_population(genomes, policy_spec)
-    pop.generation = int(generation)
     rt = _get_goal_runtime(room, goal)
+    pop, base_hash, base_seed = _load_genomes_into_population(
+        genomes, policy_spec, cached_pop=rt.pop, cached_base_hash=rt.pop_base_hash
+    )
+    rt.pop = pop
+    rt.pop_base_hash = base_hash
+    pop.generation = int(generation)
 
     eval_map = eval_by_hash or {}
     sim_fits = torch.zeros(cur_n, dtype=torch.float32)
     has_sim = torch.zeros(cur_n, dtype=torch.bool)
     traj_tensors: list[Tensor] = []
-    inferred_feat_dim = 20
+    inferred_feat_dim = default_traj_dim
 
     for i, g in enumerate(genomes):
-        gh = str(g.get("hash") or populora_genome_hash(g, length=20))
+        gh = str(g.get("hash") or populora_genome_hash(g, length=hash_length))
         rec = eval_map.get(gh)
         if isinstance(rec, dict):
             summ = rec.get("summary") or {}
-            ret_val = summ.get("return", summ.get("primaryValue", 0.0))
+            ret_val = summ.get("return", summ.get("primary_value", 0.0))
             try:
                 fval = float(ret_val)
             except (TypeError, ValueError):
@@ -661,7 +1014,7 @@ def evolve_populora_population(
             if math.isfinite(fval):
                 sim_fits[i] = fval
                 has_sim[i] = True
-            raw_traj = rec.get("trajSample")
+            raw_traj = rec.get("traj_sample")
             if isinstance(raw_traj, list) and raw_traj and isinstance(raw_traj[0], list):
                 arr = np.asarray(raw_traj, dtype=np.float32)
                 if arr.ndim == 2 and arr.shape[0] >= 1 and arr.shape[1] >= 2 and np.isfinite(arr).all():
@@ -671,9 +1024,13 @@ def evolve_populora_population(
         traj_tensors.append(torch.empty((0, 0), dtype=torch.float32))
 
     # Normalize empty fallback trajectories to uniform feature dimension
+    default_t_len = next(
+        (t.shape[0] for t in traj_tensors if t.ndim == 2 and t.shape[1] == inferred_feat_dim and t.shape[0] > 0),
+        default_traj_steps,
+    )
     traj_tensors = [
         t if (t.ndim == 2 and t.shape[1] == inferred_feat_dim and t.shape[0] > 0)
-        else torch.zeros((4, inferred_feat_dim), dtype=torch.float32)
+        else torch.zeros((default_t_len, inferred_feat_dim), dtype=torch.float32)
         for t in traj_tensors
     ]
 
@@ -683,36 +1040,47 @@ def evolve_populora_population(
 
     if has_sim.any():
         if not has_sim.all():
-            floor_val = float(sim_fits[has_sim].min().item()) - 25.0
+            floor_val = float(sim_fits[has_sim].min().item()) - unsimulated_penalty
             sim_fits[~has_sim] = floor_val
         fits = sim_fits.clone()
         if has_votes:
             sim_std = float(sim_fits.std().item()) if cur_n > 1 else 0.0
-            vote_weight = max(25.0, 0.75 * sim_std)
+            vote_weight = max(min_vote_weight, vote_std_scale * sim_std)
             fits = fits + vote_weight * vote_t
     else:
-        fits = vote_t * 50.0 + torch.tensor([float(u) * 5.0 for u in up_counts[:cur_n]], dtype=torch.float32)
+        fits = (
+            vote_t * fallback_vote_scale
+            + torch.tensor([float(u) * fallback_up_scale for u in up_counts[:cur_n]], dtype=torch.float32)
+        )
+
+    large_pop_mode = cur_n > large_pop_threshold
 
     # Behavioral descriptors via PopuLoRA AURORA (with sketch_trajectories fallback)
-    has_real_trajs = bool(has_sim.any())
-    if has_real_trajs:
+    if bool(has_sim.any()):
+        sketches = _sketch_population_trajectories(traj_tensors, max_horizon=max_horizon, device=pop.device)
         try:
-            if rt.aurora is None or rt.aurora_feat_dim != inferred_feat_dim:
+            if not exists(rt.aurora) or rt.aurora_feat_dim != inferred_feat_dim:
+                lat_lo, lat_hi = aurora_latent_bounds
+                buf_lo, buf_hi = aurora_buf_bounds
                 rt.aurora = Aurora(
-                    latent_dim=min(8, max(4, cur_n)),
-                    hidden_dim=64,
-                    batch_size=min(64, cur_n),
-                    update_steps=4,
+                    latent_dim=min(lat_hi, max(lat_lo, cur_n)),
+                    hidden_dim=aurora_hidden_dim,
+                    buffer_capacity=max(buf_lo, min(buf_hi, cur_n)),
+                    batch_size=min(aurora_batch_large if large_pop_mode else aurora_batch_small, cur_n),
+                    update_steps=aurora_update_steps,
                     max_horizon=max_horizon,
                 )
                 rt.aurora_feat_dim = inferred_feat_dim
             with preserve_rng():
-                rt.aurora.fit(traj_tensors)
-                descriptors = rt.aurora.encode(traj_tensors).to(pop.device)
+                rt.aurora.fit(sketches)
+                descriptors = rt.aurora.encode(sketches).to(pop.device)
         except Exception:
-            descriptors = sketch_trajectories(traj_tensors, max_horizon=max_horizon, device=pop.device)
+            descriptors = sketches
     else:
         descriptors = None
+
+    if large_pop_mode:
+        _canonicalize_lora_gauge_(pop)
 
     # Update champion backup before evolving so best-ever individual is never lost
     best_idx = int(fits.argmax().item())
@@ -725,60 +1093,80 @@ def evolve_populora_population(
     old_ids = [int(g["id"]) for g in genomes]
     ranked_old = [old_ids[i] for i in fits.argsort(descending=True).tolist()]
 
-    use_dns = descriptors is not None and cur_n >= 4
+    use_dns = descriptors is not None and cur_n >= min_dns_pop
     comp_fits = (
-        quality_dominated_novelty(
+        _tiled_quality_dominated_novelty(
             fits,
             descriptors,
-            k=min(5, cur_n - 1),
-            weight=0.65,
-            quantile=0.30,
-            sharpness=2.0,
+            k=min(dns_k_large if large_pop_mode else dns_k_small, cur_n - 1),
+            weight=dns_weight,
+            quantile=dns_quantile,
+            sharpness=dns_sharpness,
+            chunk_size=dns_chunk_size,
+            exact_threshold=exact_dns_threshold,
         )
         if use_dns
         else None
     )
 
-    clamped_elite = max(0.0, min(0.5, float(elite_frac)))
+    clamped_elite = max(0.0, min(max_elite_frac, float(elite_frac)))
     n_elites = max(1, min(cur_n - 1, round(cur_n * clamped_elite))) if clamped_elite > 0 else 1
-    # Scale PopuLoRA epsilon schedule gently by room mutationSigma knob (default 0.30 -> 1.0x)
-    sigma_mult = max(0.25, min(3.0, float(mut_sigma) / 0.30))
+    assert rt.eps_schedule is not None
+    mult_lo, mult_hi = sigma_mult_bounds
+    sigma_mult = max(mult_lo, min(mult_hi, float(mut_sigma) / max(ref_mut_sigma, 1e-6)))
     eff_eps = float(rt.eps_schedule(generation)) * sigma_mult
+    swarm_bottom = swarm_bottom_dns if use_dns else 1.0
+    swarm_cfg = dict(
+        beta0=swarm_beta0,
+        gamma=swarm_gamma,
+        alpha=swarm_alpha * sigma_mult,
+        align_lora_sign=True,
+        align_lora_procrustes=not large_pop_mode,
+        preserve_norm=True,
+        normalize_weights=True,
+        preserve_distance_decay=True,
+        fitness_weighted=True,
+        scale_invariant_distance=True,
+    )
 
     sel = pop.evolve_(
         fits,
         competition_fitnesses=comp_fits,
-        descriptors=descriptors if use_dns else None,
+        descriptors=descriptors if (use_dns and cur_n <= exact_dns_threshold) else None,
         raw_elites=n_elites if use_dns else None,
-        survive_frac=0.70 if cur_n >= 5 else 0.50,
+        survive_frac=survive_frac if cur_n >= small_pop_cutoff else small_pop_survive_frac,
         elite_frac=clamped_elite if clamped_elite > 0 else (1.0 / cur_n),
         num_elites=n_elites,
         selection_type="deterministic",
-        parent_selection_type="assortative" if use_dns else "tournament",
-        tournament_size=min(4, max(2, cur_n // 2)),
-        niche_k=min(8, max(1, cur_n - 1)),
+        parent_selection_type="assortative" if (use_dns and cur_n <= exact_dns_threshold) else "tournament",
+        tournament_size=min(tournament_size_large if large_pop_mode else tournament_size_small, max(2, cur_n // 2)),
+        niche_k=min(niche_k_large if large_pop_mode else niche_k_small, max(1, cur_n - 1)),
         crossover_type="extrapolative",
-        eta_min=0.20,
-        eta_max=1.25,
+        eta_min=eta_min,
+        eta_max=eta_max,
         mutation_type="full_gaussian",
         epsilon=eff_eps,
-        weight_decay=1e-4,
-        consolidate_alpha=0.0,
-        swarm_type="firefly" if cur_n >= 4 else None,
-        swarm_bottom_frac=0.60 if use_dns else 1.0,
-        swarm_kwargs=dict(
-            beta0=0.50,
-            gamma=1.0,
-            alpha=0.035 * sigma_mult,
-            align_lora_sign=True,
-            align_lora_procrustes=True,
-            preserve_norm=True,
-            normalize_weights=True,
-            preserve_distance_decay=True,
-            fitness_weighted=True,
-            scale_invariant_distance=True,
-        ),
+        weight_decay=weight_decay,
+        consolidate_alpha=consolidate_alpha,
+        swarm_type=None if large_pop_mode else ("firefly" if cur_n >= min_dns_pop else None),
+        swarm_bottom_frac=swarm_bottom,
+        swarm_kwargs=swarm_cfg,
     )
+
+    if large_pop_mode and cur_n >= min_dns_pop and len(sel.survivors) > len(sel.elites):
+        non_elite_surv = sel.survivors[~torch.isin(sel.survivors, sel.elites)]
+        if len(non_elite_surv) > 0:
+            order = fits[non_elite_surv].argsort(descending=False)
+            n_follow = max(1, int(round(len(non_elite_surv) * swarm_bottom)))
+            followers = non_elite_surv[order[:n_follow]]
+            swarm_elites = sel.elites[: min(max_swarm_elites, len(sel.elites))] if len(sel.elites) > 0 else sel.survivors[:1]
+            pop.swarm_(
+                "firefly",
+                fits,
+                individuals=followers,
+                elites=swarm_elites,
+                **swarm_cfg,
+            )
 
     elite_set = set(sel.elites.tolist())
     culled_set = set(sel.culled.tolist())
@@ -805,28 +1193,32 @@ def evolve_populora_population(
 
     _quantize_pop_f16_roundtrip_(pop)
 
-    next_genomes: list[dict[str, object]] = []
+    parents_per_slot: list[list[int]] = []
+    ops_per_slot: list[str] = []
     for slot in range(cur_n):
         if champ_restored_slot0 and slot == 0:
-            parents, op = [rt.champ_parent_id], "elite"
+            parents_per_slot.append([rt.champ_parent_id])
+            ops_per_slot.append("elite")
         elif slot in elite_set:
-            parents, op = [old_ids[slot]], "elite"
+            parents_per_slot.append([old_ids[slot]])
+            ops_per_slot.append("elite")
         elif slot in culled_set:
-            parents, op = list(breed_parents), "crossover"
+            parents_per_slot.append(list(breed_parents))
+            ops_per_slot.append("crossover")
         else:
-            parents = [old_ids[slot]] if old_ids[slot] == top_elite_id else [old_ids[slot], top_elite_id]
-            op = "mutation"
-        next_genomes.append(
-            _individual_to_genome_dict(
-                pop,
-                slot,
-                task_id=task_id,
-                base_hash=base_hash,
-                base_seed=base_seed,
-                parents=parents,
-                op=op,
+            parents_per_slot.append(
+                [old_ids[slot]] if old_ids[slot] == top_elite_id else [old_ids[slot], top_elite_id]
             )
-        )
+            ops_per_slot.append("mutation")
+
+    next_genomes = _population_to_genome_dicts(
+        pop,
+        task_id=task_id,
+        base_hash=base_hash,
+        base_seed=base_seed,
+        parents_per_slot=parents_per_slot,
+        ops_per_slot=ops_per_slot,
+    )
 
     top_score = int(round(best_fit)) if has_sim.any() else (max(scores) if scores else 0)
     return next_genomes, top_score
@@ -841,20 +1233,22 @@ def resize_populora_population(
     task_id: str,
     scores: list[int] | None = None,
     up_counts: list[int] | None = None,
+    min_pop_size: int = 3,
 ) -> list[dict[str, object]]:
     existing = list(genome_dicts)
-    target = max(3, int(target_size))
+    target = max(min_pop_size, int(target_size))
     if target <= len(existing):
         return existing[:target]
     if not existing:
-        return create_populora_population(task_id, policy_spec, pop_size=target)
+        return create_populora_population(task_id, policy_spec, pop_size=target, min_pop_size=min_pop_size)
 
     extra_needed = target - len(existing)
     fresh = create_populora_population(
         task_id,
         policy_spec,
-        pop_size=max(3, extra_needed),
-        base_seed=int(existing[0].get("baseSeed", 1)),
+        pop_size=max(min_pop_size, extra_needed),
+        base_seed=int(existing[0].get("base_seed", 1)),
+        min_pop_size=min_pop_size,
     )
     return existing + fresh[:extra_needed]
 
@@ -902,8 +1296,8 @@ def load_populora_checkpoint_bytes(
 
     base_model, base_hash, _ = get_or_create_base_model(policy_spec, base_seed=1)
     expected = base_model.state_dict()
-    lora_targets = tuple(policy_spec.get("loraTargets") or ())
-    low_rank = int(policy_spec.get("lowRank", 8))
+    lora_targets = tuple(policy_spec.get("lora_targets") or ())
+    low_rank = int(policy_spec.get("low_rank", 8))
 
     for path in lora_targets:
         w_key = f"{path}.weight"

@@ -207,7 +207,7 @@
       layers.push({ dIn, dOut, w, b });
     }
 
-    const result = { dims: safeDims, layerCoords: layerXs, layers };
+    const result = { dims: safeDims, layer_coords: layerXs, layers };
     if (decodedCache.size > 400) decodedCache.clear();
     decodedCache.set(cacheKey, result);
     return result;

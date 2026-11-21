@@ -146,7 +146,7 @@ def render_task_media(
         "seed": seed,
     }
     if "mean_abs_x" in rollout:
-        out["meanAbsX"] = round(float(rollout["mean_abs_x"]), 3)
+        out["mean_abs_x"] = round(float(rollout["mean_abs_x"]), 3)
     if "distance" in rollout:
         out["distance"] = round(float(rollout["distance"]), 2)
     return out

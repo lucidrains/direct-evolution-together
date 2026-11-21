@@ -228,20 +228,20 @@ class CartPoleAdapter:
         return {
             "task": self.task_id,
             "seeds": list(eval_seeds),
-            "stepsPerSeed": step_list,
-            "meanSteps": mean_rounded,
-            "minSteps": int(min_steps),
-            "meanAbsX": round(mean_abs_x, 3),
+            "steps_per_seed": step_list,
+            "mean_steps": mean_rounded,
+            "min_steps": int(min_steps),
+            "mean_abs_x": round(mean_abs_x, 3),
             "solved": solved,
-            "primaryValue": mean_rounded,
-            "primaryDisplay": f"{val_txt}/{CARTPOLE_MAX_STEPS}",
-            "badgeText": f"{val_txt}/{CARTPOLE_MAX_STEPS}",
+            "primary_value": mean_rounded,
+            "primary_display": f"{val_txt}/{CARTPOLE_MAX_STEPS}",
+            "badge_text": f"{val_txt}/{CARTPOLE_MAX_STEPS}",
             "tier": "solved" if solved else ("mid" if mean_steps >= 150 else ""),
-            "secondaryText": f"min {min_steps}/{CARTPOLE_MAX_STEPS}, |x|={mean_abs_x:.2f}m",
+            "secondary_text": f"min {min_steps}/{CARTPOLE_MAX_STEPS}, |x|={mean_abs_x:.2f}m",
         }
 
     def is_gen0_presolved(self, summary: dict[str, object]) -> bool:
-        return float(summary.get("meanSteps", 0.0)) >= CARTPOLE_PRESOLVED_STEPS
+        return float(summary.get("mean_steps", 0.0)) >= CARTPOLE_PRESOLVED_STEPS
 
     def render_frame(
         self,

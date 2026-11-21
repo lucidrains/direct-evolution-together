@@ -1,18 +1,18 @@
 {
-  "sceneId": "so101",
-  "entryXml": "scene_pick.xml",
-  "physicsAsset": "scenes/so101/physics.bin",
-  "physicsSha256": "0bf432e87bd1e8131acd21ff901e426ae15922bf7580407cdde2c5eb736d6233",
-  "physicsBytes": 6413,
-  "visualAsset": "scenes/so101/visual.bin",
-  "visualSha256": "22805c78f99ba5a1d3ac4136aae4fb74b1a3ee87322d572a1b8e12b6ce4d9f54",
-  "visualBytes": 238844,
+  "scene_id": "so101",
+  "entry_xml": "scene_pick.xml",
+  "physics_asset": "scenes/so101/physics.bin",
+  "physics_sha256": "0bf432e87bd1e8131acd21ff901e426ae15922bf7580407cdde2c5eb736d6233",
+  "physics_bytes": 6413,
+  "visual_asset": "scenes/so101/visual.bin",
+  "visual_sha256": "22805c78f99ba5a1d3ac4136aae4fb74b1a3ee87322d572a1b8e12b6ce4d9f54",
+  "visual_bytes": 238844,
   "nbody": 9,
   "nq": 13,
   "nv": 12,
   "nu": 6,
-  "collisionMeshes": [],
-  "bodyNames": [
+  "collision_meshes": [],
+  "body_names": [
     "world",
     "base",
     "shoulder",
@@ -23,19 +23,19 @@
     "moving_jaw_so101_v1",
     "cube"
   ],
-  "visualStats": {
-    "bodyMeshCount": 8,
-    "totalVerts": 7232,
-    "totalTris": 16886
+  "visual_stats": {
+    "body_mesh_count": 8,
+    "total_verts": 7232,
+    "total_tris": 16886
   },
-  "cameraDefaults": {
-    "trackBodyId": 1,
-    "targetHeight": 0.1,
+  "camera_defaults": {
+    "track_body_id": 1,
+    "target_height": 0.1,
     "distance": 0.72,
     "yaw": 0.62,
     "pitch": 0.34,
-    "gridScale": 0.25,
-    "targetOffset": [
+    "grid_scale": 0.25,
+    "target_offset": [
       0.115,
       0.0
     ]

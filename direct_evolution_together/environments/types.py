@@ -127,8 +127,8 @@ class TaskSpec:
     crowd_shard_size: int = 4
     hyperparam_specs: tuple[dict[str, object], ...] = ()
     variants: dict[str, dict[str, object]] | None = None
-    public_env_keys: tuple[str, ...] = ("sceneId", "shortLabel", "gripperKind", "urdfAsset", "stlAssets")
-    primary_metric: str = "meanSteps"
+    public_env_keys: tuple[str, ...] = ("scene_id", "short_label", "gripper_kind", "urdf_asset", "stl_assets")
+    primary_metric: str = "mean_steps"
     sort_label: str = "Steps"
     solved_label: str = "Solved"
     telemetry_fields: tuple[dict[str, str], ...] = ()
@@ -182,17 +182,17 @@ class TaskSpec:
     def to_nim_dict(self) -> dict[str, object]:
         return {
             "task": self.task_id,
-            "isControl": self.kind == "control",
-            "genomeKind": self.genome_kind,
-            "simPhaseEnabled": self.sim_phase_enabled,
-            "defaultAutoEvolve": self.default_auto_evolve,
-            "minPopSize": int(self.min_pop_size),
-            "defaultPopSize": self.default_pop_size,
-            "maxPopSize": self.max_pop_size,
-            "defaultMinVotes": self.default_min_votes,
-            "defaultEliteFrac": self.default_elite_frac,
-            "crowdShardThreshold": int(self.crowd_shard_threshold),
-            "crowdShardSize": int(self.crowd_shard_size),
+            "is_control": self.kind == "control",
+            "genome_kind": self.genome_kind,
+            "sim_phase_enabled": self.sim_phase_enabled,
+            "default_auto_evolve": self.default_auto_evolve,
+            "min_pop_size": int(self.min_pop_size),
+            "default_pop_size": self.default_pop_size,
+            "max_pop_size": self.max_pop_size,
+            "default_min_votes": self.default_min_votes,
+            "default_elite_frac": self.default_elite_frac,
+            "crowd_shard_threshold": int(self.crowd_shard_threshold),
+            "crowd_shard_size": int(self.crowd_shard_size),
         }
 
     def to_lean_client_dict(self) -> dict[str, object]:
@@ -202,31 +202,31 @@ class TaskSpec:
             if not m:
                 return None
             return {
-                "sceneId": m.get("sceneId"),
-                "physicsAsset": m.get("physicsAsset"),
-                "physicsSha256": str(m.get("physicsSha256") or "")[:12],
-                "visualAsset": m.get("visualAsset"),
-                "visualSha256": str(m.get("visualSha256") or "")[:12],
+                "scene_id": m.get("scene_id"),
+                "physics_asset": m.get("physics_asset"),
+                "physics_sha256": str(m.get("physics_sha256") or "")[:12],
+                "visual_asset": m.get("visual_asset"),
+                "visual_sha256": str(m.get("visual_sha256") or "")[:12],
                 "nbody": m.get("nbody"),
-                "cameraDefaults": m.get("cameraDefaults"),
+                "camera_defaults": m.get("camera_defaults"),
             }
 
         resolved_params = self.resolve_env_params()
-        eff_scene_id = str(resolved_params.get("sceneId") or self.scene_id or "") or None
+        eff_scene_id = str(resolved_params.get("scene_id") or self.scene_id or "") or None
         lean_env_params: dict[str, object] | None = None
         if resolved_params:
-            keep_keys = {"sceneId", "shortLabel", "gripperKind", *(str(h.get("key") or "") for h in self.hyperparam_specs)}
+            keep_keys = {"scene_id", "short_label", "gripper_kind", *(str(h.get("key") or "") for h in self.hyperparam_specs)}
             filtered = {k: v for k, v in resolved_params.items() if k in keep_keys and v is not None}
             lean_env_params = filtered or None
         lean_variants: dict[str, dict[str, object]] | None = None
         if self.variants:
             lean_variants = {}
             for vk, vv in self.variants.items():
-                v_scene = str(vv.get("sceneId") or self.scene_id or "") or None
+                v_scene = str(vv.get("scene_id") or self.scene_id or "") or None
                 v_entry: dict[str, object] = {}
                 if v_scene and v_scene != eff_scene_id:
-                    v_entry["sceneManifest"] = _lean_manifest(v_scene)
-                for k in ("sceneId", "shortLabel", "gripperKind"):
+                    v_entry["scene_manifest"] = _lean_manifest(v_scene)
+                for k in ("scene_id", "short_label", "gripper_kind"):
                     if k in vv and vv[k] is not None:
                         v_entry[k] = vv[k]
                 lean_variants[vk] = v_entry
@@ -246,113 +246,113 @@ class TaskSpec:
         out: dict[str, object] = {
             "task": self.task_id,
             "kind": self.kind,
-            "genomeKind": self.genome_kind,
-            "lobbyOrder": self.lobby_order,
+            "genome_kind": self.genome_kind,
+            "lobby_order": self.lobby_order,
             "label": self.label,
-            "minPopSize": int(self.min_pop_size),
-            "defaultPopSize": self.default_pop_size,
-            "maxPopSize": self.max_pop_size,
-            "defaultMinVotes": self.default_min_votes,
-            "defaultEliteFrac": self.default_elite_frac,
-            "crowdShardThreshold": int(self.crowd_shard_threshold),
-            "crowdShardSize": int(self.crowd_shard_size),
-            "clientSim": self.client_sim,
+            "min_pop_size": int(self.min_pop_size),
+            "default_pop_size": self.default_pop_size,
+            "max_pop_size": self.max_pop_size,
+            "default_min_votes": self.default_min_votes,
+            "default_elite_frac": self.default_elite_frac,
+            "crowd_shard_threshold": int(self.crowd_shard_threshold),
+            "crowd_shard_size": int(self.crowd_shard_size),
+            "client_sim": self.client_sim,
             "enabled": self.enabled,
-            "executionPolicy": self.execution_policy,
-            "crowdContribute": self.crowd_contribute,
-            "simPhaseEnabled": self.sim_phase_enabled,
-            "defaultAutoEvolve": self.default_auto_evolve,
-            "allowServerVideo": self.allow_server_video,
-            "simModes": list(self.sim_modes),
-            "defaultSimMode": self.default_sim_mode,
-            "supportsVideo": self.supports_video,
-            "obsDim": self.obs_dim,
-            "hiddenDims": list(self.hidden_dims),
-            "actionDim": self.action_dim,
+            "execution_policy": self.execution_policy,
+            "crowd_contribute": self.crowd_contribute,
+            "sim_phase_enabled": self.sim_phase_enabled,
+            "default_auto_evolve": self.default_auto_evolve,
+            "allow_server_video": self.allow_server_video,
+            "sim_modes": list(self.sim_modes),
+            "default_sim_mode": self.default_sim_mode,
+            "supports_video": self.supports_video,
+            "obs_dim": self.obs_dim,
+            "hidden_dims": list(self.hidden_dims),
+            "action_dim": self.action_dim,
             "continuous": self.continuous,
-            "maxSteps": self.max_steps,
+            "max_steps": self.max_steps,
             "dt": self.dt,
-            "evalSeeds": list(self.eval_seeds),
-            "phaseFreq": self.phase_freq,
-            "phaseHarmonics": self.phase_harmonics,
-            "primaryMetric": self.primary_metric,
-            "sortLabel": self.sort_label,
-            "solvedLabel": self.solved_label,
-            "isLean": True,
+            "eval_seeds": list(self.eval_seeds),
+            "phase_freq": self.phase_freq,
+            "phase_harmonics": self.phase_harmonics,
+            "primary_metric": self.primary_metric,
+            "sort_label": self.sort_label,
+            "solved_label": self.solved_label,
+            "is_lean": True,
         }
         if self.mjcf_asset:
-            out["mjcfAsset"] = self.mjcf_asset
+            out["mjcf_asset"] = self.mjcf_asset
         if eff_scene_id:
-            out["sceneId"] = eff_scene_id
-            out["sceneManifest"] = _lean_manifest(eff_scene_id)
+            out["scene_id"] = eff_scene_id
+            out["scene_manifest"] = _lean_manifest(eff_scene_id)
         if lean_env_params:
-            out["envParams"] = lean_env_params
+            out["env_params"] = lean_env_params
         if lean_hspecs:
-            out["hyperparamSpecs"] = lean_hspecs
+            out["hyperparam_specs"] = lean_hspecs
         if lean_variants:
             out["variants"] = lean_variants
         return out
 
     def to_client_dict(self) -> dict[str, object]:
         resolved_params = self.resolve_env_params()
-        eff_scene_id = str(resolved_params.get("sceneId") or self.scene_id or "") or None
+        eff_scene_id = str(resolved_params.get("scene_id") or self.scene_id or "") or None
         variants_payload: dict[str, dict[str, object]] | None = None
         if self.variants:
             variants_payload = {}
             for vk, vv in self.variants.items():
-                v_scene = str(vv.get("sceneId") or self.scene_id or "") or None
+                v_scene = str(vv.get("scene_id") or self.scene_id or "") or None
                 variants_payload[vk] = {
                     **dict(vv),
-                    "sceneManifest": get_scene_manifest(v_scene),
+                    "scene_manifest": get_scene_manifest(v_scene),
                 }
         return {
             "task": self.task_id,
             "kind": self.kind,
-            "genomeKind": self.genome_kind,
-            "lobbyOrder": self.lobby_order,
+            "genome_kind": self.genome_kind,
+            "lobby_order": self.lobby_order,
             "label": self.label,
             "description": self.description,
-            "minPopSize": int(self.min_pop_size),
-            "defaultPopSize": self.default_pop_size,
-            "maxPopSize": self.max_pop_size,
-            "defaultMinVotes": self.default_min_votes,
-            "defaultEliteFrac": self.default_elite_frac,
-            "crowdShardThreshold": int(self.crowd_shard_threshold),
-            "crowdShardSize": int(self.crowd_shard_size),
-            "clientSim": self.client_sim,
+            "min_pop_size": int(self.min_pop_size),
+            "default_pop_size": self.default_pop_size,
+            "max_pop_size": self.max_pop_size,
+            "default_min_votes": self.default_min_votes,
+            "default_elite_frac": self.default_elite_frac,
+            "crowd_shard_threshold": int(self.crowd_shard_threshold),
+            "crowd_shard_size": int(self.crowd_shard_size),
+            "client_sim": self.client_sim,
             "enabled": self.enabled,
-            "executionPolicy": self.execution_policy,
-            "crowdContribute": self.crowd_contribute,
-            "simPhaseEnabled": self.sim_phase_enabled,
-            "defaultAutoEvolve": self.default_auto_evolve,
-            "allowServerVideo": self.allow_server_video,
-            "simModes": list(self.sim_modes),
-            "defaultSimMode": self.default_sim_mode,
-            "supportsVideo": self.supports_video,
-            "obsDim": self.obs_dim,
-            "hiddenDims": list(self.hidden_dims),
-            "actionDim": self.action_dim,
+            "execution_policy": self.execution_policy,
+            "crowd_contribute": self.crowd_contribute,
+            "sim_phase_enabled": self.sim_phase_enabled,
+            "default_auto_evolve": self.default_auto_evolve,
+            "allow_server_video": self.allow_server_video,
+            "sim_modes": list(self.sim_modes),
+            "default_sim_mode": self.default_sim_mode,
+            "supports_video": self.supports_video,
+            "obs_dim": self.obs_dim,
+            "hidden_dims": list(self.hidden_dims),
+            "action_dim": self.action_dim,
             "continuous": self.continuous,
-            "maxSteps": self.max_steps,
+            "max_steps": self.max_steps,
             "dt": self.dt,
-            "evalSeeds": list(self.eval_seeds),
-            "heldoutSeeds": list(self.heldout_seeds),
-            "layerCoords": self.resolved_layer_coords(),
-            "phaseFreq": self.phase_freq,
-            "phaseHarmonics": self.phase_harmonics,
-            "obsLabels": list(self.obs_labels),
-            "actionLabels": list(self.action_labels),
-            "mjcfAsset": self.mjcf_asset,
-            "sceneId": eff_scene_id,
-            "sceneManifest": get_scene_manifest(eff_scene_id),
-            "policySpec": dict(self.policy_spec) if self.policy_spec else None,
-            "envParams": resolved_params if resolved_params else None,
-            "hyperparamSpecs": [dict(h) for h in self.hyperparam_specs],
+            "eval_seeds": list(self.eval_seeds),
+            "heldout_seeds": list(self.heldout_seeds),
+            "layer_coords": self.resolved_layer_coords(),
+            "phase_freq": self.phase_freq,
+            "phase_harmonics": self.phase_harmonics,
+            "obs_labels": list(self.obs_labels),
+            "action_labels": list(self.action_labels),
+            "mjcf_asset": self.mjcf_asset,
+            "scene_id": eff_scene_id,
+            "scene_manifest": get_scene_manifest(eff_scene_id),
+            "policy_spec": dict(self.policy_spec) if self.policy_spec else None,
+            "env_params": resolved_params if resolved_params else None,
+            "hyperparam_specs": [dict(h) for h in self.hyperparam_specs],
             "variants": variants_payload,
-            "primaryMetric": self.primary_metric,
-            "sortLabel": self.sort_label,
-            "solvedLabel": self.solved_label,
-            "telemetryFields": [dict(f) for f in self.telemetry_fields],
+            "primary_metric": self.primary_metric,
+            "sort_label": self.sort_label,
+            "solved_label": self.solved_label,
+            "telemetry_fields": [dict(f) for f in self.telemetry_fields],
             "nudges": [dict(n) for n in self.nudges],
         }
 
