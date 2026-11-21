@@ -4555,4 +4555,277 @@ function makeTab({{ roomName = "lobby", sessionSeed = {{}}, localStorage, locks,
         os.unlink(harness_path)
 
 
+@pytest.mark.django_db
+def test_network_inspector_loader_lifecycle_and_populora_rendering(client, tmp_path):
+    """Verify DetCppnCore->DetNetworkViz sequencing, re-mounting after placeholders, and PopuLoRA/NEAT/CPPN inspector UI."""
+    from pathlib import Path
+    from direct_evolution_together.cppn import create_random_population
+    from direct_evolution_together.environments import get_task_specs_payload
+    from direct_evolution_together.environments.so101 import SO101_POLICY_SPEC
+    from direct_evolution_together.populora_engine import create_populora_population
+
+    pkg_dir = Path(__file__).resolve().parent.parent / "direct_evolution_together"
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.content.decode("utf-8")
+
+    # 1. Verify ensureNetworkViz sequences cppn_core -> network_viz and clears cache on init failure
+    js_main = html.split("<script>\n", 1)[1].rsplit("</script>", 1)[0]
+    loader_start = js_main.index("const ASSET_URLS = {")
+    loader_end = js_main.index("const wsViaProxy =")
+    assert "ensureNetworkViz()" in js_main
+    assert "upgradeFsSimRolloutForSplit(" in js_main
+    assert "fsNetworkPanelEl.contains(fsNetInspector.root)" in js_main
+
+    loader_harness = tmp_path / "netviz_loader_check.js"
+    loader_harness.write_text(
+        f"""
+const assert = require("assert");
+globalThis.window = globalThis;
+const basePath = "";
+const assetVer = "testver";
+const loadEvents = [];
+let failNetVizOnce = true;
+
+globalThis.document = {{
+  head: {{
+    appendChild(el) {{
+      loadEvents.push(el.src);
+      setTimeout(() => {{
+        if (el.src.includes("cppn_core.js")) {{
+          window.DetCppnCore = {{ ok: true }};
+        }} else if (el.src.includes("network_viz.js")) {{
+          assert.ok(window.DetCppnCore, "network_viz.js must not load before DetCppnCore");
+          if (!failNetVizOnce) {{
+            window.DetNetworkViz = {{ ok: true }};
+          }} else {{
+            failNetVizOnce = false;
+          }}
+        }}
+        if (typeof el.onload === "function") el.onload();
+      }}, 5);
+    }},
+  }},
+  createElement(tag) {{
+    return {{ tagName: tag.toUpperCase(), src: "", rel: "", href: "", async: false }};
+  }},
+}};
+
+{js_main[loader_start:loader_end]}
+
+(async () => {{
+  let firstFailed = false;
+  try {{
+    await ensureNetworkViz();
+  }} catch (err) {{
+    firstFailed = /DetNetworkViz failed to initialize/.test(String(err.message || err));
+  }}
+  assert.strictEqual(firstFailed, true);
+  assert.strictEqual(DetClientAssets.getStatus("scripts", "networkViz"), "error");
+  assert.strictEqual(loadEvents.length, 2);
+  assert.ok(loadEvents[0].includes("cppn_core.js"));
+  assert.ok(loadEvents[1].includes("network_viz.js"));
+
+  await ensureNetworkViz();
+  assert.strictEqual(DetClientAssets.getStatus("scripts", "networkViz"), "loaded");
+  assert.ok(window.DetNetworkViz && window.DetNetworkViz.ok);
+  assert.strictEqual(loadEvents.length, 3);
+  assert.ok(loadEvents[2].includes("network_viz.js"));
+}})().catch((err) => {{ console.error(err); process.exit(1); }});
+""",
+        encoding="utf-8",
+    )
+    proc = subprocess.run(["node", str(loader_harness)], capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, f"Loader sequencing test failed:\n{proc.stderr}\n{proc.stdout}"
+
+    # 2. Exercise NetworkInspector DOM behavior across PopuLoRA (SO-102 + archived), NEAT, CartPole, & Image in Node
+    specs = get_task_specs_payload()
+    so102_genome = create_populora_population("so101", SO101_POLICY_SPEC, pop_size=2)[0]
+    cppn_genome = create_random_population(1)[0]
+    nv_path = str(pkg_dir / "frontend" / "network_viz.js")
+
+    inspector_harness = tmp_path / "netviz_dom_check.js"
+    inspector_harness.write_text(
+        f"""
+const assert = require("assert");
+
+class FakeClassList {{
+  constructor(el) {{ this.el = el; this.set = new Set(); }}
+  add(c) {{ this.set.add(c); }}
+  remove(c) {{ this.set.delete(c); }}
+  toggle(c, force) {{
+    const on = force !== undefined ? Boolean(force) : !this.set.has(c);
+    if (on) this.set.add(c); else this.set.delete(c);
+    return on;
+  }}
+  contains(c) {{ return this.set.has(c); }}
+}}
+
+class FakeNode {{
+  constructor(tag) {{
+    this.tagName = String(tag).toUpperCase();
+    this.children = [];
+    this.parentNode = null;
+    this.attrs = {{}};
+    this.style = {{}};
+    this.dataset = {{}};
+    this.listeners = {{}};
+    this.hidden = false;
+    this.value = "8";
+    this.classList = new FakeClassList(this);
+    this._textContent = "";
+    this._innerHTML = "";
+  }}
+  get className() {{ return this.attrs.class || ""; }}
+  set className(v) {{ this.attrs.class = String(v); }}
+  get textContent() {{ return this._textContent; }}
+  set textContent(v) {{ this._textContent = String(v); }}
+  get innerHTML() {{ return this._innerHTML; }}
+  set innerHTML(v) {{
+    this._innerHTML = String(v);
+    for (const c of this.children) c.parentNode = null;
+    this.children = [];
+  }}
+  appendChild(child) {{
+    if (child.parentNode) {{
+      const i = child.parentNode.children.indexOf(child);
+      if (i >= 0) child.parentNode.children.splice(i, 1);
+    }}
+    child.parentNode = this;
+    this.children.push(child);
+    return child;
+  }}
+  replaceChildren(...nodes) {{
+    for (const c of this.children) c.parentNode = null;
+    this.children = [];
+    for (const n of nodes) this.appendChild(n);
+  }}
+  contains(node) {{
+    let cur = node;
+    while (cur) {{
+      if (cur === this) return true;
+      cur = cur.parentNode;
+    }}
+    return false;
+  }}
+  setAttribute(k, v) {{ this.attrs[k] = String(v); }}
+  getAttribute(k) {{ return this.attrs[k]; }}
+  removeAttribute(k) {{ delete this.attrs[k]; }}
+  addEventListener(ev, fn) {{
+    if (!this.listeners[ev]) this.listeners[ev] = [];
+    this.listeners[ev].push(fn);
+  }}
+  dispatch(ev, payload = {{}}) {{
+    for (const fn of this.listeners[ev] || []) fn(payload);
+  }}
+  getContext() {{
+    return {{
+      fillStyle: "",
+      font: "",
+      textAlign: "",
+      textBaseline: "",
+      fillRect() {{}},
+      fillText() {{}},
+      save() {{}},
+      restore() {{}},
+      translate() {{}},
+      rotate() {{}},
+      createImageData: (w, h) => ({{ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }}),
+      putImageData() {{}},
+    }};
+  }}
+}}
+
+globalThis.document = {{
+  createElement: (tag) => new FakeNode(tag),
+  createElementNS: (_ns, tag) => new FakeNode(tag),
+}};
+globalThis.requestAnimationFrame = undefined;
+
+const nv = require({json.dumps(nv_path)});
+const specs = {json.dumps(specs)};
+const so102Genome = {json.dumps(so102_genome)};
+const cppnGenome = {json.dumps(cppn_genome)};
+
+const container = new FakeNode("div");
+const insp = new nv.NetworkInspector(container);
+
+// 1. PopuLoRA SO-102: nodes have activationName, output torque bars exist, hover has act=tanh & live val, matrices skip bias
+insp.setData(so102Genome, specs.so101);
+assert.strictEqual(insp.viewMode, "substrate");
+assert.strictEqual(insp.model.kind, "populora");
+assert.strictEqual(insp.model.dims.join(","), "16,16,16,16,6");
+assert.strictEqual(insp.model.nodes.every((n) => typeof n.activationName === "string" && n.activationName.length > 0), true);
+assert.strictEqual(insp._outputBarDom.size, 6);
+assert.strictEqual(insp.model.matrices.every((m) => m.hasBias === false), true);
+assert.ok(insp.model.inLabelPx >= 90, "SO-102 long obs labels need dynamic left padding");
+assert.ok(insp.model.outLabelPx >= 80, "SO-102 long action labels need dynamic right padding");
+
+insp.updateActivations([
+  Array(16).fill(0.25),
+  Array(16).fill(0.5),
+  Array(16).fill(-0.4),
+  Array(16).fill(0.3),
+  [0.8, -0.6, 0.2, -0.1, 0.4, -0.9],
+]);
+const firstOutId = insp.model.layersNodes[4][0].id;
+const firstOutBar = insp._outputBarDom.get(firstOutId);
+assert.ok(Number(firstOutBar.barFill.getAttribute("width")) > 10, "PopuLoRA output torque bar should animate");
+
+insp._onHoverNode(insp.model.layersNodes[1][0]);
+assert.ok(insp.detailBar.textContent.includes("act=tanh"), "Hidden PopuLoRA node hover must show act=tanh");
+assert.ok(!insp.detailBar.textContent.includes("undefined"), "Hover text must never contain undefined");
+assert.ok(insp.detailBar.textContent.includes("val=+0.500"), "Live activation value should appear in node hover");
+
+// Matrices mode updates detail bar hint cleanly
+insp.setMode("matrices");
+assert.ok(insp.detailBar.textContent.includes("LoRA"));
+
+// 2. Archived adapter-less PopuLoRA lineage node renders clean notice instead of crashing
+const archivedPopulora = {{ id: 9, uuid: "deadbeef", kind: "populora", hash: "abc", baseHash: "def" }};
+insp.setData(archivedPopulora, specs.so101);
+assert.strictEqual(insp.model.hasAdapters, false);
+assert.ok(insp.detailBar.textContent.includes("Archived PopuLoRA"));
+insp.setMode("substrate");
+assert.ok(insp.detailBar.textContent.includes("Archived PopuLoRA"));
+
+// 3. Cross-mode switching: Image (CPPN) -> NEAT DAG must switch from hidden "cppn" to "substrate"
+insp.setData(cppnGenome, specs.image);
+assert.strictEqual(insp.viewMode, "cppn");
+assert.strictEqual(insp.tabBtns.substrate.hidden, true);
+assert.strictEqual(insp.tabBtns.cppn.hidden, false);
+
+const neatTopo = {{
+  nodes: [
+    {{ id: "in0", kind: "input", label: "s0" }},
+    {{ id: "h0", kind: "hidden", activation: "sin", bias: 0.1 }},
+    {{ id: "out0", kind: "output", activation: "tanh", bias: -0.2 }},
+  ],
+  edges: [
+    {{ from: "in0", to: "h0", weight: 0.9, enabled: true }},
+    {{ from: "h0", to: "out0", weight: -0.7, enabled: true }},
+  ],
+}};
+insp.setData(neatTopo, specs.external);
+assert.strictEqual(insp.viewMode, "substrate");
+assert.strictEqual(insp.tabBtns.substrate.hidden, false);
+assert.strictEqual(insp.tabBtns.cppn.hidden, true);
+assert.strictEqual(insp._outputBarDom.size, 1);
+
+// 4. Placeholder clobber + re-attach simulation preserves inspector root & functionality
+container.replaceChildren(new FakeNode("div"));
+assert.strictEqual(container.contains(insp.root), false);
+container.replaceChildren(insp.root);
+assert.strictEqual(container.contains(insp.root), true);
+insp.setData(cppnGenome, specs.cartpole);
+assert.strictEqual(insp.model.kind, "substrate");
+assert.strictEqual(insp.model.dims.join(","), "4,8,1");
+""",
+        encoding="utf-8",
+    )
+    proc2 = subprocess.run(["node", str(inspector_harness)], capture_output=True, text=True, timeout=15)
+    assert proc2.returncode == 0, f"NetworkInspector DOM test failed:\n{proc2.stderr}\n{proc2.stdout}"
+
+
+
 

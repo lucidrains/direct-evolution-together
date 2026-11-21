@@ -49,9 +49,16 @@
   function assignCoordinates(layersNodes, dimsInfo) {
     const numLayers = layersNodes.length;
     const maxNodes = Math.max(1, ...layersNodes.map((arr) => arr.length));
-    const width = Math.max(780, 176 + (numLayers - 1) * 190);
-    const padXLeft = 164;
-    const padXRight = 152;
+    const firstLayer = layersNodes[0] || [];
+    const lastLayer = layersNodes[numLayers - 1] || [];
+    const maxInChars = firstLayer.reduce((acc, n) => Math.max(acc, String(n.label || "").length), 0);
+    const maxOutChars = lastLayer.reduce((acc, n) => Math.max(acc, String(n.label || "").length), 0);
+    const inLabelPx = Math.max(54, Math.ceil(maxInChars * 6.5));
+    const outLabelPx = Math.max(54, Math.ceil(maxOutChars * 6.9));
+    const padXLeft = Math.max(164, inLabelPx + 66);
+    const padXRight = Math.max(152, outLabelPx + 88);
+    const innerSpan = Math.max(360, (numLayers - 1) * 180);
+    const width = Math.max(780, padXLeft + padXRight + innerSpan);
     const innerW = Math.max(240, width - padXLeft - padXRight);
     const minRowPitch = maxNodes > 18 ? 25 : maxNodes > 12 ? 32 : 42;
     const padTop = 58;
@@ -71,7 +78,7 @@
         node.y = count === 1 ? padTop + innerH * 0.5 : startY + (span * idx) / (count - 1);
       }
     }
-    return { width, height, layerNames: dimsInfo };
+    return { width, height, inLabelPx, outLabelPx, layerNames: dimsInfo };
   }
 
   function buildSubstrateGraph(genome, taskSpec) {
@@ -175,6 +182,8 @@
       paramCount: edges.length + nodes.filter((n) => n.layer > 0).length,
       width: geom.width,
       height: geom.height,
+      inLabelPx: geom.inLabelPx,
+      outLabelPx: geom.outLabelPx,
     };
   }
 
@@ -297,6 +306,8 @@
       paramCount: edges.length + 39,
       width: geom.width,
       height: geom.height,
+      inLabelPx: geom.inLabelPx,
+      outLabelPx: geom.outLabelPx,
     };
   }
 
@@ -563,12 +574,21 @@
       paramCount: parsedEdges.filter((e) => e.enabled).length + nodes.filter((n) => n.kind !== "input").length,
       width: geom.width,
       height: geom.height,
+      inLabelPx: geom.inLabelPx,
+      outLabelPx: geom.outLabelPx,
     };
   }
 
   function decodeF16Sample(b64) {
-    if (!b64 || typeof atob !== "function") return new Float32Array(0);
-    const bin = atob(b64);
+    if (!b64) return new Float32Array(0);
+    let bin = "";
+    if (typeof atob === "function") {
+      bin = atob(b64);
+    } else if (typeof Buffer !== "undefined") {
+      bin = Buffer.from(b64, "base64").toString("binary");
+    } else {
+      return new Float32Array(0);
+    }
     const n = bin.length >> 1;
     const out = new Float32Array(n);
     const f32 = new Float32Array(1);
@@ -578,36 +598,74 @@
       const s = (h & 0x8000) << 16;
       const e = (h >> 10) & 0x1f;
       const m = h & 0x03ff;
-      if (e === 0) u32[0] = s;
-      else if (e === 31) u32[0] = s | 0x7f800000 | (m << 13);
-      else u32[0] = s | ((e - 15 + 127) << 23) | (m << 13);
+      if (e === 0) {
+        if (m === 0) {
+          u32[0] = s;
+        } else {
+          let mm = m;
+          let ee = -14;
+          while ((mm & 0x0400) === 0) {
+            mm <<= 1;
+            ee--;
+          }
+          mm &= 0x03ff;
+          u32[0] = s | ((ee + 127) << 23) | (mm << 13);
+        }
+      } else if (e === 31) {
+        u32[0] = s | 0x7f800000 | (m << 13);
+      } else {
+        u32[0] = s | ((e - 15 + 127) << 23) | (m << 13);
+      }
       out[i] = f32[0];
     }
     return out;
   }
 
   function buildPopuloraGraph(genome, taskSpec) {
-    const r = Number(genome.lowRank || taskSpec?.policySpec?.lowRank || 8);
-    const adapters = genome.adapters || {};
-    const actLabels = Array.isArray(taskSpec?.actionLabels) ? taskSpec.actionLabels : [];
-    const obsLabels = Array.isArray(taskSpec?.obsLabels) ? taskSpec.obsLabels : [];
+    const policySpec = readSpecField(taskSpec, "policySpec", "policy_spec") || {};
+    const r = Math.max(1, Number(genome.lowRank || policySpec.lowRank || 8));
+    const adapters = (genome.adapters && typeof genome.adapters === "object") ? genome.adapters : {};
+    const hasAdapters = Object.keys(adapters).length > 0;
+    const actLabelsRaw = readSpecField(taskSpec, "actionLabels", "action_labels");
+    const obsLabelsRaw = readSpecField(taskSpec, "obsLabels", "obs_labels");
+    const actLabels = Array.isArray(actLabelsRaw) ? actLabelsRaw : [];
+    const obsLabels = Array.isArray(obsLabelsRaw) ? obsLabelsRaw : [];
+    const obsDim = Number(readSpecField(taskSpec, "obsDim", "obs_dim") || policySpec.obsDim || 0);
+    const actDim = Number(
+      readSpecField(taskSpec, "actionDim", "action_dim") ||
+      policySpec.actionDim ||
+      adapters.net_decoder_2?.outDim ||
+      adapters.head?.outDim ||
+      actLabels.length ||
+      14
+    );
 
-    // Sampled slice matching createPopuLoraRunner stepActivations (16 obs -> 16 enc -> 16 gru -> 16 dec -> actionDim)
-    const nSample = 16;
-    const nAct = Math.max(1, Number(taskSpec?.actionDim || actLabels.length || 14));
-    const stageSpecs = [
-      { title: `Obs [0..${nSample - 1}]`, count: nSample, kind: "input", act: "linear", labels: obsLabels },
-      { title: `Enc LoRA (r=${r})`, count: nSample, kind: "hidden", act: "tanh", key: "net_encoder_2" },
-      { title: `GRU Cell (r=${r})`, count: nSample, kind: "hidden", act: "tanh", key: "net_cell_linear_hh" },
-      { title: `Dec LoRA (r=${r})`, count: nSample, kind: "hidden", act: "tanh", key: "net_decoder_0" },
-      { title: `Actions (${nAct})`, count: nAct, kind: "output", act: "tanh", key: "net_decoder_2", labels: actLabels },
-    ];
+    const isMlpArch = String(policySpec.arch || "").toLowerCase() === "mlp" ||
+      (!adapters.net_encoder_0 && Boolean(adapters.encoder_0 || adapters.head));
+    // Sampled slice matching createPopuLoraRunner stepActivations
+    const nSample = obsDim > 0 ? Math.min(16, obsDim) : 16;
+    const nAct = Math.max(1, actDim);
+    const stageSpecs = isMlpArch
+      ? [
+          { title: `Obs [0..${nSample - 1}]`, count: nSample, kind: "input", act: "linear", prefix: "obs", labels: obsLabels },
+          { title: `Enc 1 (r=${r})`, count: 16, kind: "hidden", act: "tanh", prefix: "e1_" },
+          { title: `Enc 2 (r=${r})`, count: 16, kind: "hidden", act: "tanh", prefix: "e2_" },
+          { title: `Actions (${nAct})`, count: nAct, kind: "output", act: "tanh", prefix: "act", labels: actLabels },
+        ]
+      : [
+          { title: `Obs [0..${nSample - 1}]`, count: nSample, kind: "input", act: "linear", prefix: "obs", labels: obsLabels },
+          { title: `Enc LoRA (r=${r})`, count: 16, kind: "hidden", act: "tanh", prefix: "e" },
+          { title: `GRU Cell (r=${r})`, count: 16, kind: "hidden", act: "tanh", prefix: "g" },
+          { title: `Dec LoRA (r=${r})`, count: 16, kind: "hidden", act: "tanh", prefix: "d" },
+          { title: `Actions (${nAct})`, count: nAct, kind: "output", act: "tanh", prefix: "act", labels: actLabels },
+        ];
 
     const layersNodes = [];
     const nodes = [];
     const nodeMap = new Map();
     stageSpecs.forEach((st, lIdx) => {
       const col = [];
+      const meta = st.kind === "input" ? { code: -1, name: "sensor", short: "sensor", color: "#38bdf8" } : getActMeta(st.act);
       for (let i = 0; i < st.count; i++) {
         const id = `pl_${lIdx}_${i}`;
         const node = {
@@ -615,9 +673,12 @@
           layer: lIdx,
           index: i,
           kind: st.kind,
-          label: (st.labels && st.labels[i]) ? String(st.labels[i]) : `${lIdx === 0 ? "obs" : lIdx === 4 ? "act" : "h"}${i}`,
+          label: (st.labels && st.labels[i]) ? String(st.labels[i]) : `${st.prefix}${i}`,
           bias: 0.0,
-          actMeta: getActMeta(st.act),
+          activation: meta.code,
+          activationName: meta.short,
+          activationColor: meta.color,
+          actMeta: meta,
         };
         col.push(node);
         nodes.push(node);
@@ -628,14 +689,17 @@
 
     const edges = [];
     const matrices = [];
-    let maxAbsWeight = 0.01;
+    let maxAbsWeight = 0.0;
     let totalParams = 0;
 
-    for (const [k, ad] of Object.entries(adapters)) {
+    for (const [, ad] of Object.entries(adapters)) {
+      if (!ad || typeof ad !== "object") continue;
       totalParams += (Number(ad.inDim || 0) + Number(ad.outDim || 0)) * r;
     }
 
-    const stageKeys = ["net_encoder_0", "net_cell_linear_ih", "net_decoder_0", "net_decoder_2"];
+    const stageKeys = isMlpArch
+      ? ["encoder_0", "encoder_2", "head"]
+      : ["net_encoder_0", "net_cell_linear_ih", "net_decoder_0", "net_decoder_2"];
     for (let s = 0; s < stageKeys.length; s++) {
       const srcCol = layersNodes[s];
       const dstCol = layersNodes[s + 1];
@@ -652,8 +716,13 @@
         for (let j = 0; j < cols; j++) {
           let w = 0.0;
           for (let rk = 0; rk < r; rk++) {
-            w += (up[j * r + rk] || 0) * (down[i * r + rk] || 0);
+            const uIdx = j * r + rk;
+            const dIdx = i * r + rk;
+            if (uIdx < up.length && dIdx < down.length) {
+              w += up[uIdx] * down[dIdx];
+            }
           }
+          if (!Number.isFinite(w)) w = 0.0;
           subW[i * cols + j] = w;
           const aw = Math.abs(w);
           if (aw > maxAbsWeight) maxAbsWeight = aw;
@@ -661,18 +730,22 @@
             id: `pe_${s}_${i}_${j}`,
             from: srcCol[i].id,
             to: dstCol[j].id,
+            fromLayer: s,
+            toLayer: s + 1,
             layer: s,
             weight: w,
             enabled: true,
+            recurrent: false,
           });
         }
       }
       matrices.push({
-        title: `LoRA \u0394W ${key} (slice ${rows}\u00d7${cols}, \u2016\u0394W\u2016=${(ad.norm ?? 0).toFixed(2)})`,
+        title: `LoRA \u0394W ${key} (slice ${rows}\u00d7${cols}, \u2016\u0394W\u2016=${Number(ad.norm ?? 0).toFixed(2)})`,
         dIn: rows,
         dOut: cols,
         w: subW,
         b: new Float64Array(cols),
+        hasBias: false,
         rowLabels: srcCol.map((n) => n.label),
         colLabels: dstCol.map((n) => n.label),
       });
@@ -690,10 +763,13 @@
       nodeMap,
       edges,
       matrices,
-      maxAbsWeight,
+      hasAdapters,
+      maxAbsWeight: maxAbsWeight > 1e-6 ? maxAbsWeight : 0.01,
       paramCount: totalParams,
       width: geom.width,
       height: geom.height,
+      inLabelPx: geom.inLabelPx,
+      outLabelPx: geom.outLabelPx,
     };
   }
 
@@ -713,7 +789,14 @@
 
   function formatWeight(val) {
     if (!Number.isFinite(val)) return "0.000";
-    return (val >= 0 ? "+" : "") + val.toFixed(3);
+    const abs = Math.abs(val);
+    const digits = abs > 0 && abs < 0.01 ? 4 : 3;
+    return (val >= 0 ? "+" : "") + val.toFixed(digits);
+  }
+
+  function formatThreshold(val, maxAbs) {
+    if (!Number.isFinite(val)) return "0.00";
+    return maxAbs < 0.25 ? val.toFixed(3) : val.toFixed(2);
   }
 
   function weightToColor(val, maxAbs) {
@@ -803,8 +886,11 @@
       this.threshSlider.addEventListener("input", () => {
         const maxW = this.model ? this.model.maxAbsWeight : 1.0;
         const frac = Number(this.threshSlider.value) / 100.0;
-        this.threshold = Math.round(frac * maxW * 0.9 * 1000) / 1000;
-        this.threshValueEl.textContent = this.threshold.toFixed(2);
+        const raw = frac * maxW * 0.9;
+        this.threshold = maxW < 0.25
+          ? Math.round(raw * 10000) / 10000
+          : Math.round(raw * 1000) / 1000;
+        this.threshValueEl.textContent = formatThreshold(this.threshold, maxW);
         this._applyFilterState();
       });
       this.threshWrap.appendChild(this.threshTitle);
@@ -850,18 +936,23 @@
       const isNeat = Boolean(genome && Array.isArray(genome.nodes));
       const isPopulora = Boolean(genome && genome.kind === "populora");
       const hasSubstrate = Boolean(readSpecDims(this.taskSpec)) || isPopulora;
+      const canSubstrate = hasSubstrate || isNeat;
+      const canCppn = !isNeat && !isPopulora;
 
       if (preferredMode) {
         this.viewMode = preferredMode;
-      } else if (!hasSubstrate && !isNeat && this.viewMode === "substrate") {
+      }
+      if (this.viewMode === "substrate" && !canSubstrate) {
         this.viewMode = "cppn";
-      } else if (hasSubstrate && (isPopulora ? this.viewMode === "cppn" : (this.viewMode !== "cppn" && this.viewMode !== "matrices"))) {
+      } else if (this.viewMode === "cppn" && !canCppn) {
         this.viewMode = "substrate";
+      } else if (this.viewMode !== "substrate" && this.viewMode !== "cppn" && this.viewMode !== "matrices") {
+        this.viewMode = canSubstrate ? "substrate" : "cppn";
       }
 
       // Toggle visible mode tabs appropriately
-      this.tabBtns.substrate.hidden = !hasSubstrate && !isNeat;
-      this.tabBtns.cppn.hidden = isNeat || isPopulora;
+      this.tabBtns.substrate.hidden = !canSubstrate;
+      this.tabBtns.cppn.hidden = !canCppn;
       this.tabBtns.substrate.textContent = isPopulora ? "LoRA Graph" : (isNeat ? "NEAT Topology" : "Substrate");
 
       this.hoveredNodeId = null;
@@ -910,8 +1001,12 @@
       this.model = buildGraphModel(this.genome, this.taskSpec, graphMode);
 
       const sliderFrac = Number(this.threshSlider.value) / 100.0;
-      this.threshold = Math.round(sliderFrac * this.model.maxAbsWeight * 0.9 * 1000) / 1000;
-      this.threshValueEl.textContent = this.threshold.toFixed(2);
+      const maxW = this.model.maxAbsWeight;
+      const rawThresh = sliderFrac * maxW * 0.9;
+      this.threshold = maxW < 0.25
+        ? Math.round(rawThresh * 10000) / 10000
+        : Math.round(rawThresh * 1000) / 1000;
+      this.threshValueEl.textContent = formatThreshold(this.threshold, maxW);
       this.threshWrap.hidden = this.viewMode === "matrices";
       this.dimBtn.hidden = this.viewMode === "matrices";
       this.exportBtn.hidden = this.viewMode === "matrices";
@@ -932,11 +1027,12 @@
       const sparsityPct = totalEdges > 0 ? Math.round((1 - activeEdges / totalEdges) * 100) : 0;
 
       this.metaBar.innerHTML = "";
+      const maxWLabel = m.maxAbsWeight < 0.1 ? m.maxAbsWeight.toFixed(3) : m.maxAbsWeight.toFixed(2);
       const pills = [
         `${m.dims.join(" -> ")}`,
         `${activeEdges}/${totalEdges} links (${sparsityPct}% pruned)`,
         `${m.paramCount} params`,
-        `max |w| ${m.maxAbsWeight.toFixed(2)}`,
+        `max |w| ${maxWLabel}`,
       ];
       for (const text of pills) {
         this.metaBar.appendChild(elHtml("span", "det-nv-pill", text));
@@ -1028,6 +1124,11 @@
       const nodeGroup = elSvg("g", { class: "det-nv-nodes" });
       const dense = m.layersNodes.some((arr) => arr.length >= 16);
       const radiusBase = dense ? 8 : 11;
+      const inLabelPx = Number(m.inLabelPx || 62);
+      const outLabelPx = Number(m.outLabelPx || 54);
+      const barStartX = radiusBase + 16 + outLabelPx;
+      const barCenterX = barStartX + 28;
+      const inLiveValX = -(radiusBase + 14 + inLabelPx);
 
       for (const n of m.nodes) {
         const g = elSvg("g", {
@@ -1111,10 +1212,10 @@
           lbl.textContent = n.label;
           g.appendChild(lbl);
 
-          // Output live torque / signal bar slot (only for control substrates / NEAT policies)
-          if (m.kind === "substrate" || m.kind === "neat") {
+          // Output live torque / signal bar slot (for control substrates, NEAT policies, and PopuLoRA adapters)
+          if (m.kind === "substrate" || m.kind === "neat" || m.kind === "populora") {
             const barBg = elSvg("rect", {
-              x: radiusBase + 62,
+              x: barStartX,
               y: -4,
               width: 56,
               height: 8,
@@ -1124,15 +1225,15 @@
               "stroke-width": 0.6,
             });
             const barCenter = elSvg("line", {
-              x1: radiusBase + 90,
+              x1: barCenterX,
               y1: -5,
-              x2: radiusBase + 90,
+              x2: barCenterX,
               y2: 5,
               stroke: "rgba(255,255,255,0.22)",
               "stroke-width": 0.8,
             });
             const barFill = elSvg("rect", {
-              x: radiusBase + 90,
+              x: barCenterX,
               y: -3.5,
               width: 0,
               height: 7,
@@ -1144,7 +1245,7 @@
             g.appendChild(barFill);
             this._outputBarDom.set(n.id, {
               barFill,
-              cx: radiusBase + 90,
+              cx: barCenterX,
               halfW: 27,
             });
           }
@@ -1153,9 +1254,9 @@
         // Live activation value pill (positioned to prevent neighbor overlap in dense layers)
         const liveValAttrs =
           n.kind === "input"
-            ? { x: -(radiusBase + 72), y: 3.5, "text-anchor": "end", fill: "#94a3b8" }
+            ? { x: inLiveValX, y: 3.5, "text-anchor": "end", fill: "#94a3b8" }
             : n.kind === "output"
-              ? { x: radiusBase + 90, y: -8, "text-anchor": "middle", fill: "#e4e4e7" }
+              ? { x: barCenterX, y: -8, "text-anchor": "middle", fill: "#e4e4e7" }
               : { x: 0, y: -(radiusBase + 5), "text-anchor": "middle", fill: "#e4e4e7" };
         const liveValText = elSvg("text", {
           ...liveValAttrs,
@@ -1190,6 +1291,9 @@
       this.stage.appendChild(wrap);
       this._applyFilterState();
       if (this.liveActivations) this._paintLiveActivations();
+      this.detailBar.textContent = m.kind === "populora" && !m.hasAdapters
+        ? "Archived PopuLoRA lineage ancestor — full LoRA adapter weights are only retained on live generation individuals."
+        : "Hover any neuron or synapse to inspect weights, activations, and receptive paths.";
     }
 
     _edgePath(src, dst, edge) {
@@ -1307,10 +1411,12 @@
       incoming.sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight));
       outgoing.sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight));
 
+      const liveVal = this._getLiveActivationForNode(node);
       const parts = [
         `${node.kind.toUpperCase()} "${node.label}"`,
-        node.kind === "input" ? "" : `act=${node.activationName}`,
-        node.kind === "input" ? "" : `bias=${formatWeight(node.bias || 0)}`,
+        node.kind === "input" ? "" : `act=${node.activationName || "tanh"}`,
+        node.kind === "input" || this.model.kind === "populora" ? "" : `bias=${formatWeight(node.bias || 0)}`,
+        liveVal !== null ? `val=${formatWeight(liveVal)}` : "",
         `in=${incoming.length}`,
         `out=${outgoing.length}`,
       ].filter(Boolean);
@@ -1342,11 +1448,26 @@
       this.detailBar.textContent = `${src ? src.label : edge.from}  --->  ${dst ? dst.label : edge.to}${tag}   |   w = ${formatWeight(edge.weight)}`;
     }
 
+    _getLiveActivationForNode(node) {
+      const acts = this.liveActivations;
+      if (!acts || !node || this.viewMode !== "substrate") return null;
+      if (!Array.isArray(acts)) {
+        const raw = acts[node.id];
+        return raw !== undefined && Number.isFinite(Number(raw)) ? Number(raw) : null;
+      }
+      const layerVals = acts[node.layer];
+      if (!Array.isArray(layerVals) || node.index < 0 || node.index >= layerVals.length) return null;
+      const v = Number(layerVals[node.index]);
+      return Number.isFinite(v) ? v : null;
+    }
+
     _clearHover() {
       this.hoveredNodeId = null;
       this.hoveredEdgeId = null;
       this._applyFilterState();
-      this.detailBar.textContent = "Hover any neuron or synapse to inspect weights, activations, and receptive paths.";
+      this.detailBar.textContent = this.model && this.model.kind === "populora" && !this.model.hasAdapters
+        ? "Archived PopuLoRA lineage ancestor — full LoRA adapter weights are only retained on live generation individuals."
+        : "Hover any neuron or synapse to inspect weights, activations, and receptive paths.";
     }
 
     _paintLiveActivations() {
@@ -1451,7 +1572,16 @@
       const m = this.model;
       this.stage.innerHTML = "";
       this._matrixHitBoxes = [];
+      if (!m.matrices || m.matrices.length === 0) {
+        const msg = m.kind === "populora" && !m.hasAdapters
+          ? "Archived PopuLoRA lineage ancestor — full LoRA adapter matrices are only retained on live generation individuals."
+          : "No weight matrices available for this individual.";
+        this.stage.appendChild(elHtml("div", "det-nv-empty", msg));
+        this.detailBar.textContent = msg;
+        return;
+      }
       const wrap = elHtml("div", "det-nv-matrices");
+      let anyBias = false;
 
       for (const mat of m.matrices) {
         const card = elHtml("div", "det-nv-matrix-card");
@@ -1459,13 +1589,15 @@
 
         const rows = mat.dIn;
         const cols = mat.dOut;
+        const showBias = mat.hasBias !== false && mat.b && mat.b.length >= cols;
+        if (showBias) anyBias = true;
         const cellW = cols > 18 ? 14 : cols > 10 ? 18 : 22;
         const cellH = rows > 18 ? 13 : rows > 10 ? 17 : 21;
         const padLeft = 74;
         const padTop = 58;
         const biasGap = 8;
         const width = padLeft + cols * cellW + 18;
-        const height = padTop + rows * cellH + biasGap + cellH + 14;
+        const height = padTop + rows * cellH + (showBias ? biasGap + cellH : 0) + 14;
 
         const canvas = document.createElement("canvas");
         canvas.width = width;
@@ -1511,21 +1643,27 @@
         }
 
         // Destination bias row aligned beneath each output column j = 0..cols-1
-        let maxB = 1e-6;
-        for (let j = 0; j < mat.b.length; j++) {
-          const a = Math.abs(mat.b[j]);
-          if (a > maxB) maxB = a;
-        }
         const by = padTop + rows * cellH + biasGap;
-        ctx.fillStyle = "#a1a1aa";
-        ctx.fillText("bias b", padLeft - 6, by + cellH * 0.5);
-        for (let j = 0; j < cols; j++) {
-          const x = padLeft + j * cellW;
-          ctx.fillStyle = "#141418";
-          ctx.fillRect(x + 0.5, by + 0.5, cellW - 1, cellH - 1);
-          ctx.fillStyle = weightToColor(mat.b[j] || 0, maxB);
-          ctx.fillRect(x + 0.5, by + 0.5, cellW - 1, cellH - 1);
+        if (showBias) {
+          let maxB = 1e-6;
+          for (let j = 0; j < mat.b.length; j++) {
+            const a = Math.abs(mat.b[j]);
+            if (a > maxB) maxB = a;
+          }
+          ctx.fillStyle = "#a1a1aa";
+          ctx.fillText("bias b", padLeft - 6, by + cellH * 0.5);
+          for (let j = 0; j < cols; j++) {
+            const x = padLeft + j * cellW;
+            ctx.fillStyle = "#141418";
+            ctx.fillRect(x + 0.5, by + 0.5, cellW - 1, cellH - 1);
+            ctx.fillStyle = weightToColor(mat.b[j] || 0, maxB);
+            ctx.fillRect(x + 0.5, by + 0.5, cellW - 1, cellH - 1);
+          }
         }
+
+        const defaultHint = anyBias
+          ? "Hover any matrix cell to inspect connection weight and destination bias."
+          : "Hover any matrix cell to inspect LoRA \u0394W weight entry.";
 
         canvas.addEventListener("mousemove", (ev) => {
           const rect = canvas.getBoundingClientRect();
@@ -1533,19 +1671,23 @@
           const sy = ((ev.clientY - rect.top) * canvas.height) / Math.max(1, rect.height);
           const col = Math.floor((sx - padLeft) / cellW);
           if (col < 0 || col >= cols) return;
-          if (sy >= by && sy <= by + cellH) {
+          if (showBias && sy >= by && sy <= by + cellH) {
             this.detailBar.textContent = `bias[${mat.colLabels[col]}]  =  ${formatWeight(mat.b[col] || 0)}`;
             return;
           }
           const row = Math.floor((sy - padTop) / cellH);
           if (row >= 0 && row < rows) {
             const val = mat.w[row * cols + col];
-            const bVal = mat.b[col] || 0;
-            this.detailBar.textContent = `${mat.rowLabels[row]}  ->  ${mat.colLabels[col]}   |   w = ${formatWeight(val)}   ·   dst bias = ${formatWeight(bVal)}`;
+            if (showBias) {
+              const bVal = mat.b[col] || 0;
+              this.detailBar.textContent = `${mat.rowLabels[row]}  ->  ${mat.colLabels[col]}   |   w = ${formatWeight(val)}   \u00b7   dst bias = ${formatWeight(bVal)}`;
+            } else {
+              this.detailBar.textContent = `${mat.rowLabels[row]}  ->  ${mat.colLabels[col]}   |   \u0394w = ${formatWeight(val)}`;
+            }
           }
         });
         canvas.addEventListener("mouseleave", () => {
-          this.detailBar.textContent = "Hover any matrix cell to inspect connection weight and destination bias.";
+          this.detailBar.textContent = defaultHint;
         });
 
         card.appendChild(canvas);
@@ -1553,6 +1695,9 @@
       }
 
       this.stage.appendChild(wrap);
+      this.detailBar.textContent = anyBias
+        ? "Hover any matrix cell to inspect connection weight and destination bias."
+        : "Hover any matrix cell to inspect LoRA \u0394W weight entry.";
     }
 
     exportSvg() {

@@ -2734,6 +2734,34 @@
         }
         return ensureAssetScript(ASSET_URLS.sceneCache, "sceneCache");
       }
+
+      function ensureNetworkViz() {
+        if (window.DetNetworkViz) {
+          DetClientAssets.markLoaded("scripts", "networkViz", { url: ASSET_URLS.networkViz, value: true });
+          return Promise.resolve(true);
+        }
+        return ensureCppnCore().then(() => {
+          if (!window.DetCppnCore) {
+            loadedAssetScripts.delete(ASSET_URLS.cppnCore);
+            const err = new Error("DetCppnCore failed to initialize");
+            DetClientAssets.markError("scripts", "cppnCore", err);
+            throw err;
+          }
+          if (window.DetNetworkViz) {
+            DetClientAssets.markLoaded("scripts", "networkViz", { url: ASSET_URLS.networkViz, value: true });
+            return true;
+          }
+          return ensureAssetScript(ASSET_URLS.networkViz, "networkViz").then(() => {
+            if (!window.DetNetworkViz) {
+              loadedAssetScripts.delete(ASSET_URLS.networkViz);
+              const err = new Error("DetNetworkViz failed to initialize");
+              DetClientAssets.markError("scripts", "networkViz", err);
+              throw err;
+            }
+            return true;
+          });
+        });
+      }
       const wsViaProxy = Boolean(JSON.parse(document.getElementById("det-ws-via-proxy").textContent));
       const roomName = JSON.parse(document.getElementById("det-room-name").textContent);
       const isPrivateRoom = Boolean(JSON.parse(document.getElementById("det-is-private").textContent));
@@ -9957,13 +9985,134 @@
       let fsViewMode = "sim"; // "sim" | "net" | "split"
       let fsNetInspector = null;
       let fsCurrentTarget = null; // { genome, taskId, topology }
+      let fsNetLoadToken = 0;
+      let fsNetRenderedSig = "";
 
       function ensureFsNetworkInspector() {
         if (!fsNetworkPanelEl || !window.DetNetworkViz) return null;
         if (!fsNetInspector) {
           fsNetInspector = new window.DetNetworkViz.NetworkInspector(fsNetworkPanelEl);
+        } else if (fsNetInspector.root && !fsNetworkPanelEl.contains(fsNetInspector.root)) {
+          fsNetworkPanelEl.replaceChildren(fsNetInspector.root);
         }
         return fsNetInspector;
+      }
+
+      function computeFsNetTargetSig(target, spec) {
+        if (!target) return "";
+        const dataObj = target.topology || target.genome;
+        const isTopo = Boolean(target.topology);
+        const hasPayload = isTopo || hasGenomePayload(target.genome);
+        const fp = dataObj ? (getIndividualUuid(dataObj) || genomeFingerprint(dataObj)) : "";
+        return `${target.taskId}|${isTopo ? "topo" : "genome"}|${hasPayload ? "1" : "0"}|${spec && spec.isLean ? "lean" : "full"}|${fp}`;
+      }
+
+      function showFsNetworkPlaceholder(message, showRetry = false) {
+        if (!fsNetworkPanelEl) return;
+        const box = document.createElement("div");
+        box.className = "det-nv-empty";
+        const text = document.createElement("span");
+        text.textContent = message;
+        box.appendChild(text);
+        if (showRetry) {
+          const retryBtn = document.createElement("button");
+          retryBtn.type = "button";
+          retryBtn.className = "ghost";
+          retryBtn.textContent = "Retry";
+          retryBtn.addEventListener("click", () => {
+            fsNetRenderedSig = "";
+            syncFsViewLayout();
+          });
+          box.appendChild(retryBtn);
+        }
+        fsNetworkPanelEl.replaceChildren(box);
+      }
+
+      function upgradeFsSimRolloutForSplit(stateObj, forceUpgrade = false) {
+        if (!stateObj || stateObj.loading || stateObj._actsUpgradeInFlight) return;
+        const taskId = stateObj.taskId;
+        if (isSceneTask(taskId)) {
+          const shouldUpgrade = (stateObj.poseStride > 1 || !stateObj.stepActivations) &&
+            getEffectiveSimMode(taskId) === "client" &&
+            (forceUpgrade || DetClientAssets.isLoaded("wasm", "mujocoWasm") || fsViewMode === "split");
+          if (!shouldUpgrade) return;
+          stateObj._actsUpgradeInFlight = true;
+          Promise.all([
+            fetchTaskRollout(taskId, stateObj.genome, stateObj.seed, stateObj.maxSteps, stateObj.nudgeTag || null, true, true, stateObj.envParams),
+            ensureSceneVisualResources(taskId, stateObj.envParams),
+          ])
+            .then(([ro]) => {
+              if (fsSimState === stateObj && ro && Array.isArray(ro.bodyPoses)) {
+                const prevFrac = stateObj.bodyPoses.length > 1 ? stateObj.step / (stateObj.bodyPoses.length - 1) : 0;
+                stateObj.bodyPoses = ro.bodyPoses;
+                stateObj.poseStride = ro.poseStride || 1;
+                stateObj.stepTrace = ro.stepTrace || null;
+                stateObj.stepActivations = ro.stepActivations || null;
+                stateObj.rolloutReturn = ro.return || stateObj.rolloutReturn;
+                stateObj.terminated = Boolean(ro.terminated);
+                stateObj.step = Math.min(ro.bodyPoses.length - 1, Math.round(prevFrac * Math.max(0, ro.bodyPoses.length - 1)));
+                paintFsSceneFrame(stateObj);
+                paintFsLiveNetworkStep(stateObj);
+                renderFullscreenTelemetry(true);
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              stateObj._actsUpgradeInFlight = false;
+            });
+          return;
+        }
+        if (taskId === "halfcheetah") {
+          const needsGeoms = hasWebGL2 && !stateObj.geomPoses;
+          const needsActs = !stateObj.stepActivations && (forceUpgrade || fsViewMode === "split") && getEffectiveSimMode("halfcheetah") === "client";
+          if (!needsGeoms && !needsActs) return;
+          stateObj._actsUpgradeInFlight = true;
+          const glReady = hasWebGL2 ? ensureAssetScript(ASSET_URLS.mujocoGl).catch(() => {}) : Promise.resolve();
+          Promise.all([
+            fetchTaskRollout("halfcheetah", stateObj.genome, stateObj.seed, stateObj.maxSteps, stateObj.nudgeTag || null, true, hasWebGL2),
+            glReady,
+          ])
+            .then(([ro]) => {
+              if (fsSimState === stateObj && ro) {
+                if (ro.stepActivations) stateObj.stepActivations = ro.stepActivations;
+                if (ro.geomSpecs && ro.geomPoses) {
+                  stateObj.geomSpecs = ro.geomSpecs;
+                  stateObj.geomPoses = ro.geomPoses;
+                  const cached = getCachedControlEntry("halfcheetah", stateObj.genome);
+                  if (cached && cached.primaryRollout) {
+                    cached.primaryRollout.geomSpecs = ro.geomSpecs;
+                    cached.primaryRollout.geomPoses = ro.geomPoses;
+                  }
+                  paintFsCheetahFrame(stateObj);
+                }
+                paintFsLiveNetworkStep(stateObj);
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              stateObj._actsUpgradeInFlight = false;
+            });
+        }
+      }
+
+      function applyFsNetworkTarget(insp, target) {
+        if (!insp || !target) return;
+        const spec = getTaskSpec(target.taskId);
+        const sig = computeFsNetTargetSig(target, spec);
+        const wasMounted = Boolean(insp.root && fsNetworkPanelEl && fsNetworkPanelEl.contains(insp.root));
+        if (!wasMounted && insp.root && fsNetworkPanelEl) {
+          fsNetworkPanelEl.replaceChildren(insp.root);
+        }
+        if (sig !== fsNetRenderedSig || !insp.model) {
+          insp.setData(target.topology || target.genome, spec);
+          fsNetRenderedSig = sig;
+        }
+        if (fsViewMode === "split") {
+          paintFsLiveNetworkStep(fsSimState);
+          if (fsSimState) upgradeFsSimRolloutForSplit(fsSimState, true);
+        } else {
+          insp.updateActivations(null);
+        }
       }
 
       function syncFsViewLayout() {
@@ -9989,27 +10138,50 @@
 
         if (fsViewMode !== "sim") {
           const needsFullSpecs = !DetClientAssets.isLoaded("data", "fullTaskSpecs");
-          const needsPayload = !topology && genome && !hasGenomePayload(genome) && Boolean(getIndividualUuid(genome));
+          const needsPayload = !topology && genome && !hasGenomePayload(genome) && Boolean(getIndividualUuid(genome)) && !genome._hydrateAttempted;
           const insp = !needsFullSpecs && !needsPayload ? ensureFsNetworkInspector() : null;
           if (insp) {
-            insp.setData(topology || genome, spec);
-            paintFsLiveNetworkStep(fsSimState);
+            fsNetLoadToken += 1;
+            applyFsNetworkTarget(insp, fsCurrentTarget);
           } else if (fsNetworkPanelEl) {
-            fsNetworkPanelEl.innerHTML = '<div class="det-nv-empty">Loading network inspector...</div>';
+            const loadToken = ++fsNetLoadToken;
+            showFsNetworkPlaceholder("Loading network inspector...", false);
+            const activeGoal = goalsByName.get(activeGoalName) || null;
+            const hydratePromise = needsPayload
+              ? (
+                  fullscreenIdx !== null &&
+                  activeGoal &&
+                  Array.isArray(activeGoal.genomes) &&
+                  activeGoal.genomes[fullscreenIdx] === genome
+                    ? ensureFullGenomeHydrated(activeGoal, fullscreenIdx)
+                    : ensureGenomeObjectHydrated(genome, activeGoal)
+                ).then((hyd) => {
+                  if (genome && !hasGenomePayload(genome)) {
+                    genome._hydrateAttempted = true;
+                  }
+                  return hyd;
+                })
+              : Promise.resolve();
             Promise.all([
               ensureFullTaskSpecs().catch(() => {}),
-              !isPopuloraTask(taskId) ? ensureCppnCore().catch(() => {}) : Promise.resolve(),
-              ensureAssetScript(ASSET_URLS.networkViz, "networkViz"),
-              needsPayload ? ensureGenomeObjectHydrated(genome, goalsByName.get(activeGoalName) || null) : Promise.resolve(),
+              ensureNetworkViz(),
+              hydratePromise,
             ]).then(() => {
-              if (!fullscreenModalEl.hidden && fsCurrentTarget && fsViewMode !== "sim") {
-                const readyInsp = ensureFsNetworkInspector();
-                if (readyInsp) {
-                  readyInsp.setData(fsCurrentTarget.topology || fsCurrentTarget.genome, getTaskSpec(fsCurrentTarget.taskId));
-                  paintFsLiveNetworkStep(fsSimState);
-                }
+              if (loadToken !== fsNetLoadToken || fullscreenModalEl.hidden || !fsCurrentTarget || fsViewMode === "sim") return;
+              const readyInsp = ensureFsNetworkInspector();
+              if (readyInsp) {
+                fsNetRenderedSig = "";
+                applyFsNetworkTarget(readyInsp, fsCurrentTarget);
+              } else {
+                showFsNetworkPlaceholder("Network inspector failed to initialize.", true);
               }
-            }).catch(() => {});
+            }).catch((err) => {
+              if (loadToken !== fsNetLoadToken || fullscreenModalEl.hidden || fsViewMode === "sim") return;
+              showFsNetworkPlaceholder(
+                `Unable to load network inspector${err && err.message ? `: ${err.message}` : "."}`,
+                true
+              );
+            });
           }
         }
       }
@@ -10463,32 +10635,7 @@
             paintFsLiveNetworkStep(stateObj);
             renderFullscreenTelemetry(true);
             // Upgrade strided card preview rollout to 50Hz + neural activations only when WASM is already warm or Split Live is active
-            if (
-              (stateObj.poseStride > 1 || !stateObj.stepActivations) &&
-              getEffectiveSimMode(taskId) === "client" &&
-              (DetClientAssets.isLoaded("wasm", "mujocoWasm") || fsViewMode === "split")
-            ) {
-              Promise.all([
-                fetchTaskRollout(taskId, genome, seed, maxSteps, null, true, true, envParams),
-                ensureSceneVisualResources(taskId, envParams),
-              ])
-                .then(([ro]) => {
-                  if (fsSimState === stateObj && ro && Array.isArray(ro.bodyPoses)) {
-                    const prevFrac = stateObj.bodyPoses.length > 1 ? stateObj.step / (stateObj.bodyPoses.length - 1) : 0;
-                    stateObj.bodyPoses = ro.bodyPoses;
-                    stateObj.poseStride = ro.poseStride || 1;
-                    stateObj.stepTrace = ro.stepTrace || null;
-                    stateObj.stepActivations = ro.stepActivations || null;
-                    stateObj.rolloutReturn = ro.return || stateObj.rolloutReturn;
-                    stateObj.terminated = Boolean(ro.terminated);
-                    stateObj.step = Math.min(ro.bodyPoses.length - 1, Math.round(prevFrac * Math.max(0, ro.bodyPoses.length - 1)));
-                    paintFsSceneFrame(stateObj);
-                    paintFsLiveNetworkStep(stateObj);
-                    renderFullscreenTelemetry(true);
-                  }
-                })
-                .catch(() => {});
-            }
+            upgradeFsSimRolloutForSplit(stateObj, false);
           } else {
             loadSceneFullscreenRollout(stateObj, seed, null);
           }
@@ -10505,24 +10652,7 @@
             renderFullscreenTelemetry(true);
             // Upgrade cached primary rollout with full 3D MuJoCo geoms + activations on demand
             if ((hasWebGL2 && !stateObj.geomPoses) || (!stateObj.stepActivations && fsViewMode === "split" && getEffectiveSimMode("halfcheetah") === "client")) {
-              const glReady = hasWebGL2 ? ensureAssetScript(ASSET_URLS.mujocoGl).catch(() => {}) : Promise.resolve();
-              Promise.all([
-                fetchTaskRollout("halfcheetah", genome, seed, maxSteps, null, true, hasWebGL2),
-                glReady,
-              ])
-                .then(([ro]) => {
-                  if (fsSimState === stateObj && ro) {
-                    if (ro.stepActivations) stateObj.stepActivations = ro.stepActivations;
-                    if (ro.geomSpecs && ro.geomPoses) {
-                      stateObj.geomSpecs = ro.geomSpecs;
-                      stateObj.geomPoses = ro.geomPoses;
-                      cached.primaryRollout.geomSpecs = ro.geomSpecs;
-                      cached.primaryRollout.geomPoses = ro.geomPoses;
-                      paintFsCheetahFrame(stateObj);
-                    }
-                  }
-                })
-                .catch(() => {});
+              upgradeFsSimRolloutForSplit(stateObj, false);
             } else if (hasWebGL2 && stateObj.geomPoses && !isFsGlReady()) {
               ensureAssetScript(ASSET_URLS.mujocoGl).then(() => {
                 if (fsSimState === stateObj) paintFsCheetahFrame(stateObj);
@@ -10827,8 +10957,12 @@
         ensureFullTaskSpecs().then(() => {
           fsTelemetryParts = null;
           if (!fullscreenModalEl.hidden && fsSimState) {
+            if (fsSimState.taskId === "halfcheetah" && hasGenomePayload(fsSimState.genome)) {
+              fsSimState.decoded = decodePolicyForTask(fsSimState.genome, fsSimState.taskId);
+            }
             renderFullscreenNudgeButtons(fsSimState.taskId);
             renderFullscreenTelemetry(true);
+            paintFsLiveNetworkStep(fsSimState);
           }
         }).catch(() => {});
         fullscreenNode = null;
@@ -10843,8 +10977,12 @@
         ensureFullTaskSpecs().then(() => {
           fsTelemetryParts = null;
           if (!fullscreenModalEl.hidden && fsSimState) {
+            if (fsSimState.taskId === "halfcheetah" && hasGenomePayload(fsSimState.genome)) {
+              fsSimState.decoded = decodePolicyForTask(fsSimState.genome, fsSimState.taskId);
+            }
             renderFullscreenNudgeButtons(fsSimState.taskId);
             renderFullscreenTelemetry(true);
+            paintFsLiveNetworkStep(fsSimState);
           }
         }).catch(() => {});
         fullscreenIdx = null;
@@ -10860,6 +10998,8 @@
       }
 
       function closeFullscreen() {
+        fsNetLoadToken += 1;
+        fsNetRenderedSig = "";
         stopFullscreenSim();
         clearFullscreenMediaUI();
         setFsCanvasMode(false);

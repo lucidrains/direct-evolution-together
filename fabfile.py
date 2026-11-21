@@ -549,18 +549,28 @@ def _run_remote_bash(conn: Connection, script: str) -> None:
     conn.run(f"printf '%s' {shlex.quote(_b64(script))} | base64 -d | bash -se")
 
 
+def _bash_wait_health(name: str, url: str, timeout_s: int) -> str:
+    # torch imports + db seeding make cold starts slow -> poll, don't assume
+    attempts = timeout_s * 2
+    return "\n".join([
+        f"for _i in $(seq 1 {attempts}); do",
+        f"  if out=$(curl -fsS --max-time 5 {url} 2>/dev/null); then echo \"{name}: $out\"; break; fi",
+        f"  if [ \"$_i\" -eq {attempts} ]; then",
+        f"    echo \"{name}: health check failed after {timeout_s}s\" >&2",
+        f"    curl -fsS --max-time 5 {url}",
+        "    exit 1",
+        "  fi",
+        "  sleep 0.5",
+        "done",
+    ])
+
+
 def _bash_health_check_snippet(cfg: DeployConfig) -> str:
     ws_url = shlex.quote(f"http://127.0.0.1:{cfg.ws_port}/health")
     http_url = shlex.quote(f"http://127.0.0.1:{cfg.http_port}/health/")
     return "\n".join([
-        f"for _i in $(seq 1 50); do "
-        f"if ws_out=$(curl -fsS {ws_url} 2>/dev/null); then echo \"ws: $ws_out\"; break; fi; "
-        f"[ \"$_i\" -eq 50 ] && curl -fsS {ws_url}; sleep 0.2; "
-        f"done",
-        f"for _i in $(seq 1 50); do "
-        f"if out=$(curl -fsS {http_url} 2>/dev/null); then echo \"http: $out\"; break; fi; "
-        f"[ \"$_i\" -eq 50 ] && curl -fsS {http_url}; sleep 0.2; "
-        f"done",
+        _bash_wait_health("ws", ws_url, 90),
+        _bash_wait_health("http", http_url, 60),
     ])
 
 
