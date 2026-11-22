@@ -589,6 +589,189 @@
       .progress-fill.counting {
         background: var(--gold);
       }
+      .phase-stepper {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        font-family: var(--mono);
+        font-size: 0.67rem;
+        color: var(--dim);
+      }
+      .phase-stepper[hidden] { display: none; }
+      .phase-step {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.28rem;
+        padding: 0.14rem 0.48rem;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .phase-step.is-done {
+        border-color: rgba(52, 211, 153, 0.35);
+        color: var(--ok);
+      }
+      .phase-step.is-active {
+        border-color: rgba(56, 189, 248, 0.55);
+        background: rgba(56, 189, 248, 0.12);
+        color: var(--text);
+        font-weight: 600;
+      }
+      .phase-sep {
+        color: var(--dim);
+        opacity: 0.6;
+        user-select: none;
+      }
+      .phase-brood-chip {
+        margin-left: auto;
+        padding: 0.12rem 0.46rem;
+        border-radius: 999px;
+        border: 1px solid rgba(245, 196, 81, 0.35);
+        background: rgba(245, 196, 81, 0.08);
+        color: var(--gold);
+        font-size: 0.65rem;
+        text-decoration: none;
+      }
+      .genome-grid.is-brood-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr));
+        gap: 0.75rem;
+      }
+      .brood-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.48rem;
+        padding: 0.58rem;
+        border-radius: 11px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .brood-group.is-picked {
+        border-color: rgba(52, 211, 153, 0.42);
+      }
+      .brood-group.jump-focus {
+        border-color: var(--gold);
+        box-shadow: 0 0 0 2px rgba(245, 196, 81, 0.28);
+      }
+      .brood-group-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.45rem;
+        font-family: var(--mono);
+        font-size: 0.69rem;
+        color: var(--muted);
+      }
+      .brood-group-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        color: var(--text);
+        font-weight: 600;
+      }
+      .brood-op-tag {
+        padding: 0.08rem 0.36rem;
+        border-radius: 4px;
+        background: rgba(56, 189, 248, 0.12);
+        color: #7dd3fc;
+        font-size: 0.62rem;
+        font-weight: 500;
+      }
+      .brood-status-pill {
+        padding: 0.08rem 0.42rem;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        font-size: 0.63rem;
+        color: var(--dim);
+      }
+      .brood-status-pill.is-decided {
+        border-color: rgba(52, 211, 153, 0.4);
+        color: var(--ok);
+      }
+      .brood-siblings {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.5rem;
+      }
+      .brood-siblings.is-multi {
+        grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+      }
+      .brood-cand {
+        display: flex;
+        flex-direction: column;
+        gap: 0.36rem;
+        padding: 0.34rem;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        transition: border-color 0.15s ease, background 0.15s ease;
+      }
+      .brood-cand.is-leader {
+        border-color: rgba(52, 211, 153, 0.48);
+      }
+      .brood-cand.is-mine {
+        border-color: rgba(56, 189, 248, 0.72);
+        background: rgba(56, 189, 248, 0.06);
+      }
+      .brood-cand .card-media {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border-radius: 6px;
+        overflow: hidden;
+        background: #09090b;
+      }
+      .brood-cand .card-media canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .brood-pick-btn {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.35rem;
+        width: 100%;
+        min-height: 34px;
+        padding: 0.28rem 0.5rem;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-weight: 500;
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+      .brood-pick-btn:hover:not(:disabled) {
+        border-color: rgba(56, 189, 248, 0.6);
+        background: rgba(56, 189, 248, 0.1);
+      }
+      .brood-pick-btn.active-pick {
+        border-color: #38bdf8;
+        background: rgba(56, 189, 248, 0.18);
+        color: #e0f2fe;
+      }
+      .brood-pick-btn .cnt {
+        padding: 0.04rem 0.36rem;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.07);
+        font-variant-numeric: tabular-nums;
+      }
+      @media (max-width: 640px) {
+        .genome-grid.is-brood-grid {
+          grid-template-columns: 1fr;
+        }
+        .brood-pick-btn {
+          min-height: 38px;
+          font-size: 0.74rem;
+        }
+      }
       .grid-toolbar {
         display: flex;
         align-items: center;
@@ -2040,12 +2223,13 @@
             <form id="empty-goal-form" class="private-empty-form">
               <div class="private-goal-row">
                 <select id="empty-task-select" class="task-select" style="flex:0 0 215px;" aria-label="Environment">
+                  <option value="image" {% if initial_task == "image" %}selected{% endif %}>Image (Picbreeder)</option>
+                  <option value="lunarlander" {% if initial_task == "lunarlander" %}selected{% endif %}>LunarLander-v3 (Box2D · PopuLoRA)</option>
                   <option value="microduck" {% if initial_task == "microduck" %}selected{% endif %}>Microduck (Biped Gait · PopuLoRA)</option>
                   <option value="unitree_go2" {% if initial_task == "unitree_go2" %}selected{% endif %}>Unitree Go2 (3D Quadruped · PopuLoRA)</option>
                   <option value="so101" {% if initial_task == "so101" %}selected{% endif %}>SO-101 Arm (Cube Pick &amp; Lift · PopuLoRA)</option>
                   <option value="halfcheetah" {% if initial_task == "halfcheetah" %}selected{% endif %}>HalfCheetah (MuJoCo Gait)</option>
                   <option value="cartpole" {% if initial_task == "cartpole" %}selected{% endif %}>CartPole (Control)</option>
-                  <option value="image" {% if initial_task == "image" %}selected{% endif %}>Image (Picbreeder)</option>
                   <option value="external" {% if initial_task == "external" %}selected{% endif %}>Custom Worker Script</option>
                 </select>
                 <input id="empty-goal-input" type="text" placeholder="Goal e.g. Neon Orchid, HalfCheetah..." maxlength="32" />
@@ -2088,6 +2272,11 @@
                     <input id="empty-crossover-input" class="pop-input" type="number" min="0" max="1" step="0.05" value="{{ initial_crossover_rate|default:'0.75' }}" aria-label="Crossover rate" />
                     <span class="ga-param-hint">Two-parent neuron mixing</span>
                   </label>
+                  <label class="ga-param-card" title="Tackett &amp; Carmi (1994) brood selection: generate N sibling children per bred slot and vote on the winner before advancing (1 = off, 2–8 = extra brood phase)">
+                    <span class="ga-param-top"><span>Brood size</span><span class="ga-param-range">1–8</span></span>
+                    <input id="empty-brood-input" class="pop-input" type="number" min="1" max="8" step="1" value="{{ initial_brood_size|default:1 }}" aria-label="Brood size" />
+                    <span class="ga-param-hint">1 = off &middot; 2+ sibling vote phase</span>
+                  </label>
                 </div>
               </div>
             </form>
@@ -2106,6 +2295,7 @@
             </div>
 
             <div class="round-banner">
+              <div id="phase-stepper" class="phase-stepper" aria-label="Generation phases" hidden></div>
               <div class="round-banner-top">
                 <span id="round-vote-text" aria-busy="true">
                   <span class="skel-bar" style="--skel-w: 148px; --skel-h: 9px;" aria-hidden="true"></span>
@@ -2279,6 +2469,14 @@
         rel="noopener noreferrer"
         title="Secretan et al. (2008) — Picbreeder: Evolving pictures collaboratively online (CHI '08)"
       >Picbreeder ’08 &nearr;</a>
+      <span style="opacity:0.45;" aria-hidden="true">&middot;</span>
+      <a
+        class="paper-link"
+        href="https://doi.org/10.1109/ICEC.1994.350030"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Tackett &amp; Carmi (1994) — The unique implications of brood selection for genetic programming (IEEE ICEC '94)"
+      >Brood Selection ’94 &nearr;</a>
     </footer>
 
     <div id="dl-toast" class="toast" hidden>
@@ -2381,12 +2579,13 @@
         <label class="room-field">
           <span>Environment</span>
           <select id="new-room-task" class="task-select">
+            <option value="image">Image (Picbreeder CPPN)</option>
+            <option value="lunarlander">LunarLander-v3 (Box2D · PopuLoRA)</option>
             <option value="microduck">Microduck (Biped Gait · PopuLoRA)</option>
             <option value="unitree_go2">Unitree Go2 (3D Quadruped · PopuLoRA)</option>
             <option value="so101">SO-101 Arm (Cube Pick &amp; Lift · PopuLoRA)</option>
             <option value="halfcheetah">HalfCheetah (MuJoCo Gait · HyperNEAT)</option>
             <option value="cartpole">CartPole (Continuous Control · HyperNEAT)</option>
-            <option value="image">Image (Picbreeder CPPN)</option>
             <option value="external">Custom Researcher Script (External Worker)</option>
           </select>
         </label>
@@ -2441,7 +2640,7 @@
         <details class="room-ga-details">
           <summary>
             <span>Genetic algorithm parameters</span>
-            <span class="room-field-hint">quorum, per-user cap, &sigma;, elite, crossover</span>
+            <span class="room-field-hint">quorum, per-user cap, &sigma;, elite, crossover, brood</span>
           </summary>
           <div class="room-ga-grid">
             <label class="ga-param-card" title="Total votes across the room required before a round advances (1–1024)">
@@ -2460,9 +2659,13 @@
               <span class="ga-param-top"><span>Elite fraction</span><span class="ga-param-range">0.00–0.50</span></span>
               <input id="new-room-elite" class="pop-input" type="number" min="0" max="0.5" step="0.05" value="{{ initial_elite_frac|default:'0.20' }}" aria-label="New room elite fraction" />
             </label>
-            <label class="ga-param-card is-wide" title="Probability of neuron-unit parent mixing vs asexual mutation (0.00–1.00)">
+            <label class="ga-param-card" title="Probability of neuron-unit parent mixing vs asexual mutation (0.00–1.00)">
               <span class="ga-param-top"><span>Crossover rate</span><span class="ga-param-range">0.00–1.00</span></span>
               <input id="new-room-crossover" class="pop-input" type="number" min="0" max="1" step="0.05" value="{{ initial_crossover_rate|default:'0.75' }}" aria-label="New room crossover rate" />
+            </label>
+            <label class="ga-param-card" title="Tackett &amp; Carmi (1994) brood selection: offspring generated per bred slot for sibling voting (1 = off, 2–8 = active)">
+              <span class="ga-param-top"><span>Brood size</span><span class="ga-param-range">1–8</span></span>
+              <input id="new-room-brood" class="pop-input" type="number" min="1" max="8" step="1" value="{{ initial_brood_size|default:1 }}" aria-label="New room brood size" />
             </label>
           </div>
         </details>
@@ -2500,6 +2703,7 @@
     {{ initial_mut_sigma|default:"0.30"|json_script:"det-initial-sigma" }}
     {{ initial_elite_frac|default:"0.20"|json_script:"det-initial-elite" }}
     {{ initial_crossover_rate|default:"0.75"|json_script:"det-initial-crossover" }}
+    {{ initial_brood_size|default:1|json_script:"det-initial-brood" }}
     {{ task_specs|json_script:"det-task-specs" }}
     {{ crowd_config|json_script:"det-crowd-config" }}
     {{ mujoco_wasm_url|default:""|json_script:"det-mujoco-wasm-url" }}
@@ -2510,6 +2714,7 @@
       const ASSET_URLS = {
         cppnCore: `${basePath}/assets/cppn_core.js?v=${assetVer}`,
         cheetahRenderer: `${basePath}/assets/cheetah_renderer.js?v=${assetVer}`,
+        lunarRenderer: `${basePath}/assets/lunar_renderer.js?v=${assetVer}`,
         sceneCache: `${basePath}/assets/scene_cache.js?v=${assetVer}`,
         mujocoGl: `${basePath}/assets/mujoco_gl.js?v=${assetVer}`,
         networkViz: `${basePath}/assets/network_viz.js?v=${assetVer}`,
@@ -2845,6 +3050,14 @@
         return ensureAssetScript(ASSET_URLS.cheetahRenderer, "cheetahRenderer");
       }
 
+      function ensureLunarRenderer() {
+        if (window.DetLunarRenderer) {
+          DetClientAssets.markLoaded("scripts", "lunarRenderer", { url: ASSET_URLS.lunarRenderer, value: true });
+          return Promise.resolve(true);
+        }
+        return ensureAssetScript(ASSET_URLS.lunarRenderer, "lunarRenderer");
+      }
+
       function ensureSceneCache() {
         if (window.DetSceneCache) {
           DetClientAssets.markLoaded("scripts", "sceneCache", { url: ASSET_URLS.sceneCache, value: true });
@@ -2959,6 +3172,7 @@
       const initialMutSigma = Math.max(0.05, Math.min(1.0, Number(JSON.parse(document.getElementById("det-initial-sigma").textContent)) || 0.30));
       const initialEliteFrac = Math.max(0.0, Math.min(0.5, Number(JSON.parse(document.getElementById("det-initial-elite").textContent)) ?? 0.20));
       const initialCrossoverRate = Math.max(0.0, Math.min(1.0, Number(JSON.parse(document.getElementById("det-initial-crossover").textContent)) ?? 0.75));
+      const initialBroodSize = Math.max(1, Math.min(8, Number(JSON.parse(document.getElementById("det-initial-brood").textContent)) || 1));
       const csrfToken = "{{ csrf_token }}";
       const CANVAS_SIZE = 64;
       const CONTROL_CARD_SIZE = 160;
@@ -3141,7 +3355,27 @@
         return String(spec.scene_id || taskId);
       }
 
-      function evalTaskCacheKey(taskId, envParams = null) {
+      function lunarEvalSeedsForGen(gen) {
+        const s0 = (Math.max(0, Number(gen) || 0) * 3) % 60;
+        return [s0, s0 + 1, s0 + 2];
+      }
+
+      function goalEvalSeeds(taskId, goal = null) {
+        if (taskId === "lunarlander") {
+          const g = goal || goalsByName.get(activeGoalName) || null;
+          return lunarEvalSeedsForGen(g ? g.generation : 0);
+        }
+        return null;
+      }
+
+      function evalTaskCacheKey(taskId, envParams = null, evalSeeds = null) {
+        if (taskId === "lunarlander") {
+          const sKey = Array.isArray(evalSeeds) && evalSeeds.length ? evalSeeds.join(",") : "0,1,2";
+          const ep = envParams && typeof envParams === "object"
+            ? `${envParams.gravity ?? -10}:${envParams.enable_wind ? 1 : 0}:${envParams.wind_power ?? 15}:${envParams.turbulence_power ?? 1.5}`
+            : "";
+          return ep ? `${taskId}@${sKey}@${ep}` : `${taskId}@${sKey}`;
+        }
         if (!isSceneTask(taskId)) return taskId;
         const sceneKey = resolveSceneKey(taskId, envParams);
         return sceneKey && sceneKey !== taskId ? `${taskId}@${sceneKey}` : taskId;
@@ -4546,9 +4780,10 @@
 
       const simInFlightBatches = new Map();
 
-      function getCachedControlEntry(taskId, genome, envParams = null) {
+      function getCachedControlEntry(taskId, genome, envParams = null, evalSeeds = null) {
         const fp = genomeFingerprint(genome);
-        const tKey = evalTaskCacheKey(taskId, envParams);
+        const effSeeds = evalSeeds || goalEvalSeeds(taskId);
+        const tKey = evalTaskCacheKey(taskId, envParams, effSeeds);
         const key = `${tKey}:${fp}`;
         if (simResultCache.has(key)) return simResultCache.get(key);
         if (taskId === "cartpole" && getEffectiveSimMode("cartpole") === "client") {
@@ -4566,9 +4801,10 @@
         const spec = getTaskSpec(taskId);
         const effMode = getEffectiveSimMode(taskId);
         const allowServer = Array.isArray(spec.sim_modes) && spec.sim_modes.includes("server");
-        const evalSeeds = Array.isArray(seeds) && seeds.length ? seeds : (spec.eval_seeds || [0, 1]);
-        const isDefault = !seeds;
-        const tKey = evalTaskCacheKey(taskId, envParams);
+        const autoSeeds = (!seeds && taskId === "lunarlander") ? goalEvalSeeds(taskId) : null;
+        const evalSeeds = Array.isArray(seeds) && seeds.length ? seeds : (autoSeeds || spec.eval_seeds || [0, 1]);
+        const isDefault = !seeds || Boolean(autoSeeds);
+        const tKey = evalTaskCacheKey(taskId, envParams, evalSeeds);
 
         const wasmTask = isWasmSimTask(taskId);
         if (isDefault && effMode === "client" && wasmTask) {
@@ -5293,6 +5529,65 @@
             return renderCartpoleStaticCanvas(node, canvas, LINEAGE_CANVAS_SIZE);
           },
         },
+        lunarlander: {
+          preload(genomes) {
+            const g = goalsByName.get(activeGoalName) || null;
+            return Promise.all([
+              ensureLunarRenderer().catch(() => {}),
+              evaluateControlGenomes("lunarlander", genomes || [], null, g ? g.env_params : null).catch(() => []),
+            ]).then(([, entries]) => entries);
+          },
+          renderCard(genome, canvas, evalEntry) {
+            canvas.width = CONTROL_CARD_SIZE;
+            canvas.height = CONTROL_CARD_SIZE;
+            const spec = getTaskSpec("lunarlander");
+            const maxSteps = spec.max_steps || 1000;
+            if (window.DetLunarRenderer && evalEntry && evalEntry.primary_rollout) {
+              return window.DetLunarRenderer.renderLunarStaticCanvas(
+                canvas,
+                evalEntry.primary_rollout,
+                evalEntry.summary || null,
+                maxSteps
+              );
+            }
+            const ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#090a10";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ensureLunarRenderer().then(() => {
+              if (canvas.isConnected && window.DetLunarRenderer && evalEntry && evalEntry.primary_rollout) {
+                window.DetLunarRenderer.renderLunarStaticCanvas(
+                  canvas,
+                  evalEntry.primary_rollout,
+                  evalEntry.summary || null,
+                  maxSteps
+                );
+              }
+            }).catch(() => {});
+          },
+          renderLineageNode(node, canvas) {
+            canvas.width = LINEAGE_CANVAS_SIZE;
+            canvas.height = LINEAGE_CANVAS_SIZE;
+            const cached = getControlLineageEntry("lunarlander", node);
+            if (window.DetLunarRenderer && cached && cached.primary_rollout) {
+              return window.DetLunarRenderer.renderLunarLineageThumb(
+                canvas,
+                cached.primary_rollout,
+                cached.summary || null
+              );
+            }
+            const ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#090a10";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ensureLunarRenderer().then(() => {
+              if (canvas.isConnected && window.DetLunarRenderer) {
+                const c2 = getControlLineageEntry("lunarlander", node);
+                if (c2 && c2.primary_rollout) {
+                  window.DetLunarRenderer.renderLunarLineageThumb(canvas, c2.primary_rollout, c2.summary || null);
+                }
+              }
+            }).catch(() => {});
+          },
+        },
         halfcheetah: {
           preload(genomes) {
             return Promise.all([
@@ -5419,7 +5714,7 @@
       function isCardVisualReady(taskId, evalEntry, envParams = null) {
         if (taskId === "image" || taskId === "cartpole") return true;
         if (taskId === "external") return Boolean(evalEntry);
-        if (taskId === "halfcheetah") return Boolean(evalEntry && evalEntry.primary_rollout);
+        if (taskId === "halfcheetah" || taskId === "lunarlander") return Boolean(evalEntry && evalEntry.primary_rollout);
         if (isSceneTask(taskId)) {
           const sKey = resolveSceneKey(taskId, envParams);
           return Boolean(hasSceneReplayPoses(evalEntry) && sceneVisualPackCache.has(sKey));
@@ -5823,6 +6118,7 @@
       const newRoomSigmaInput = document.getElementById("new-room-sigma");
       const newRoomEliteInput = document.getElementById("new-room-elite");
       const newRoomCrossoverInput = document.getElementById("new-room-crossover");
+      const newRoomBroodInput = document.getElementById("new-room-brood");
       const seedFileInput = document.getElementById("seed-file-input");
       const seedDropzoneEl = document.getElementById("seed-dropzone");
       const seedDropzoneMainEl = document.getElementById("seed-dropzone-main");
@@ -5837,6 +6133,7 @@
       const newRoomCancelBtn = document.getElementById("new-room-cancel");
       const activeGoalTitle = document.getElementById("active-goal-title");
       const activeGoalGen = document.getElementById("active-goal-gen");
+      const phaseStepperEl = document.getElementById("phase-stepper");
       const roundVoteText = document.getElementById("round-vote-text");
       const userVoteBudgetEl = document.getElementById("user-vote-budget");
       const throttleBannerEl = document.getElementById("throttle-banner");
@@ -5867,6 +6164,7 @@
       const emptySigmaInput = document.getElementById("empty-sigma-input");
       const emptyEliteInput = document.getElementById("empty-elite-input");
       const emptyCrossoverInput = document.getElementById("empty-crossover-input");
+      const emptyBroodInput = document.getElementById("empty-brood-input");
       const newRoomEnvHyperparamsEl = document.getElementById("new-room-env-hyperparams");
       const emptyEnvHyperparamsEl = document.getElementById("empty-env-hyperparams");
       const individualsPanelEl = document.getElementById("individuals-panel");
@@ -6087,6 +6385,10 @@
 
       function parseCrossoverValue(inputEl, fallback = initialCrossoverRate) {
         return parseClampedFloat(inputEl, 0.0, 1.0, fallback);
+      }
+
+      function parseBroodSizeValue(inputEl, fallback = initialBroodSize) {
+        return parseClampedInt(inputEl, 1, 8, fallback);
       }
 
       const TAB_CID_KEY = "det_tab_cid";
@@ -6724,8 +7026,80 @@
         }));
       }
 
+      const myBroodVotes = new Map();
+
       function voteKey(goalName, generation, idx) {
         return `${goalName}:${generation}:${idx}`;
+      }
+
+      function broodVoteKey(goalName, generation, broodIdx) {
+        return `${goalName}:${generation}:b${broodIdx}`;
+      }
+
+      function isBroodPhaseGoal(goal) {
+        return Boolean(
+          goal &&
+          goal.phase === "brood" &&
+          goal.brood &&
+          Array.isArray(goal.brood.groups) &&
+          goal.brood.groups.length > 0
+        );
+      }
+
+      function goalPhaseList(goal) {
+        if (goal && Array.isArray(goal.phases) && goal.phases.length > 0) return goal.phases;
+        const list = [];
+        if (goal && goal.sim_phase_enabled) list.push("simulating");
+        list.push("voting");
+        if (goal && ((Number(goal.brood_size) || 1) > 1 || goal.phase === "brood")) list.push("brood");
+        return list;
+      }
+
+      const PHASE_LABELS = {
+        simulating: "Simulate",
+        voting: "Select Parents",
+        brood: "Pick Brood",
+      };
+
+      function renderPhaseStepper(goal) {
+        if (!phaseStepperEl) return;
+        if (!goal) {
+          phaseStepperEl.hidden = true;
+          return;
+        }
+        const phases = goalPhaseList(goal);
+        if (phases.length <= 1) {
+          phaseStepperEl.hidden = true;
+          return;
+        }
+        const curPhase = goal.evolving ? phases[phases.length - 1] : (goal.phase || phases[0]);
+        const curIdx = Math.max(0, phases.indexOf(curPhase));
+        phaseStepperEl.replaceChildren();
+        phases.forEach((ph, idx) => {
+          if (idx > 0) {
+            const sep = document.createElement("span");
+            sep.className = "phase-sep";
+            sep.textContent = "\u2192";
+            phaseStepperEl.appendChild(sep);
+          }
+          const pill = document.createElement("span");
+          pill.className = "phase-step" + (idx < curIdx ? " is-done" : (idx === curIdx ? " is-active" : ""));
+          const label = PHASE_LABELS[ph] || ph;
+          pill.textContent = `${idx + 1}. ${label}`;
+          phaseStepperEl.appendChild(pill);
+        });
+        const bSize = Number((goal.brood && goal.brood.brood_size) || goal.brood_size || 1);
+        if (bSize > 1) {
+          const chip = document.createElement("a");
+          chip.className = "phase-brood-chip";
+          chip.href = "https://doi.org/10.1109/ICEC.1994.350030";
+          chip.target = "_blank";
+          chip.rel = "noopener noreferrer";
+          chip.title = "Tackett & Carmi (1994) brood selection — vote on the strongest sibling per bred child";
+          chip.textContent = `brood \u00d7${bSize}`;
+          phaseStepperEl.appendChild(chip);
+        }
+        phaseStepperEl.hidden = false;
       }
 
       function syncGoalDeadline(goal) {
@@ -6917,16 +7291,25 @@
 
         const showEvolveNow = canEvolveNow && isConnected && !goal.evolving;
         if (evolveNowBtn) {
+          if (!evolveNowBtn.dataset.baseLabel) {
+            evolveNowBtn.dataset.baseLabel = evolveNowBtn.textContent || "";
+          }
           evolveNowBtn.hidden = !showEvolveNow;
           evolveNowBtn.disabled = !showEvolveNow;
+          evolveNowBtn.textContent = isBroodPhaseGoal(goal)
+            ? "Finalize brood"
+            : evolveNowBtn.dataset.baseLabel;
         }
+        renderPhaseStepper(goal);
         syncAutoEvolveUI(goal);
 
         if (goal.evolving || goal.phase === "evolving") {
           roundVoteText.textContent = goal.auto_evolve
             ? `PopuLoRA evolving Gen ${goal.generation + 1}...`
-            : progressLabel;
-          roundTimerEl.textContent = "Evolving next generation...";
+            : ((Number(goal.brood_size) || 1) > 1 ? `Generating broods for Gen ${goal.generation + 1}...` : progressLabel);
+          roundTimerEl.textContent = (Number(goal.brood_size) || 1) > 1
+            ? "Breeding sibling broods..."
+            : "Evolving next generation...";
           roundTimerEl.className = "round-timer";
           roundProgressEl.style.width = "100%";
           roundProgressEl.classList.add("counting");
@@ -6934,12 +7317,16 @@
           return false;
         }
 
+        const phases = goalPhaseList(goal);
+        const phasePos = Math.max(0, phases.indexOf(goal.phase || phases[0])) + 1;
+        const phasePrefix = phases.length > 1 ? `Phase ${phasePos}/${phases.length} \u00b7 ` : "";
+
         if (goal.sim_phase_enabled && goal.phase === "simulating") {
           const simTotal = Math.max(1, Number(goal.sim_total || popLen || 1));
           const { verified: crowdVerified } = countGoalCrowdProgress(goal);
           const simDone = Math.min(simTotal, crowdVerified);
           const simPct = Math.max(4, Math.min(100, (simDone / simTotal) * 100));
-          roundVoteText.textContent = `Phase 1 \u00b7 Simulating (${simDone}/${simTotal} verified)`;
+          roundVoteText.textContent = `${phasePrefix}Simulating (${simDone}/${simTotal} verified)`;
           roundTimerEl.textContent = goal.auto_evolve
             ? "Auto-evolving once verified..."
             : "Voting unlocks when verified";
@@ -6950,13 +7337,48 @@
           return false;
         }
 
-        const phasePrefix = goal.sim_phase_enabled ? "Phase 2 \u00b7 " : "";
+        if (isBroodPhaseGoal(goal)) {
+          const totalBroods = goal.brood.groups.length;
+          const reqBroods = Math.max(1, Number(goal.brood_required || goal.brood.required || totalBroods));
+          const decidedBroods = typeof goal.brood_decided === "number"
+            ? goal.brood_decided
+            : goal.brood.groups.filter((grp) => grp.votes && Number(grp.votes.total || 0) > 0).length;
+          if (countdownActive) {
+            const remMs = Math.max(0, goal._deadlinePerfMs - performance.now());
+            const pct = Math.max(0, Math.min(100, (remMs / durMs) * 100));
+            roundVoteText.textContent = `${phasePrefix}Brood selection ready (${decidedBroods}/${totalBroods} broods decided)`;
+            roundTimerEl.textContent = remMs <= 50
+              ? `Committing Gen ${goal.generation + 1}...`
+              : `Committing winners in ${(remMs / 1000).toFixed(1)}s`;
+            roundTimerEl.className = "round-timer";
+            roundProgressEl.style.width = remMs <= 50 ? "100%" : `${pct}%`;
+            roundProgressEl.classList.add("counting");
+            if (remMs > 0) {
+              startRoundStatusTimer();
+              return true;
+            }
+            stopRoundStatusTimer();
+            return false;
+          }
+          const remBroods = Math.max(0, reqBroods - decidedBroods);
+          const pct = Math.max(0, Math.min(100, (decidedBroods / reqBroods) * 100));
+          roundVoteText.textContent = `${phasePrefix}Brood selection: ${decidedBroods} / ${reqBroods} broods decided`;
+          roundTimerEl.textContent = remBroods === 1
+            ? "Pick 1 more brood winner"
+            : `Pick ${remBroods} more brood winners`;
+          roundTimerEl.className = "round-timer waiting";
+          roundProgressEl.style.width = `${pct}%`;
+          roundProgressEl.classList.remove("counting");
+          stopRoundStatusTimer();
+          return false;
+        }
+
         if (countdownActive) {
           const remMs = Math.max(0, goal._deadlinePerfMs - performance.now());
           const pct = Math.max(0, Math.min(100, (remMs / durMs) * 100));
           roundVoteText.textContent = `${phasePrefix}Countdown active (${votedCandidates} cards, ${totalVotes} votes)`;
           roundTimerEl.textContent = remMs <= 50
-            ? "Evolving next generation..."
+            ? ((Number(goal.brood_size) || 1) > 1 ? "Breeding sibling broods..." : "Evolving next generation...")
             : `Advancing in ${(remMs / 1000).toFixed(1)}s`;
           roundTimerEl.className = "round-timer";
           roundProgressEl.style.width = remMs <= 50 ? "100%" : `${pct}%`;
@@ -6995,8 +7417,126 @@
         return Number.isNaN(parsed) ? fallback : parsed;
       }
 
+      function syncMyBroodVotesFromGoal(goal) {
+        if (!goal) return;
+        const prefix = `${goal.name}:`;
+        const activePrefix = `${goal.name}:${goal.generation}:`;
+        for (const key of Array.from(myBroodVotes.keys())) {
+          if (key.startsWith(prefix) && !key.startsWith(activePrefix)) {
+            myBroodVotes.delete(key);
+          }
+        }
+        if (!isBroodPhaseGoal(goal)) return;
+        const me = (savedUsername || nameInput.value || "").trim();
+        if (!me) return;
+        goal.brood.groups.forEach((grp, bi) => {
+          const k = broodVoteKey(goal.name, goal.generation, bi);
+          const voters = grp && grp.votes && Array.isArray(grp.votes.voters) ? grp.votes.voters : [];
+          let foundCi = -1;
+          for (let ci = 0; ci < voters.length; ci++) {
+            if (Array.isArray(voters[ci]) && voters[ci].includes(me)) {
+              foundCi = ci;
+              break;
+            }
+          }
+          if (foundCi >= 0) myBroodVotes.set(k, foundCi);
+          else myBroodVotes.delete(k);
+        });
+      }
+
+      function myBroodPick(goal, broodIdx) {
+        const k = broodVoteKey(goal.name, goal.generation, broodIdx);
+        if (myBroodVotes.has(k)) return myBroodVotes.get(k);
+        const grp = isBroodPhaseGoal(goal) ? goal.brood.groups[broodIdx] : null;
+        const me = (savedUsername || nameInput.value || "").trim();
+        if (!grp || !me || !grp.votes || !Array.isArray(grp.votes.voters)) return -1;
+        for (let ci = 0; ci < grp.votes.voters.length; ci++) {
+          if (Array.isArray(grp.votes.voters[ci]) && grp.votes.voters[ci].includes(me)) return ci;
+        }
+        return -1;
+      }
+
+      function sendBroodVote(goal, broodIdx, candIdx) {
+        if (!socket || socket.readyState !== WebSocket.OPEN || !isBroodPhaseGoal(goal) || goal.evolving) return;
+        const k = broodVoteKey(goal.name, goal.generation, broodIdx);
+        const prev = myBroodPick(goal, broodIdx);
+        if (prev === candIdx) myBroodVotes.delete(k);
+        else myBroodVotes.set(k, candIdx);
+        updateBroodCards();
+        socket.send(JSON.stringify({
+          type: "cast_brood_vote",
+          goal: goal.name,
+          generation: goal.generation,
+          brood_index: broodIdx,
+          candidate_index: candIdx,
+        }));
+      }
+
+      function updateBroodCards() {
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal || !isBroodPhaseGoal(goal)) return;
+        const groups = goal.brood.groups;
+        let myPickCount = 0;
+        let unpickedCount = 0;
+        const groupEls = genomeGridEl.querySelectorAll(".brood-group[data-brood-idx]");
+        groupEls.forEach((groupEl) => {
+          const bi = Number(groupEl.dataset.broodIdx);
+          const grp = groups[bi];
+          if (!grp) return;
+          const v = grp.votes || { counts: [], voters: [], total: 0, leader: -1 };
+          const mine = myBroodPick(goal, bi);
+          const hasPick = mine >= 0;
+          if (hasPick) myPickCount += 1;
+          else unpickedCount += 1;
+          groupEl.classList.toggle("is-picked", hasPick);
+          if (gridFilter === "unvoted") {
+            groupEl.classList.toggle("voted-done", hasPick && !groupEl.hidden);
+          } else {
+            groupEl.classList.remove("voted-done");
+          }
+          const pill = groupEl.querySelector(".brood-status-pill");
+          if (pill) {
+            const decided = Number(v.total || 0) > 0;
+            pill.classList.toggle("is-decided", decided);
+            pill.textContent = decided ? `decided (${v.total})` : "pick 1";
+          }
+          const candEls = groupEl.querySelectorAll(".brood-cand[data-cand-idx]");
+          candEls.forEach((candEl) => {
+            const ci = Number(candEl.dataset.candIdx);
+            const cnt = Array.isArray(v.counts) ? Number(v.counts[ci] || 0) : 0;
+            const voters = Array.isArray(v.voters) && Array.isArray(v.voters[ci]) ? v.voters[ci] : [];
+            const isMine = mine === ci;
+            const isLeader = Number(v.total || 0) > 0 && Number(v.leader) === ci;
+            candEl.classList.toggle("is-mine", isMine);
+            candEl.classList.toggle("is-leader", isLeader);
+            const btn = candEl.querySelector(".brood-pick-btn");
+            if (btn) {
+              const letter = String.fromCharCode(65 + ci);
+              btn.classList.toggle("active-pick", isMine);
+              btn.disabled = !isConnected || goal.evolving;
+              const lbl = btn.querySelector(".pick-lbl");
+              const cntEl = btn.querySelector(".cnt");
+              if (lbl) lbl.textContent = isMine ? `Selected ${letter} \u2713` : `Select ${letter}`;
+              if (cntEl) cntEl.textContent = String(cnt);
+              const tip = voters.length > 0 ? `Picked by: ${voters.join(", ")}` : `Pick sibling ${letter} for next generation`;
+              btn.title = tip;
+            }
+          });
+        });
+        if (userVoteBudgetEl) {
+          userVoteBudgetEl.textContent = `Your picks: ${myPickCount} / ${groups.length}`;
+          userVoteBudgetEl.classList.toggle("at-cap", myPickCount >= groups.length);
+        }
+        tabAllCountEl.textContent = String(groups.length);
+        tabUnvotedCountEl.textContent = String(unpickedCount);
+        if (nextUnvotedBtn) nextUnvotedBtn.disabled = unpickedCount === 0;
+        renderRoundStatus();
+      }
+
       function syncMyVotesFromGoal(goal) {
-        if (!goal || !Array.isArray(goal.votes)) return;
+        if (!goal) return;
+        syncMyBroodVotesFromGoal(goal);
+        if (!Array.isArray(goal.votes)) return;
         const prefix = `${goal.name}:`;
         const activePrefix = `${goal.name}:${goal.generation}:`;
         for (const key of Array.from(myVotes.keys())) {
@@ -7034,6 +7574,25 @@
       function applyCardFilter(refilter) {
         const goal = goalsByName.get(activeGoalName);
         if (!goal || goal.genomes_loaded === false) return;
+        if (isBroodPhaseGoal(goal)) {
+          const groupEls = genomeGridEl.querySelectorAll(".brood-group[data-brood-idx]");
+          groupEls.forEach((groupEl) => {
+            const bi = Number(groupEl.dataset.broodIdx);
+            const picked = myBroodPick(goal, bi) >= 0;
+            if (gridFilter === "unvoted") {
+              if (refilter) {
+                groupEl.hidden = picked;
+                groupEl.classList.remove("voted-done");
+              } else {
+                groupEl.classList.toggle("voted-done", picked && !groupEl.hidden);
+              }
+            } else {
+              groupEl.hidden = false;
+              groupEl.classList.remove("voted-done");
+            }
+          });
+          return;
+        }
         const cards = genomeGridEl.querySelectorAll(".genome-card[data-idx]");
         cards.forEach((card, domPos) => {
           const idx = cardGoalIndex(card, domPos);
@@ -7061,6 +7620,26 @@
       function scrollToNextUnvoted() {
         const goal = goalsByName.get(activeGoalName);
         if (!goal || goal.genomes_loaded === false) return;
+        if (isBroodPhaseGoal(goal)) {
+          const groups = Array.from(genomeGridEl.querySelectorAll(".brood-group[data-brood-idx]"));
+          if (gridFilter === "unvoted") applyCardFilter(true);
+          const unpickedPos = [];
+          groups.forEach((el, pos) => {
+            if (myBroodPick(goal, Number(el.dataset.broodIdx)) < 0) unpickedPos.push(pos);
+          });
+          if (!unpickedPos.length) return;
+          let targetPos = unpickedPos.find((pos) => pos > lastJumpIdx);
+          if (targetPos === undefined) targetPos = unpickedPos[0];
+          lastJumpIdx = targetPos;
+          const targetEl = groups[targetPos];
+          if (!targetEl) return;
+          targetEl.hidden = false;
+          targetEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          groups.forEach((g) => g.classList.remove("jump-focus"));
+          targetEl.classList.add("jump-focus");
+          setTimeout(() => targetEl.classList.remove("jump-focus"), 1100);
+          return;
+        }
         if (isWindowedGrid(goal)) {
           const allVisible = getGoalOrderedIndices(goal, false, true);
           const unvoted = allVisible.filter((idx) => !hasMyVote(goal, idx));
@@ -7117,6 +7696,10 @@
       function updateVoteCards() {
         const goal = goalsByName.get(activeGoalName);
         if (!goal) return;
+        if (isBroodPhaseGoal(goal)) {
+          updateBroodCards();
+          return;
+        }
         const maxVotesPerUser = goal.max_votes_per_user || initialMaxVotes || 5;
         const activeMine = countMyActiveVotes(goal);
         const atLimit = activeMine >= maxVotesPerUser;
@@ -7207,6 +7790,10 @@
         if (!socket || socket.readyState !== WebSocket.OPEN || goal.evolving) return;
         if (goal.sim_phase_enabled && goal.phase === "simulating") {
           showThrottleNotice("Client simulation phase in progress — voting unlocks once candidates are verified.");
+          return;
+        }
+        if (goal.phase === "brood") {
+          showThrottleNotice("Brood selection is active — pick the strongest sibling in each brood.");
           return;
         }
         const k = voteKey(goal.name, goal.generation, idx);
@@ -7560,6 +8147,7 @@
         const sceneTask = isSceneTask(taskId);
         if (sceneTask) ensureSceneVisualResources(taskId, envParams).catch(() => {});
         else if (taskId === "halfcheetah") ensureCheetahRenderer().catch(() => {});
+        else if (taskId === "lunarlander") ensureLunarRenderer().catch(() => {});
         const activeGoal = goalsByName.get(activeGoalName);
         const crowdFallback = activeGoal && goalTaskId(activeGoal) === taskId
           ? getCrowdTrustEntry(activeGoal.name, activeGoal.generation, genome)
@@ -7608,6 +8196,13 @@
                   stateObj.summary || null
                 );
               }
+            }
+          } else if (taskId === "lunarlander" && ro.frames && ro.frames.length > 0 && window.DetLunarRenderer) {
+            const elapsedSteps = Math.max(0, Math.floor(((now - startPerf) / 1000) / dt));
+            const frameIdx = elapsedSteps % ro.frames.length;
+            if (frameIdx !== lastFrameIdx) {
+              lastFrameIdx = frameIdx;
+              window.DetLunarRenderer.renderLunarLiveFrame(canvas, ro, frameIdx, maxSteps);
             }
           } else if (taskId === "halfcheetah" && ro.frames && ro.frames.length > 0 && window.DetCheetahRenderer) {
             const elapsedSteps = Math.max(0, Math.floor(((now - startPerf) / 1000) / dt));
@@ -8118,19 +8713,161 @@
         const baseTaskLabel = String(resolvedGoalEnv.short_label || spec.short_label || spec.label.split(" ")[0]);
         const omitTaskPrefix = !isCtrl || isGoalNameMatchingTask(goal.name, taskId, spec, resolvedGoalEnv);
         const taskPrefix = omitTaskPrefix ? "" : `${baseTaskLabel} \u00b7 `;
-        activeGoalGen.textContent = `${taskPrefix}gen ${goal.generation} \u00b7 pop ${popSize} \u00b7 cap ${mvLimit}v \u00b7 \u03c3 ${sigma} \u00b7 elite ${elitePct}% \u00b7 cross ${crossPct}%`;
+        const broodSizeMeta = Number(goal.brood_size || 1);
+        const broodSuffix = broodSizeMeta > 1 ? ` \u00b7 brood \u00d7${broodSizeMeta}` : "";
+        activeGoalGen.textContent = `${taskPrefix}gen ${goal.generation} \u00b7 pop ${popSize} \u00b7 cap ${mvLimit}v \u00b7 \u03c3 ${sigma} \u00b7 elite ${elitePct}% \u00b7 cross ${crossPct}%${broodSuffix}`;
+
+        const inBroodPhase = isBroodPhaseGoal(goal);
+        genomeGridEl.classList.toggle("is-brood-grid", inBroodPhase);
 
         syncSimModeUI(taskId);
         updateWorkerBanner(goal);
         updateCrowdShardBanner(goal);
 
         if (sortTabsEl) {
-          sortTabsEl.hidden = !isCtrl;
+          sortTabsEl.hidden = !isCtrl || inBroodPhase;
           if (sortStepsBtn) {
             sortStepsBtn.textContent = `${spec.sort_label || "Steps"} \u2193`;
             sortStepsBtn.classList.toggle("active", controlSortMode === "steps");
           }
           if (sortSlotBtn) sortSlotBtn.classList.toggle("active", controlSortMode === "slot");
+        }
+
+        if (inBroodPhase) {
+          if (gridPageBarEl) gridPageBarEl.hidden = true;
+          if (populationReady && panelLoadingSheenEl) panelLoadingSheenEl.hidden = true;
+          if (rerenderCanvases) {
+            stopCardHoverAnim();
+            const renderer = getTaskRenderer(goal);
+            const frag = document.createDocumentFragment();
+            const broodCandRefs = [];
+            goal.brood.groups.forEach((grp, bi) => {
+              const groupEl = document.createElement("div");
+              groupEl.className = "brood-group";
+              groupEl.dataset.broodIdx = String(bi);
+
+              const head = document.createElement("div");
+              head.className = "brood-group-head";
+              const titleWrap = document.createElement("span");
+              titleWrap.className = "brood-group-title";
+              const titleTxt = document.createElement("span");
+              titleTxt.textContent = `Brood #${bi + 1}`;
+              titleWrap.appendChild(titleTxt);
+              const opTag = document.createElement("span");
+              opTag.className = "brood-op-tag";
+              opTag.textContent = grp.op || "crossover";
+              titleWrap.appendChild(opTag);
+              if (Array.isArray(grp.parents) && grp.parents.length) {
+                const pSpan = document.createElement("span");
+                pSpan.style.fontWeight = "400";
+                pSpan.style.color = "var(--dim)";
+                pSpan.textContent = grp.parents.map((pid) => `#${pid}`).join(" \u00d7 ");
+                titleWrap.appendChild(pSpan);
+              }
+              head.appendChild(titleWrap);
+              const statusPill = document.createElement("span");
+              statusPill.className = "brood-status-pill";
+              statusPill.textContent = "pick 1";
+              head.appendChild(statusPill);
+              groupEl.appendChild(head);
+
+              const siblingsWrap = document.createElement("div");
+              const cands = Array.isArray(grp.candidates) ? grp.candidates : [];
+              siblingsWrap.className = "brood-siblings" + (cands.length > 2 ? " is-multi" : "");
+
+              cands.forEach((candGenome, ci) => {
+                const candEl = document.createElement("div");
+                candEl.className = "brood-cand";
+                candEl.dataset.candIdx = String(ci);
+
+                const mediaWrap = document.createElement("div");
+                mediaWrap.className = "card-media";
+                const letter = String.fromCharCode(65 + ci);
+                const slotBadge = document.createElement("span");
+                slotBadge.className = "sim-slot-badge";
+                slotBadge.textContent = letter;
+                mediaWrap.appendChild(slotBadge);
+
+                let simBadge = null;
+                let entry = null;
+                if (isCtrl) {
+                  entry = taskId === "external"
+                    ? getExternalEvalEntry(goal.name, goal.generation, candGenome)
+                    : getCachedControlEntry(taskId, candGenome, envParams);
+                  simBadge = document.createElement("span");
+                  applySummaryToCardBadge(simBadge, entry ? entry.summary : null, taskId, maxSteps, spec);
+                  mediaWrap.appendChild(simBadge);
+                  if (taskId !== "external") {
+                    const playPill = document.createElement("span");
+                    playPill.className = "sim-play-pill";
+                    playPill.textContent = "\u25b6 live";
+                    mediaWrap.appendChild(playPill);
+                  }
+                }
+
+                const canvas = document.createElement("canvas");
+                canvas.width = isCtrl ? CONTROL_CARD_SIZE : CANVAS_SIZE;
+                canvas.height = isCtrl ? CONTROL_CARD_SIZE : CANVAS_SIZE;
+                canvas.style.cursor = "zoom-in";
+                canvas.title = isCtrl
+                  ? "Hover for live rollout \u00b7 tap to inspect full screen"
+                  : "Tap to inspect full screen & CPPN network";
+                renderer.renderCard(candGenome, canvas, entry);
+                canvas.addEventListener("click", () => {
+                  const previewNode = Object.assign({ gen: goal.generation + 1 }, candGenome);
+                  openFullscreenNode(goal, previewNode);
+                });
+                if (isCtrl && taskId !== "external") {
+                  candEl.addEventListener("mouseenter", () => startCardHoverAnim(candGenome, canvas, maxSteps, taskId, envParams));
+                  candEl.addEventListener("mouseleave", () => stopCardHoverAnim());
+                }
+                mediaWrap.appendChild(canvas);
+                candEl.appendChild(mediaWrap);
+
+                const pickBtn = document.createElement("button");
+                pickBtn.type = "button";
+                pickBtn.className = "brood-pick-btn";
+                pickBtn.innerHTML = `<span class="pick-lbl">Select ${letter}</span><span class="cnt">0</span>`;
+                pickBtn.addEventListener("click", () => sendBroodVote(goal, bi, ci));
+                candEl.appendChild(pickBtn);
+
+                siblingsWrap.appendChild(candEl);
+                broodCandRefs.push({ genome: candGenome, canvas, simBadge, entry });
+              });
+
+              groupEl.appendChild(siblingsWrap);
+              frag.appendChild(groupEl);
+            });
+            genomeGridEl.replaceChildren(frag);
+            lastJumpIdx = -1;
+            applyCardFilter(true);
+            renderLineageTree(goal);
+            renderIndividualsPanel(goal);
+
+            const renderTokenSnap = activeGoalRenderToken;
+            const goalSnap = goal;
+            if (isCtrl && taskId !== "external") {
+              const missingRefs = broodCandRefs.filter((r) => !r.entry || !r.entry.primary_rollout);
+              if (missingRefs.length > 0) {
+                const prep = taskId === "lunarlander"
+                  ? ensureLunarRenderer().catch(() => {})
+                  : (taskId === "halfcheetah" ? ensureCheetahRenderer().catch(() => {}) : Promise.resolve());
+                prep.then(() => evaluateControlGenomes(taskId, missingRefs.map((r) => r.genome), null, envParams))
+                  .then((entries) => {
+                    if (renderTokenSnap !== activeGoalRenderToken || goalsByName.get(activeGoalName) !== goalSnap) return;
+                    missingRefs.forEach((r, idx) => {
+                      const ent = entries && entries[idx];
+                      if (!ent) return;
+                      applySummaryToCardBadge(r.simBadge, ent.summary, taskId, maxSteps, spec);
+                      renderer.renderCard(r.genome, r.canvas, ent);
+                    });
+                  })
+                  .catch(() => {});
+              }
+            }
+          }
+          updateBroodCards();
+          return;
         }
 
         if (goal.genomes_loaded === false) {
@@ -9229,6 +9966,14 @@
         if (!goal) return;
         mergeLiveLineage(goal);
         if (isControlGoal(goal)) return;
+        if (isBroodPhaseGoal(goal)) {
+          const broodCands = [];
+          for (const grp of goal.brood.groups) {
+            if (Array.isArray(grp.candidates)) broodCands.push(...grp.candidates);
+          }
+          await preloadImages(broodCands, CANVAS_SIZE);
+          return;
+        }
         const windowed = isWindowedGrid(goal);
         const cardGenomes = windowed ? getGoalPageSlice(goal).slice.map((i) => goal.genomes[i]) : (goal.genomes || []);
         const linNodes = windowed
@@ -9549,10 +10294,15 @@
             g.countdown_duration_ms = data.countdown_duration_ms || 8000;
             g.evolving = Boolean(data.evolving);
             if (typeof data.phase === "string") g.phase = data.phase;
+            if (Array.isArray(data.phases)) g.phases = data.phases;
             if (typeof data.sim_phase_enabled === "boolean") g.sim_phase_enabled = data.sim_phase_enabled;
             if (typeof data.sim_completed === "number") g.sim_completed = data.sim_completed;
             if (typeof data.sim_total === "number") g.sim_total = data.sim_total;
             if (typeof data.auto_evolve === "boolean") g.auto_evolve = data.auto_evolve;
+            if (typeof data.brood_size === "number") g.brood_size = data.brood_size;
+            if (typeof data.brood_decided === "number") g.brood_decided = data.brood_decided;
+            if (typeof data.brood_total === "number") g.brood_total = data.brood_total;
+            if (typeof data.brood_required === "number") g.brood_required = data.brood_required;
             g.mutation_sigma = data.mutation_sigma;
             if (typeof data.population_size === "number") {
               g.population_size = data.population_size;
@@ -9570,6 +10320,26 @@
             syncMyVotesFromGoal(g);
             if (data.goal === activeGoalName) {
               updateVoteCards();
+            }
+          }
+        } else if (data.type === "brood_votes_updated") {
+          const g = goalsByName.get(data.goal);
+          if (g && isBroodPhaseGoal(g) && Array.isArray(data.brood_votes)) {
+            for (let bi = 0; bi < g.brood.groups.length && bi < data.brood_votes.length; bi++) {
+              g.brood.groups[bi].votes = data.brood_votes[bi];
+            }
+            if (typeof data.phase === "string") g.phase = data.phase;
+            if (Array.isArray(data.phases)) g.phases = data.phases;
+            if (typeof data.brood_decided === "number") g.brood_decided = data.brood_decided;
+            if (typeof data.brood_total === "number") g.brood_total = data.brood_total;
+            if (typeof data.brood_required === "number") g.brood_required = data.brood_required;
+            g.countdown_ms = data.countdown_ms || 0;
+            g.countdown_duration_ms = data.countdown_duration_ms || 8000;
+            g.evolving = Boolean(data.evolving);
+            syncGoalDeadline(g);
+            syncMyBroodVotesFromGoal(g);
+            if (data.goal === activeGoalName) {
+              updateBroodCards();
             }
           }
         } else if (data.type === "vote_throttled") {
@@ -9664,6 +10434,7 @@
         if (isPrivateRoom && initialMutSigma) params.set("sigma", initialMutSigma.toFixed(2));
         if (isPrivateRoom) params.set("elite_frac", initialEliteFrac.toFixed(2));
         if (isPrivateRoom) params.set("crossover", initialCrossoverRate.toFixed(2));
+        if (isPrivateRoom && initialBroodSize > 1) params.set("brood_size", String(initialBroodSize));
         if (evolveToken) params.set("evolve_token", evolveToken);
         if (supportsGzip) params.set("gzip", "1");
         const qs = params.toString() ? `?${params.toString()}` : "";
@@ -10189,6 +10960,7 @@
         const sigma = parseSigmaValue(newRoomSigmaInput);
         const eliteFrac = parseEliteValue(newRoomEliteInput);
         const crossoverRate = parseCrossoverValue(newRoomCrossoverInput);
+        const broodSize = parseBroodSizeValue(newRoomBroodInput);
         const description = newRoomDescriptionInput.value.trim();
         const envParams = collectEnvHyperparams(newRoomEnvHyperparamsEl);
         const enableWorkerInput = document.getElementById("new-room-enable-worker");
@@ -10216,6 +10988,7 @@
             formData.append("mutation_sigma", sigma.toFixed(2));
             formData.append("elite_frac", eliteFrac.toFixed(2));
             formData.append("crossover_rate", crossoverRate.toFixed(2));
+            formData.append("brood_size", String(broodSize));
             if (enableWorker) formData.append("enable_worker", "true");
             for (const item of stagedStrains) {
               formData.append("weights", item.file, item.file.name);
@@ -10243,6 +11016,7 @@
                 mutation_sigma: sigma,
                 elite_frac: eliteFrac,
                 crossover_rate: crossoverRate,
+                brood_size: broodSize,
                 enable_worker: enableWorker,
               }),
             });
@@ -10263,6 +11037,7 @@
             if (Math.abs(sigma - initialMutSigma) > 1e-6) qp.set("sigma", sigma.toFixed(2));
             if (Math.abs(eliteFrac - taskDefaultElite) > 1e-6) qp.set("elite_frac", eliteFrac.toFixed(2));
             if (Math.abs(crossoverRate - initialCrossoverRate) > 1e-6) qp.set("crossover", crossoverRate.toFixed(2));
+            if (broodSize > 1) qp.set("brood_size", String(broodSize));
             const qs = qp.toString();
             if (qs) targetUrl += `?${qs}`;
           }
@@ -10361,12 +11136,14 @@
           const sigma = parseSigmaValue(emptySigmaInput);
           const eliteFrac = parseEliteValue(emptyEliteInput);
           const crossoverRate = parseCrossoverValue(emptyCrossoverInput);
+          const broodSize = parseBroodSizeValue(emptyBroodInput);
           if (emptyPopInput) emptyPopInput.value = String(pop);
           if (emptyMinVotesInput) emptyMinVotesInput.value = String(minVotes);
           if (emptyMaxVotesInput) emptyMaxVotesInput.value = String(mv);
           if (emptySigmaInput) emptySigmaInput.value = sigma.toFixed(2);
           if (emptyEliteInput) emptyEliteInput.value = eliteFrac.toFixed(2);
           if (emptyCrossoverInput) emptyCrossoverInput.value = crossoverRate.toFixed(2);
+          if (emptyBroodInput) emptyBroodInput.value = String(broodSize);
           if (!goal || !socket || socket.readyState !== WebSocket.OPEN) return;
           const envParams = collectEnvHyperparams(emptyEnvHyperparamsEl);
           addingExtraGoal = false;
@@ -10382,6 +11159,7 @@
             mutation_sigma: sigma,
             elite_frac: eliteFrac,
             crossover_rate: crossoverRate,
+            brood_size: broodSize,
           }));
           activeGoalName = goal;
           emptyGoalInput.value = "";
@@ -10681,6 +11459,23 @@
             });
           return;
         }
+        if (taskId === "lunarlander") {
+          const needsActs = !stateObj.stepActivations && (forceUpgrade || fsViewMode === "split") && getEffectiveSimMode("lunarlander") === "client";
+          if (!needsActs) return;
+          stateObj._actsUpgradeInFlight = true;
+          fetchTaskRollout("lunarlander", stateObj.genome, stateObj.seed, stateObj.max_steps, stateObj.nudgeTag || null, true, false, stateObj.env_params || null)
+            .then((ro) => {
+              if (fsSimState === stateObj && ro && ro.stepActivations) {
+                stateObj.stepActivations = ro.stepActivations;
+                paintFsLiveNetworkStep(stateObj);
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              stateObj._actsUpgradeInFlight = false;
+            });
+          return;
+        }
         if (taskId === "halfcheetah") {
           const needsGeoms = hasWebGL2 && !stateObj.geom_poses;
           const needsActs = !stateObj.stepActivations && (forceUpgrade || fsViewMode === "split") && getEffectiveSimMode("halfcheetah") === "client";
@@ -10947,6 +11742,37 @@
           return;
         }
 
+        if (fsSimState.taskId === "lunarlander") {
+          const frames = fsSimState.frames || [];
+          const idx = Math.min(fsSimState.step || 0, Math.max(0, frames.length - 1));
+          const f = frames[idx] || frames[0] || [];
+          const restY = Number(fsSimState.helipad_y || (400 / 30 / 4)) + (18 / 30);
+          const yVal = Number(f[1] || restY);
+          const alt = Math.max(0, yVal - restY);
+          const vy = Number(f[3] || 0);
+          const deg = (Number(f[4] || 0) * 180.0) / Math.PI;
+          const legL = Number(f[6] || 0) > 0.5;
+          const legR = Number(f[7] || 0) > 0.5;
+          const cumRet = Number(f[10] || 0);
+          const isFinal = frames.length > 0 && idx >= frames.length - 1;
+          const out = String(fsSimState.outcome || "flying");
+          const status = fsSimState.loading
+            ? "simulating..."
+            : fsSimState.nudgeTag
+              ? `nudge: ${fsSimState.nudgeTag}`
+              : isFinal
+                ? (out === "landed" ? "landed!" : out)
+                : (fsSimState.playing ? "live" : "paused");
+          if (parts.step) parts.step.textContent = `${idx}/${fsSimState.max_steps}`;
+          if (parts.ret) parts.ret.textContent = `${cumRet >= 0 ? "+" : ""}${cumRet.toFixed(0)}`;
+          if (parts.alt) parts.alt.textContent = `${alt.toFixed(1)}m`;
+          if (parts.vy) parts.vy.textContent = `${vy >= 0 ? "+" : ""}${vy.toFixed(1)}`;
+          if (parts.theta) parts.theta.textContent = `${deg >= 0 ? "+" : ""}${deg.toFixed(0)}\u00b0`;
+          if (parts.legs) parts.legs.textContent = (legL && legR) ? "L+R" : (legL ? "L" : (legR ? "R" : "none"));
+          if (parts.status) parts.status.textContent = status;
+          return;
+        }
+
         if (fsSimState.taskId === "halfcheetah") {
           const idx = fsSimState.step || 0;
           const frames = fsSimState.frames || [];
@@ -11005,6 +11831,18 @@
           }
           return;
         }
+        if (stateObj.taskId === "lunarlander" && stateObj.frames && stateObj.frames.length) {
+          const idx = Math.min(stateObj.step || 0, Math.max(0, stateObj.frames.length - 1));
+          if (stateObj.stepActivations && stateObj.stepActivations[idx]) {
+            fsNetInspector.updateActivations(stateObj.stepActivations[idx]);
+          } else if (stateObj.decoded && window.DetLunarRenderer) {
+            const f = stateObj.frames[idx];
+            const obs = window.DetLunarRenderer.lunarlanderObs(f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]);
+            const tr = forwardPolicyWithTrace(stateObj.decoded, obs);
+            fsNetInspector.updateActivations(tr.activations);
+          }
+          return;
+        }
         if (stateObj.taskId === "halfcheetah" && stateObj.frames && stateObj.frames.length) {
           const idx = Math.min(stateObj.step || 0, Math.max(0, stateObj.frames.length - 1));
           if (stateObj.stepActivations && stateObj.stepActivations[idx]) {
@@ -11015,6 +11853,83 @@
             fsNetInspector.updateActivations(tr.activations);
           }
         }
+      }
+
+      function paintFsLunarFrame(stateObj) {
+        if (!stateObj || !stateObj.frames || !stateObj.frames.length) return;
+        const idx = Math.min(stateObj.step || 0, stateObj.frames.length - 1);
+        setFsCanvasMode(false);
+        const roObj = {
+          frames: stateObj.frames,
+          terrain_x: stateObj.terrain_x || null,
+          terrain_y: stateObj.terrain_y || null,
+          heights: stateObj.terrain_y || stateObj.terrain || null,
+          helipad_x1: stateObj.helipad_x1,
+          helipad_x2: stateObj.helipad_x2,
+          helipad_y: stateObj.helipad_y,
+          steps: stateObj.frames.length - 1,
+          pose_stride: stateObj.pose_stride || 1,
+          outcome: stateObj.outcome,
+        };
+        if (window.DetLunarRenderer) {
+          window.DetLunarRenderer.renderLunarLiveFrame(fsCanvasEl, roObj, idx, stateObj.max_steps);
+        } else {
+          ensureLunarRenderer().then(() => {
+            if (fsSimState === stateObj && window.DetLunarRenderer) {
+              window.DetLunarRenderer.renderLunarLiveFrame(fsCanvasEl, roObj, stateObj.step || 0, stateObj.max_steps);
+            }
+          }).catch(() => {});
+        }
+      }
+
+      function loadLunarFullscreenRollout(stateObj, seed, nudgeId = null) {
+        stateObj.loading = true;
+        stateObj.nudgeTag = nudgeId || "";
+        stateObj.frames = [];
+        stateObj.terrain = null;
+        stateObj.terrain_x = null;
+        stateObj.terrain_y = null;
+        stateObj.outcome = "flying";
+        stateObj.stepActivations = null;
+        stateObj.step = 0;
+        stateObj.doneAtPerf = 0;
+        setFsCanvasMode(false);
+        renderFullscreenTelemetry(true);
+
+        Promise.all([
+          fetchTaskRollout("lunarlander", stateObj.genome, seed, stateObj.max_steps, nudgeId, true, false, stateObj.env_params || null),
+          ensureLunarRenderer().catch(() => {}),
+        ])
+          .then(([ro]) => {
+            if (fsSimState !== stateObj || !ro) return;
+            stateObj.loading = false;
+            stateObj.seed = seed;
+            stateObj.frames = ro.frames || [];
+            stateObj.terrain = ro.terrain || ro.terrain_y || null;
+            stateObj.terrain_x = ro.terrain_x || null;
+            stateObj.terrain_y = ro.terrain_y || ro.heights || null;
+            stateObj.helipad_x1 = ro.helipad_x1;
+            stateObj.helipad_x2 = ro.helipad_x2;
+            stateObj.helipad_y = ro.helipad_y;
+            stateObj.pose_stride = ro.pose_stride || 1;
+            stateObj.outcome = ro.outcome || "flying";
+            stateObj.stepActivations = ro.stepActivations || null;
+            stateObj.step = 0;
+            stateObj.lastStepPerf = performance.now();
+            paintFsLunarFrame(stateObj);
+            paintFsLiveNetworkStep(stateObj);
+            renderFullscreenTelemetry(true);
+          })
+          .catch((err) => {
+            if (fsSimState !== stateObj) return;
+            stateObj.loading = false;
+            if (fsHeldoutStatusEl) {
+              fsHeldoutStatusEl.style.color = "var(--err)";
+              fsHeldoutStatusEl.textContent = err.message || "Lunar Lander rollout failed.";
+              fsHeldoutStatusEl.hidden = false;
+            }
+            renderFullscreenTelemetry(true);
+          });
       }
 
       function paintFsCheetahFrame(stateObj) {
@@ -11173,6 +12088,10 @@
           loadSceneFullscreenRollout(fsSimState, s, null);
           return;
         }
+        if (fsSimState.taskId === "lunarlander") {
+          loadLunarFullscreenRollout(fsSimState, s, null);
+          return;
+        }
         if (fsSimState.taskId === "halfcheetah") {
           loadCheetahFullscreenRollout(fsSimState, s, null);
           return;
@@ -11258,6 +12177,29 @@
           } else {
             loadSceneFullscreenRollout(stateObj, seed, null);
           }
+        } else if (taskId === "lunarlander") {
+          const cached = getCachedControlEntry("lunarlander", genome, envParams);
+          const ro0 = cached && cached.primary_rollout ? cached.primary_rollout : null;
+          if (ro0 && ro0.frames && Number(ro0.seed) === Number(seed)) {
+            stateObj.frames = ro0.frames;
+            stateObj.terrain = ro0.terrain || ro0.terrain_y || null;
+            stateObj.terrain_x = ro0.terrain_x || null;
+            stateObj.terrain_y = ro0.terrain_y || ro0.heights || null;
+            stateObj.helipad_x1 = ro0.helipad_x1;
+            stateObj.helipad_x2 = ro0.helipad_x2;
+            stateObj.helipad_y = ro0.helipad_y;
+            stateObj.pose_stride = ro0.pose_stride || 1;
+            stateObj.outcome = ro0.outcome || "flying";
+            stateObj.stepActivations = ro0.stepActivations || null;
+            paintFsLunarFrame(stateObj);
+            paintFsLiveNetworkStep(stateObj);
+            renderFullscreenTelemetry(true);
+            if (!stateObj.stepActivations && fsViewMode === "split" && getEffectiveSimMode("lunarlander") === "client") {
+              upgradeFsSimRolloutForSplit(stateObj, false);
+            }
+          } else {
+            loadLunarFullscreenRollout(stateObj, seed, null);
+          }
         } else if (taskId === "halfcheetah") {
           const cached = getCachedControlEntry("halfcheetah", genome);
           if (cached && cached.primary_rollout && cached.primary_rollout.frames && seed === (spec.eval_seeds?.[0] ?? 0)) {
@@ -11310,6 +12252,36 @@
                   stateObj.lastStepPerf += delta * frameMs;
                   stateObj.step = Math.min(lastIdx, stateObj.step + delta);
                   paintFsSceneFrame(stateObj);
+                  paintFsLiveNetworkStep(stateObj);
+                  renderFullscreenTelemetry();
+                }
+              }
+            } else {
+              stateObj.lastStepPerf = now;
+            }
+            stateObj.raf = requestAnimationFrame(loop);
+            return;
+          }
+          if (stateObj.taskId === "lunarlander") {
+            if (stateObj.playing && !stateObj.loading && stateObj.frames.length > 0) {
+              const lastFrameIdx = stateObj.frames.length - 1;
+              if (stateObj.step >= lastFrameIdx) {
+                if (!stateObj.doneAtPerf) stateObj.doneAtPerf = now;
+                else if (now - stateObj.doneAtPerf >= 1100) {
+                  stateObj.doneAtPerf = 0;
+                  stateObj.step = 0;
+                  stateObj.lastStepPerf = now;
+                  if (fsSimSeedSelect && fsSimSeedSelect.value === "random") {
+                    loadLunarFullscreenRollout(stateObj, selectedFullscreenSeed(), null);
+                  }
+                }
+              } else {
+                const stepMs = stateObj.dt * 1000;
+                const delta = Math.min(4, Math.floor((now - stateObj.lastStepPerf) / stepMs));
+                if (delta > 0) {
+                  stateObj.lastStepPerf += delta * stepMs;
+                  stateObj.step = Math.min(lastFrameIdx, stateObj.step + delta);
+                  paintFsLunarFrame(stateObj);
                   paintFsLiveNetworkStep(stateObj);
                   renderFullscreenTelemetry();
                 }
@@ -11666,6 +12638,10 @@
           loadSceneFullscreenRollout(fsSimState, fsSimState.seed, nudgeId);
           return;
         }
+        if (fsSimState.taskId === "lunarlander") {
+          loadLunarFullscreenRollout(fsSimState, fsSimState.seed, nudgeId);
+          return;
+        }
         if (fsSimState.taskId === "halfcheetah") {
           loadCheetahFullscreenRollout(fsSimState, fsSimState.seed, nudgeId);
           return;
@@ -11709,6 +12685,15 @@
               const status = res.solved ? "SOLVED" : (res.tier === "mid" ? "Walking gait" : "Unconverged");
               fsHeldoutStatusEl.textContent =
                 `10 held-out seeds: mean ${res.primary_display} · dist ${Number(res.mean_distance || 0).toFixed(2)}m · steps ${Number(res.mean_steps || 0).toFixed(0)}/${maxSteps} · ${status}${dists.length ? ` · [${dists.join(", ")}]` : ""}`;
+            } else if (targetTask === "lunarlander") {
+              const rets = res.returns_per_seed || [];
+              const landed = Number(res.landed_count || 0);
+              const nSeeds = rets.length || HELD_OUT_EVAL_SEEDS.length;
+              const status = res.solved
+                ? `SOLVED (${landed}/${nSeeds} soft landings on pad)`
+                : (landed > 0 ? `Partial (${landed}/${nSeeds} landings)` : "Unconverged");
+              fsHeldoutStatusEl.textContent =
+                `10 held-out seeds: mean ${res.primary_display} · min ${Number(res.min_return || 0) >= 0 ? "+" : ""}${Math.round(Number(res.min_return || 0))} · ${status} · [${rets.join(", ")}]`;
             } else if (targetTask === "halfcheetah") {
               const dists = res.distances_per_seed || [];
               const status = res.solved ? "SOLVED (mean >= 8.0m upright)" : (res.tier === "mid" ? "Partial gait" : "Unconverged");
@@ -11842,11 +12827,16 @@
       });
 
       function renderLoadingSkeletons() {
-        const defaultCtrl = !isPrivateRoom && !initialGoal;
-        const count = defaultCtrl
-          ? ((taskSpecs.microduck && taskSpecs.microduck.default_pop_size) || 8)
+        const lobbyDefaultKey = Object.keys(taskSpecs)
+          .filter((k) => taskSpecs[k] && taskSpecs[k].enabled !== false)
+          .sort((a, b) => (taskSpecs[a].lobby_order ?? 99) - (taskSpecs[b].lobby_order ?? 99))[0] || "image";
+        const useLobbyDefault = !isPrivateRoom && !initialGoal;
+        const spec = getTaskSpec(useLobbyDefault ? lobbyDefaultKey : initialTask);
+        const isCtrl = spec.kind === "control";
+        const count = useLobbyDefault
+          ? Math.max(3, Math.min(12, spec.default_pop_size || 8))
           : Math.max(3, Math.min(12, initialPop || 8));
-        genomeGridEl.replaceChildren(buildSkeletonGridFragment(count, defaultCtrl || getTaskSpec(initialTask).kind === "control"));
+        genomeGridEl.replaceChildren(buildSkeletonGridFragment(count, isCtrl));
       }
 
       renderLoadingSkeletons();

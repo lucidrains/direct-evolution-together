@@ -147,6 +147,7 @@ MAX_VOTES_PER_USER = max(1, min(256, int(os.getenv("MUMMY_MAX_VOTES", "20"))))
 MUTATION_SIGMA = max(0.05, min(1.0, float(os.getenv("MUMMY_MUT_SIGMA", "0.30"))))
 ELITE_FRAC = max(0.0, min(0.5, float(os.getenv("MUMMY_ELITE_FRAC", "0.20"))))
 CROSSOVER_RATE = max(0.0, min(1.0, float(os.getenv("MUMMY_CROSSOVER_RATE", "0.75"))))
+BROOD_SIZE = max(1, min(8, int(os.getenv("MUMMY_BROOD_SIZE", "1"))))
 ADMIN_PASSWORD = os.getenv("DET_ADMIN_PASSWORD", "")
 EVOLVE_NOW_LOCAL = os.getenv("DET_EVOLVE_NOW", "0") == "1"
 EVOLVE_NOW_SECRET = os.getenv("DET_EVOLVE_SECRET", "").strip()

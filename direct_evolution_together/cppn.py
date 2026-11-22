@@ -37,6 +37,9 @@ MAX_UPLOAD_FILES = 256
 DEFAULT_MUT_SIGMA = 0.30
 DEFAULT_ELITE_FRAC = 0.20
 DEFAULT_CROSSOVER_RATE = 0.75
+MIN_BROOD_SIZE = 1
+MAX_BROOD_SIZE = 8
+DEFAULT_BROOD_SIZE = 1
 
 _counter_lock = threading.Lock()
 _genome_counter = itertools.count(1)
@@ -342,6 +345,220 @@ def _sample_parents(
     return _sample_parents_batch(pool, scores, 1, crossover_rate=crossover_rate)[0]
 
 
+def _evolve_population_slots(
+    genome_dicts: Iterable[dict],
+    scores: list[int],
+    up_counts: list[int],
+    mut_sigma: float = DEFAULT_MUT_SIGMA,
+    pop_size: int = POPULATION_SIZE,
+    elite_frac: float = DEFAULT_ELITE_FRAC,
+    crossover_rate: float = DEFAULT_CROSSOVER_RATE,
+    *,
+    brood_size: int = DEFAULT_BROOD_SIZE,
+    max_elite_frac: float = 0.5,
+    liked_immigrant_divisor: int = 10,
+    max_liked_immigrants: int = 2,
+    fine_sigma_scale: float = 0.42,
+    broad_sigma_scale: float = 0.90,
+    fine_mut_rate: float = 0.14,
+    broad_mut_rate: float = 0.28,
+    fine_act_flip_rate: float = 0.02,
+    broad_act_flip_rate: float = 0.06,
+    neutral_seed_sigma_scale: float = 0.75,
+    neutral_seed_mut_rate: float = 0.22,
+    neutral_seed_act_flip_rate: float = 0.05,
+    neutral_immigrant_divisor: int = 8,
+    max_neutral_immigrants: int = 3,
+    neutral_breed_mut_rate: float = 0.26,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], int]:
+    """Generate fixed next-gen slots (elites/immigrants) and bred brood groups.
+
+    Implements Tackett & Carmi (1994) brood selection when `brood_size > 1`: each
+    bred slot produces `brood_size` distinct offspring sharing the same parent(s)
+    so an extra selection phase can choose the strongest sibling.
+    """
+    eff_brood = max(MIN_BROOD_SIZE, min(MAX_BROOD_SIZE, int(brood_size)))
+    parents = [CPPN.from_dict(g) for g in genome_dicts]
+    ranked = sorted(
+        range(len(parents)),
+        key=lambda i: (-scores[i], -up_counts[i], i),
+    )
+
+    liked = [i for i in ranked if scores[i] > 0]
+    neutral_or_better = [i for i in ranked if scores[i] >= 0]
+    clamped_elite_frac = max(0.0, min(max_elite_frac, float(elite_frac)))
+    clamped_crossover = max(0.0, min(1.0, float(crossover_rate)))
+
+    if clamped_elite_frac <= 0.0 or pop_size <= 1:
+        target_elites = 0
+    else:
+        target_elites = min(max(1, round(pop_size * clamped_elite_frac)), pop_size - 1)
+
+    def _clone_elite(src: CPPN) -> CPPN:
+        elite = CPPN.from_dict(src.to_dict())
+        elite.genome_id = _alloc_genome_id()
+        elite.uuid = alloc_short_uuid()
+        elite.parents = [src.genome_id]
+        elite.op = "elite"
+        return elite
+
+    fixed: list[dict[str, object]] = []
+    broods: list[dict[str, object]] = []
+    slot_idx = 0
+
+    if liked:
+        # Keep at least target_elites, and avoid dropping tied top-scorers by index bias.
+        top_key = (scores[liked[0]], up_counts[liked[0]])
+        top_tied_count = sum(1 for i in liked if (scores[i], up_counts[i]) == top_key)
+        max_tie_elites = max(target_elites, pop_size // 2)
+        num_elites = (
+            min(len(liked), max(target_elites, min(top_tied_count, max_tie_elites)))
+            if target_elites > 0
+            else 0
+        )
+        for e_idx in range(num_elites):
+            fixed.append({"slot": slot_idx, "genome": _clone_elite(parents[liked[e_idx]]).to_dict()})
+            slot_idx += 1
+
+        num_immigrants = min(max_liked_immigrants, max(0, (pop_size - num_elites) // liked_immigrant_divisor))
+        num_breed = max(0, pop_size - num_elites - num_immigrants)
+        sampled_liked = _sample_parents_batch(liked, scores, num_breed, crossover_rate=clamped_crossover)
+
+        for breed_i, (idx_a, idx_b, use_cross) in enumerate(sampled_liked):
+            # Alternate between fine local polishers (keep silhouette) and broader explorers
+            is_fine = (breed_i % 2 == 0)
+            eff_sigma = mut_sigma * (fine_sigma_scale if is_fine else broad_sigma_scale)
+            eff_rate = fine_mut_rate if is_fine else broad_mut_rate
+            eff_flip = fine_act_flip_rate if is_fine else broad_act_flip_rate
+            candidates = [
+                CPPN.crossover_and_mutate(
+                    parents[idx_a],
+                    parents[idx_b],
+                    use_crossover=use_cross,
+                    mut_sigma=eff_sigma,
+                    mut_rate=eff_rate,
+                    act_flip_rate=eff_flip,
+                ).to_dict()
+                for _ in range(eff_brood)
+            ]
+            if eff_brood > 1:
+                parent_ids = (
+                    [parents[idx_a].genome_id, parents[idx_b].genome_id]
+                    if use_cross and parents[idx_a].genome_id != parents[idx_b].genome_id
+                    else [parents[idx_a].genome_id]
+                )
+                broods.append({
+                    "slot": slot_idx,
+                    "parents": parent_ids,
+                    "op": "crossover" if use_cross else "mutation",
+                    "candidates": candidates,
+                })
+            else:
+                fixed.append({"slot": slot_idx, "genome": candidates[0]})
+            slot_idx += 1
+
+        neutral_only = [i for i in ranked if scores[i] == 0]
+        for imm in range(num_immigrants):
+            if imm == 0 and neutral_only:
+                pick = int(torch.randint(0, len(neutral_only), (1,)).item())
+                seed_parent = parents[neutral_only[pick]]
+                imm_genome = CPPN.crossover_and_mutate(
+                    seed_parent,
+                    seed_parent,
+                    use_crossover=False,
+                    mut_sigma=mut_sigma * neutral_seed_sigma_scale,
+                    mut_rate=neutral_seed_mut_rate,
+                    act_flip_rate=neutral_seed_act_flip_rate,
+                ).to_dict()
+            else:
+                imm_genome = CPPN.random().to_dict()
+            fixed.append({"slot": slot_idx, "genome": imm_genome})
+            slot_idx += 1
+    elif neutral_or_better:
+        # Only dislikes or 0-ties were cast: preserve top non-disliked elites before breeding away.
+        num_elites = min(len(neutral_or_better), target_elites) if target_elites > 0 else 0
+        for e_idx in range(num_elites):
+            fixed.append({"slot": slot_idx, "genome": _clone_elite(parents[neutral_or_better[e_idx]]).to_dict()})
+            slot_idx += 1
+        num_immigrants = min(max_neutral_immigrants, max(0, (pop_size - num_elites) // neutral_immigrant_divisor))
+        num_breed = max(0, pop_size - num_elites - num_immigrants)
+        sampled_neutral = _sample_parents_batch(
+            neutral_or_better,
+            scores,
+            num_breed,
+            crossover_rate=clamped_crossover,
+        )
+        for idx_a, idx_b, use_cross in sampled_neutral:
+            candidates = [
+                CPPN.crossover_and_mutate(
+                    parents[idx_a],
+                    parents[idx_b],
+                    use_crossover=use_cross,
+                    mut_sigma=mut_sigma,
+                    mut_rate=neutral_breed_mut_rate,
+                ).to_dict()
+                for _ in range(eff_brood)
+            ]
+            if eff_brood > 1:
+                parent_ids = (
+                    [parents[idx_a].genome_id, parents[idx_b].genome_id]
+                    if use_cross and parents[idx_a].genome_id != parents[idx_b].genome_id
+                    else [parents[idx_a].genome_id]
+                )
+                broods.append({
+                    "slot": slot_idx,
+                    "parents": parent_ids,
+                    "op": "crossover" if use_cross else "mutation",
+                    "candidates": candidates,
+                })
+            else:
+                fixed.append({"slot": slot_idx, "genome": candidates[0]})
+            slot_idx += 1
+        while slot_idx < pop_size:
+            fixed.append({"slot": slot_idx, "genome": CPPN.random().to_dict()})
+            slot_idx += 1
+    else:
+        while slot_idx < pop_size:
+            fixed.append({"slot": slot_idx, "genome": CPPN.random().to_dict()})
+            slot_idx += 1
+
+    top_score = scores[ranked[0]] if ranked else 0
+    return fixed, broods, top_score
+
+
+def evolve_population_broods(
+    genome_dicts: Iterable[dict],
+    scores: list[int],
+    up_counts: list[int],
+    mut_sigma: float = DEFAULT_MUT_SIGMA,
+    pop_size: int = POPULATION_SIZE,
+    elite_frac: float = DEFAULT_ELITE_FRAC,
+    crossover_rate: float = DEFAULT_CROSSOVER_RATE,
+    *,
+    brood_size: int = 2,
+    **kwargs: object,
+) -> tuple[dict[str, object], int]:
+    """Generate a brood-selection bundle (`fixed` elites/immigrants + `broods` sibling groups)."""
+    eff_brood = max(MIN_BROOD_SIZE, min(MAX_BROOD_SIZE, int(brood_size)))
+    fixed, broods, top_score = _evolve_population_slots(
+        genome_dicts,
+        scores,
+        up_counts,
+        mut_sigma=mut_sigma,
+        pop_size=pop_size,
+        elite_frac=elite_frac,
+        crossover_rate=crossover_rate,
+        brood_size=eff_brood,
+        **kwargs,  # type: ignore[arg-type]
+    )
+    return {
+        "brood_size": eff_brood,
+        "pop_size": int(pop_size),
+        "fixed": fixed,
+        "broods": broods,
+    }, top_score
+
+
 def evolve_population(
     genome_dicts: Iterable[dict],
     scores: list[int],
@@ -373,112 +590,33 @@ def evolve_population(
     with medium crossover exploration, and injects a small number of neutral/random
     immigrants so larger crowds don't prematurely collapse diversity.
     """
-    parents = [CPPN.from_dict(g) for g in genome_dicts]
-    ranked = sorted(
-        range(len(parents)),
-        key=lambda i: (-scores[i], -up_counts[i], i),
+    fixed, _, top_score = _evolve_population_slots(
+        genome_dicts,
+        scores,
+        up_counts,
+        mut_sigma=mut_sigma,
+        pop_size=pop_size,
+        elite_frac=elite_frac,
+        crossover_rate=crossover_rate,
+        brood_size=1,
+        max_elite_frac=max_elite_frac,
+        liked_immigrant_divisor=liked_immigrant_divisor,
+        max_liked_immigrants=max_liked_immigrants,
+        fine_sigma_scale=fine_sigma_scale,
+        broad_sigma_scale=broad_sigma_scale,
+        fine_mut_rate=fine_mut_rate,
+        broad_mut_rate=broad_mut_rate,
+        fine_act_flip_rate=fine_act_flip_rate,
+        broad_act_flip_rate=broad_act_flip_rate,
+        neutral_seed_sigma_scale=neutral_seed_sigma_scale,
+        neutral_seed_mut_rate=neutral_seed_mut_rate,
+        neutral_seed_act_flip_rate=neutral_seed_act_flip_rate,
+        neutral_immigrant_divisor=neutral_immigrant_divisor,
+        max_neutral_immigrants=max_neutral_immigrants,
+        neutral_breed_mut_rate=neutral_breed_mut_rate,
     )
-
-    liked = [i for i in ranked if scores[i] > 0]
-    neutral_or_better = [i for i in ranked if scores[i] >= 0]
-    clamped_elite_frac = max(0.0, min(max_elite_frac, float(elite_frac)))
-    clamped_crossover = max(0.0, min(1.0, float(crossover_rate)))
-
-    next_gen: list[CPPN] = []
-    if clamped_elite_frac <= 0.0 or pop_size <= 1:
-        target_elites = 0
-    else:
-        target_elites = min(max(1, round(pop_size * clamped_elite_frac)), pop_size - 1)
-
-    def _clone_elite(src: CPPN) -> CPPN:
-        elite = CPPN.from_dict(src.to_dict())
-        elite.genome_id = _alloc_genome_id()
-        elite.uuid = alloc_short_uuid()
-        elite.parents = [src.genome_id]
-        elite.op = "elite"
-        return elite
-
-    if liked:
-        # Keep at least target_elites, and avoid dropping tied top-scorers by index bias.
-        top_key = (scores[liked[0]], up_counts[liked[0]])
-        top_tied_count = sum(1 for i in liked if (scores[i], up_counts[i]) == top_key)
-        max_tie_elites = max(target_elites, pop_size // 2)
-        num_elites = (
-            min(len(liked), max(target_elites, min(top_tied_count, max_tie_elites)))
-            if target_elites > 0
-            else 0
-        )
-        for e_idx in range(num_elites):
-            next_gen.append(_clone_elite(parents[liked[e_idx]]))
-
-        num_immigrants = min(max_liked_immigrants, max(0, (pop_size - num_elites) // liked_immigrant_divisor))
-        num_breed = max(0, pop_size - num_elites - num_immigrants)
-        sampled_liked = _sample_parents_batch(liked, scores, num_breed, crossover_rate=clamped_crossover)
-
-        for slot, (idx_a, idx_b, use_cross) in enumerate(sampled_liked):
-            # Alternate between fine local polishers (keep silhouette) and broader explorers
-            is_fine = (slot % 2 == 0)
-            eff_sigma = mut_sigma * (fine_sigma_scale if is_fine else broad_sigma_scale)
-            eff_rate = fine_mut_rate if is_fine else broad_mut_rate
-            eff_flip = fine_act_flip_rate if is_fine else broad_act_flip_rate
-            next_gen.append(
-                CPPN.crossover_and_mutate(
-                    parents[idx_a],
-                    parents[idx_b],
-                    use_crossover=use_cross,
-                    mut_sigma=eff_sigma,
-                    mut_rate=eff_rate,
-                    act_flip_rate=eff_flip,
-                )
-            )
-
-        neutral_only = [i for i in ranked if scores[i] == 0]
-        for imm in range(num_immigrants):
-            if imm == 0 and neutral_only:
-                pick = int(torch.randint(0, len(neutral_only), (1,)).item())
-                seed_parent = parents[neutral_only[pick]]
-                next_gen.append(
-                    CPPN.crossover_and_mutate(
-                        seed_parent,
-                        seed_parent,
-                        use_crossover=False,
-                        mut_sigma=mut_sigma * neutral_seed_sigma_scale,
-                        mut_rate=neutral_seed_mut_rate,
-                        act_flip_rate=neutral_seed_act_flip_rate,
-                    )
-                )
-            else:
-                next_gen.append(CPPN.random())
-    elif neutral_or_better:
-        # Only dislikes or 0-ties were cast: preserve top non-disliked elites before breeding away.
-        num_elites = min(len(neutral_or_better), target_elites) if target_elites > 0 else 0
-        for e_idx in range(num_elites):
-            next_gen.append(_clone_elite(parents[neutral_or_better[e_idx]]))
-        num_immigrants = min(max_neutral_immigrants, max(0, (pop_size - num_elites) // neutral_immigrant_divisor))
-        num_breed = max(0, pop_size - num_elites - num_immigrants)
-        sampled_neutral = _sample_parents_batch(
-            neutral_or_better,
-            scores,
-            num_breed,
-            crossover_rate=clamped_crossover,
-        )
-        for idx_a, idx_b, use_cross in sampled_neutral:
-            next_gen.append(
-                CPPN.crossover_and_mutate(
-                    parents[idx_a],
-                    parents[idx_b],
-                    use_crossover=use_cross,
-                    mut_sigma=mut_sigma,
-                    mut_rate=neutral_breed_mut_rate,
-                )
-            )
-        while len(next_gen) < pop_size:
-            next_gen.append(CPPN.random())
-    else:
-        next_gen = [CPPN.random() for _ in range(pop_size)]
-
-    top_score = scores[ranked[0]] if ranked else 0
-    return [g.to_dict() for g in next_gen[:pop_size]], top_score
+    ordered = sorted(fixed, key=lambda item: int(item["slot"]))
+    return [item["genome"] for item in ordered[:pop_size]], top_score  # type: ignore[misc]
 
 
 def resize_population(

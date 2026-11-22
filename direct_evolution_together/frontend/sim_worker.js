@@ -357,7 +357,18 @@ function compilePopuLoraIndividual(baseModel, genome) {
   }
 
   let compiled;
-  if (baseModel.arch === "mlp") {
+  if (baseModel.arch === "weight_only_mlp") {
+    const H = baseModel.hidden_dim;
+    const D = baseModel.head_dim;
+    compiled = {
+      arch: "weight_only_mlp",
+      obs_dim: baseModel.obs_dim,
+      action_dim: baseModel.action_dim,
+      l0: mergeLinear("l0", H, baseModel.obs_dim + 1, false),
+      l1: mergeLinear("l1", D, H + 1, false),
+      head: mergeLinear("head", baseModel.action_dim, D + 1, false),
+    };
+  } else if (baseModel.arch === "mlp") {
     const H = baseModel.hidden_dim;
     const D = baseModel.head_dim;
     compiled = {
@@ -403,7 +414,50 @@ function matVecLinear(layer, x, out, applyTanh) {
   }
 }
 
+function matVecLinearAct(layer, x, out, actKind) {
+  const { w, b, in_dim: inDim, out_dim: outDim } = layer;
+  for (let o = 0; o < outDim; o++) {
+    let acc = b ? b[o] : 0.0;
+    const row = o * inDim;
+    for (let i = 0; i < inDim; i++) acc += w[row + i] * x[i];
+    if (actKind === "relu") out[o] = acc > 0.0 ? acc : 0.0;
+    else if (actKind === "tanh") out[o] = Math.tanh(acc);
+    else out[o] = acc;
+  }
+}
+
 function createPopuLoraRunner(compiled) {
+  if (compiled.arch === "weight_only_mlp") {
+    const x0 = new Float32Array(compiled.obs_dim + 1);
+    const h0 = new Float32Array(compiled.l0.out_dim);
+    const x1 = new Float32Array(compiled.l0.out_dim + 1);
+    const h1 = new Float32Array(compiled.l1.out_dim);
+    const x2 = new Float32Array(compiled.l1.out_dim + 1);
+    const act = new Float32Array(compiled.action_dim);
+    x0[compiled.obs_dim] = 1.0;
+    x1[compiled.l0.out_dim] = 1.0;
+    x2[compiled.l1.out_dim] = 1.0;
+    return {
+      reset() {},
+      step(obs, recordActs = false) {
+        for (let i = 0; i < compiled.obs_dim; i++) x0[i] = obs[i];
+        matVecLinearAct(compiled.l0, x0, h0, "relu");
+        x1.set(h0, 0);
+        matVecLinearAct(compiled.l1, x1, h1, "relu");
+        x2.set(h1, 0);
+        matVecLinearAct(compiled.head, x2, act, "tanh");
+        const acts = recordActs
+          ? [
+              Array.from(obs.slice ? obs.slice(0, 16) : Array.from(obs).slice(0, 16), (v) => Math.round(v * 1000) / 1000),
+              Array.from(h0.subarray(0, 16), (v) => Math.round(v * 1000) / 1000),
+              Array.from(h1.subarray(0, 16), (v) => Math.round(v * 1000) / 1000),
+              Array.from(act, (v) => Math.round(v * 1000) / 1000),
+            ]
+          : null;
+        return { action: act, activations: acts };
+      },
+    };
+  }
   if (compiled.arch === "mlp") {
     const h0 = new Float32Array(compiled.enc0.out_dim);
     const h1 = new Float32Array(compiled.enc2.out_dim);
@@ -2030,6 +2084,150 @@ async function evaluateSo101(genome, seeds, baseModel = null, physicsBuf = null,
   };
 }
 
+// --- Faithful Gymnasium LunarLander-v3 (Box2D via planck.js + PopuLoRA WeightOnlyMLP) ---
+const LL_SOLVED_RETURN = 200.0;
+const LL_TIER_MID_RETURN = 80.0;
+const LL_DEFAULT_IN_COORDS = [-0.60, -0.10, -0.35, 0.10, 0.35, 0.60, -0.85, 0.85];
+const LL_DEFAULT_OUT_COORDS = [-0.45, 0.45];
+
+let lunarPlanckLoaded = false;
+
+function ensureLunarPlanck() {
+  if (lunarPlanckLoaded && self.planck && self.DetLunarRenderer) return;
+  const plUrl = new URL(`${basePath}/assets/vendor/planck/planck.min.js`, self.location.href).href;
+  const lrUrl = new URL(`${basePath}/assets/lunar_renderer.js`, self.location.href).href;
+  importScripts(plUrl, lrUrl);
+  lunarPlanckLoaded = true;
+}
+
+async function lunarlanderRollout(
+  genome,
+  seed = 0,
+  maxSteps = 1000,
+  nudge = null,
+  includeActs = false,
+  captureFrames = true,
+  suppliedBaseModel = null,
+  envParams = null
+) {
+  ensureLunarPlanck();
+  const stepActs = includeActs ? [] : null;
+  let policyFn;
+
+  if (genome && genome.kind === "populora") {
+    const baseModel = await ensurePopuLoraBaseModel("lunarlander", genome, suppliedBaseModel);
+    const compiled = compilePopuLoraIndividual(baseModel, genome);
+    const runner = createPopuLoraRunner(compiled);
+    runner.reset();
+    const obsBuf = new Float32Array(8);
+    policyFn = (obs) => {
+      for (let i = 0; i < 8; i++) obsBuf[i] = obs[i];
+      const out = runner.step(obsBuf, includeActs);
+      if (includeActs && out.activations) stepActs.push(out.activations);
+      return out.action;
+    };
+  } else {
+    const spec = taskSpecs.lunarlander || {
+      obs_dim: 8,
+      hidden_dims: [12],
+      action_dim: 2,
+      layer_coords: [LL_DEFAULT_IN_COORDS, null, LL_DEFAULT_OUT_COORDS],
+    };
+    const dims = [spec.obs_dim || 8, ...(spec.hidden_dims || [12]), spec.action_dim || 2];
+    const layerCoords =
+      Array.isArray(spec.layer_coords) && spec.layer_coords.length
+        ? spec.layer_coords
+        : [LL_DEFAULT_IN_COORDS, null, LL_DEFAULT_OUT_COORDS];
+    const decoded = decodeHyperNeat(genome, dims, layerCoords);
+    policyFn = (obs) => {
+      const { action, activations } = forwardPolicy(decoded, obs, includeActs);
+      if (includeActs) stepActs.push(activations);
+      return action;
+    };
+  }
+
+  const ro = self.DetLunarRenderer.lunarlanderRolloutPlanck(policyFn, {
+    seed,
+    maxSteps: maxSteps || 1000,
+    nudge,
+    captureFrames,
+    poseStride: 1,
+    envParams,
+    planck: self.planck,
+  });
+  if (includeActs) ro.stepActivations = stepActs;
+  return ro;
+}
+
+async function evaluateLunarLander(genome, seeds, suppliedBaseModel = null, envParams = null) {
+  const spec = taskSpecs.lunarlander || { max_steps: 1000 };
+  const maxSteps = spec.max_steps || 1000;
+  const effSeeds = Array.isArray(seeds) && seeds.length ? seeds : (spec.eval_seeds || [0, 1, 2]);
+  const rets = [];
+  let sumRet = 0.0;
+  let minRet = Infinity;
+  let maxRet = -Infinity;
+  let sumSteps = 0;
+  let landedCount = 0;
+  let onPadCount = 0;
+  let crashedCount = 0;
+  let primaryRollout = null;
+
+  for (let i = 0; i < effSeeds.length; i++) {
+    const ro = await lunarlanderRollout(
+      genome,
+      effSeeds[i],
+      maxSteps,
+      null,
+      false,
+      i === 0,
+      suppliedBaseModel,
+      envParams
+    );
+    if (i === 0) primaryRollout = ro;
+    rets.push(Math.round(ro.return * 10) / 10);
+    sumRet += ro.return;
+    if (ro.return < minRet) minRet = ro.return;
+    if (ro.return > maxRet) maxRet = ro.return;
+    sumSteps += ro.steps;
+    if (ro.landed) landedCount += 1;
+    if (ro.landed && ro.on_pad) onPadCount += 1;
+    if (ro.crashed) crashedCount += 1;
+  }
+
+  const n = Math.max(1, effSeeds.length);
+  const meanRet = Math.round((sumRet / n) * 10) / 10;
+  const clampedMin = minRet === Infinity ? 0.0 : Math.round(minRet * 10) / 10;
+  const clampedMax = maxRet === -Infinity ? 0.0 : Math.round(maxRet * 10) / 10;
+  const meanSteps = Math.round((sumSteps / n) * 10) / 10;
+  const solved = meanRet >= LL_SOLVED_RETURN && landedCount >= Math.max(1, Math.floor((n * 2) / 3));
+  const tier = solved ? "solved" : (meanRet >= LL_TIER_MID_RETURN || landedCount >= 1 ? "mid" : "");
+  const disp = `${meanRet >= 0 ? "+" : ""}${Math.round(meanRet)}`;
+
+  return {
+    summary: {
+      task: "lunarlander",
+      seeds: effSeeds,
+      returns_per_seed: rets,
+      return: meanRet,
+      min_return: clampedMin,
+      max_return: clampedMax,
+      mean_steps: meanSteps,
+      landed_count: landedCount,
+      on_pad_count: onPadCount,
+      crashed_count: crashedCount,
+      solved,
+      primary_value: meanRet,
+      primary_display: `${disp} (${landedCount}/${n} landed)`,
+      badge_text: `${disp} \u00b7 ${landedCount}/${n}`,
+      tier,
+      secondary_text: `mean ${meanRet >= 0 ? "+" : ""}${meanRet.toFixed(1)} (min ${clampedMin >= 0 ? "+" : ""}${clampedMin.toFixed(1)}) \u00b7 ${landedCount}/${n} landed (${onPadCount} on pad) \u00b7 ${Math.round(meanSteps)} steps`,
+    },
+    traj_sample: primaryRollout ? primaryRollout.traj_sample : null,
+    primary_rollout: primaryRollout,
+  };
+}
+
 // --- CartPole physics ---
 const CP_GRAV = 9.8;
 const CP_MC = 1.0;
@@ -2487,6 +2685,22 @@ const SIM_TASK_HANDLERS = {
     evaluate: (g, seeds) => evaluateCartpole(g, seeds),
     rollout: (msg) =>
       cartpoleRollout(msg.genome, msg.seed, msg.max_steps || 500, msg.nudge || null, Boolean(msg.includeActivations)),
+  },
+  lunarlander: {
+    wasm: false,
+    evaluate: (g, seeds, baseModel, _physBuf, envParams) =>
+      evaluateLunarLander(g, seeds, baseModel || null, envParams || null),
+    rollout: (msg) =>
+      lunarlanderRollout(
+        msg.genome,
+        msg.seed,
+        msg.max_steps || 1000,
+        msg.nudge || null,
+        Boolean(msg.includeActivations),
+        true,
+        msg.baseModel || null,
+        msg.env_params || null
+      ),
   },
 };
 

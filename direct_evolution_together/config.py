@@ -64,6 +64,7 @@ class EnvPolicyConfig:
     max_pop_size: int = 128
     default_min_votes: int = 20
     default_elite_frac: float | None = None
+    default_brood_size: int = 1
     crowd_shard_threshold: int = 16
     crowd_shard_size: int = 4
     env_hyperparams: dict[str, object] = field(default_factory=dict)
@@ -164,11 +165,41 @@ class CentralConfig:
 # Single source of truth for per-environment policy defaults (with `DET_LARGE_POP=0`).
 # `DET_LARGE_POP=1` (`--large-pop`) layers `_LARGE_POP_PRESET` on top (250 Microduck gait + 1,024 room cap).
 DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
+    "image": EnvPolicyConfig(
+        task="image",
+        lobby_name="Butterfly",
+        lobby_default=True,
+        lobby_order=0,
+        execution_policy="client_locked",
+        crowd_contribute=False,
+        allow_server_video=False,
+        default_pop_size=30,
+        max_pop_size=64,
+        default_min_votes=0,  # 0 = let the room derive quorum from live votes
+        default_elite_frac=None,
+    ),
+    "lunarlander": EnvPolicyConfig(
+        task="lunarlander",
+        lobby_name="Lunar Lander",
+        lobby_default=True,
+        lobby_order=1,
+        execution_policy="client_preferred",
+        crowd_contribute=True,
+        sim_phase_enabled=True,
+        default_auto_evolve=False,
+        allow_server_video=True,
+        default_pop_size=16,
+        max_pop_size=128,
+        default_min_votes=4,
+        default_elite_frac=0.25,
+        crowd_shard_threshold=64,
+        crowd_shard_size=8,
+    ),
     "microduck": EnvPolicyConfig(
         task="microduck",
         lobby_name="Microduck",
         lobby_default=True,
-        lobby_order=0,
+        lobby_order=2,
         execution_policy="client_locked",
         crowd_contribute=True,
         sim_phase_enabled=True,
@@ -184,7 +215,7 @@ DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
         task="unitree_go2",
         lobby_name="Unitree Go2",
         lobby_default=True,
-        lobby_order=1,
+        lobby_order=3,
         execution_policy="client_locked",
         crowd_contribute=True,
         sim_phase_enabled=True,
@@ -200,7 +231,7 @@ DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
         task="so101",
         lobby_name="SO-102 Arm",
         lobby_default=True,
-        lobby_order=2,
+        lobby_order=4,
         execution_policy="client_locked",
         crowd_contribute=True,
         sim_phase_enabled=True,
@@ -217,7 +248,7 @@ DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
         task="halfcheetah",
         lobby_name="HalfCheetah",
         lobby_default=True,
-        lobby_order=3,
+        lobby_order=5,
         execution_policy="client_locked",
         crowd_contribute=True,
         allow_server_video=True,
@@ -230,7 +261,7 @@ DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
         task="cartpole",
         lobby_name="CartPole",
         lobby_default=True,
-        lobby_order=4,
+        lobby_order=6,
         execution_policy="client_preferred",
         crowd_contribute=False,
         allow_server_video=True,
@@ -238,19 +269,6 @@ DEFAULT_ENV_POLICIES: dict[str, EnvPolicyConfig] = {
         max_pop_size=32,
         default_min_votes=20,
         default_elite_frac=0.0,
-    ),
-    "image": EnvPolicyConfig(
-        task="image",
-        lobby_name="Butterfly",
-        lobby_default=True,
-        lobby_order=5,
-        execution_policy="client_locked",
-        crowd_contribute=False,
-        allow_server_video=False,
-        default_pop_size=30,
-        max_pop_size=64,
-        default_min_votes=0,  # 0 = let the room derive quorum from live votes
-        default_elite_frac=None,
     ),
     "external": EnvPolicyConfig(
         task="external",
@@ -288,6 +306,7 @@ _ENV_VAR_OVERRIDES: tuple[tuple[str, str], ...] = (
     ("max_pop_size", "DET_MAX_POP_SIZE_{task}"),
     ("default_min_votes", "DET_MIN_VOTES_{task}"),
     ("default_elite_frac", "DET_ELITE_FRAC_{task}"),
+    ("default_brood_size", "DET_BROOD_SIZE_{task}"),
     ("crowd_shard_threshold", "DET_CROWD_SHARD_THRESHOLD_{task}"),
     ("crowd_shard_size", "DET_CROWD_SHARD_SIZE_{task}"),
     ("env_hyperparams", "DET_HYPERPARAMS_{task}"),
@@ -381,6 +400,8 @@ def _coerce_env_value(field_name: str, raw: object, default: object) -> object:
         return default
     if field_name == "default_min_votes":
         return _coerce_int(raw, int(default), 0, 1024)
+    if field_name == "default_brood_size":
+        return _coerce_int(raw, int(default), 1, 8)
     if field_name == "default_elite_frac":
         text = str(raw).strip().lower()
         if text in ("", "none", "null"):

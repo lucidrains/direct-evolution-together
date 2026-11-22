@@ -98,6 +98,7 @@ class TaskSpec:
     genome_kind: str = "cppn"  # "cppn" | "populora"
     lobby_order: int = 99
     default_elite_frac: float | None = None
+    default_brood_size: int = 1
     enabled: bool = True
     execution_policy: str = "client_preferred"
     crowd_contribute: bool = False
@@ -191,6 +192,7 @@ class TaskSpec:
             "max_pop_size": self.max_pop_size,
             "default_min_votes": self.default_min_votes,
             "default_elite_frac": self.default_elite_frac,
+            "default_brood_size": int(self.default_brood_size),
             "crowd_shard_threshold": int(self.crowd_shard_threshold),
             "crowd_shard_size": int(self.crowd_shard_size),
         }
@@ -254,6 +256,7 @@ class TaskSpec:
             "max_pop_size": self.max_pop_size,
             "default_min_votes": self.default_min_votes,
             "default_elite_frac": self.default_elite_frac,
+            "default_brood_size": int(self.default_brood_size),
             "crowd_shard_threshold": int(self.crowd_shard_threshold),
             "crowd_shard_size": int(self.crowd_shard_size),
             "client_sim": self.client_sim,
@@ -317,6 +320,7 @@ class TaskSpec:
             "max_pop_size": self.max_pop_size,
             "default_min_votes": self.default_min_votes,
             "default_elite_frac": self.default_elite_frac,
+            "default_brood_size": int(self.default_brood_size),
             "crowd_shard_threshold": int(self.crowd_shard_threshold),
             "crowd_shard_size": int(self.crowd_shard_size),
             "client_sim": self.client_sim,

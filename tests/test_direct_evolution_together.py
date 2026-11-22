@@ -176,41 +176,50 @@ def test_e2e_chat_persistence_cursor_and_evolution():
             assert _recv_until(a1, "identity")["username"] == "alice"
             evo0 = _recv_until(a1, "evolution_state")
             assert [g["name"] for g in evo0["goals"]] == [
+                "Butterfly",
+                "Galaxy",
+                "Creature",
+                "Lunar Lander",
                 "Microduck",
                 "Unitree Go2",
                 "SO-102 Arm",
                 "HalfCheetah",
                 "CartPole",
-                "Butterfly",
-                "Galaxy",
-                "Creature",
             ]
-            assert evo0["goals"][0]["task"] == "microduck"
-            assert evo0["goals"][0]["phase"] == "simulating"
-            assert evo0["goals"][0]["sim_phase_enabled"] is True
-            assert evo0["goals"][0]["elite_frac"] == 0.25
-            assert len(evo0["goals"][0]["genomes"]) == 8
-            assert evo0["goals"][1]["task"] == "unitree_go2"
-            assert evo0["goals"][1]["phase"] == "simulating"
-            assert evo0["goals"][1]["sim_phase_enabled"] is True
-            assert evo0["goals"][1]["elite_frac"] == 0.25
-            assert len(evo0["goals"][1]["genomes"]) == 8
-            assert evo0["goals"][2]["task"] == "so101"
-            assert evo0["goals"][2]["phase"] == "simulating"
-            assert evo0["goals"][2]["sim_phase_enabled"] is True
-            assert evo0["goals"][2]["elite_frac"] == 0.25
-            assert len(evo0["goals"][2]["genomes"]) == 8
-            assert evo0["goals"][3]["task"] == "halfcheetah"
-            assert evo0["goals"][3]["min_votes"] == 2
-            assert evo0["goals"][3]["elite_frac"] == 0.05
-            assert len(evo0["goals"][3]["genomes"]) == 12
-            assert evo0["goals"][4]["task"] == "cartpole"
-            assert evo0["goals"][4]["min_votes"] == 2
-            assert evo0["goals"][4]["elite_frac"] == 0.0
-            assert len(evo0["goals"][4]["genomes"]) == 12
-            assert evo0["goals"][5]["task"] == "image"
-            assert evo0["goals"][5]["min_votes"] == 2
-            assert len(evo0["goals"][5]["genomes"]) == 12
+            by_name = {g["name"]: g for g in evo0["goals"]}
+            assert evo0["goals"][0]["name"] == "Butterfly"
+            assert evo0["goals"][0]["task"] == "image"
+            assert evo0["goals"][0]["min_votes"] == 2
+            assert len(evo0["goals"][0]["genomes"]) == 12
+            assert by_name["Lunar Lander"]["task"] == "lunarlander"
+            assert by_name["Lunar Lander"]["phase"] == "simulating"
+            assert by_name["Lunar Lander"]["sim_phase_enabled"] is True
+            assert by_name["Lunar Lander"]["min_votes"] == 2
+            assert by_name["Lunar Lander"]["elite_frac"] == 0.25
+            assert len(by_name["Lunar Lander"]["genomes"]) == 12
+            assert by_name["Microduck"]["task"] == "microduck"
+            assert by_name["Microduck"]["phase"] == "simulating"
+            assert by_name["Microduck"]["sim_phase_enabled"] is True
+            assert by_name["Microduck"]["elite_frac"] == 0.25
+            assert len(by_name["Microduck"]["genomes"]) == 8
+            assert by_name["Unitree Go2"]["task"] == "unitree_go2"
+            assert by_name["Unitree Go2"]["phase"] == "simulating"
+            assert by_name["Unitree Go2"]["sim_phase_enabled"] is True
+            assert by_name["Unitree Go2"]["elite_frac"] == 0.25
+            assert len(by_name["Unitree Go2"]["genomes"]) == 8
+            assert by_name["SO-102 Arm"]["task"] == "so101"
+            assert by_name["SO-102 Arm"]["phase"] == "simulating"
+            assert by_name["SO-102 Arm"]["sim_phase_enabled"] is True
+            assert by_name["SO-102 Arm"]["elite_frac"] == 0.25
+            assert len(by_name["SO-102 Arm"]["genomes"]) == 8
+            assert by_name["HalfCheetah"]["task"] == "halfcheetah"
+            assert by_name["HalfCheetah"]["min_votes"] == 2
+            assert by_name["HalfCheetah"]["elite_frac"] == 0.05
+            assert len(by_name["HalfCheetah"]["genomes"]) == 12
+            assert by_name["CartPole"]["task"] == "cartpole"
+            assert by_name["CartPole"]["min_votes"] == 2
+            assert by_name["CartPole"]["elite_frac"] == 0.0
+            assert len(by_name["CartPole"]["genomes"]) == 12
 
             with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice") as a2:
                 assert _recv_until(a2, "identity")["username"] == "alice-2"
@@ -265,7 +274,7 @@ def test_ws_gzip_state_and_lazy_lineage():
                     break
             assert saw_binary
 
-            md_goal = msg["goals"][0]
+            md_goal = next(g for g in msg["goals"] if g["task"] == "microduck")
             assert md_goal["task"] == "microduck"
             assert md_goal["lineage_total"] == len(md_goal["lineage"]) == 6
             assert all(node.get("kind") == "populora" and "adapters" not in node for node in md_goal["lineage"])
@@ -1219,37 +1228,46 @@ def test_control_room_api_ws_quorum_zero_elitism_and_resume(client):
         with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=mig") as ws_lob:
             lob_state = _recv_until(ws_lob, "evolution_state")
             assert [g["name"] for g in lob_state["goals"]] == [
+                "Butterfly",
+                "Galaxy",
+                "Creature",
+                "Lunar Lander",
                 "Microduck",
                 "Unitree Go2",
                 "SO-102 Arm",
                 "HalfCheetah",
                 "CartPole",
-                "Butterfly",
-                "Galaxy",
-                "Creature",
             ]
-            assert lob_state["goals"][0]["task"] == "microduck"
-            assert len(lob_state["goals"][0]["genomes"]) == 8
-            assert lob_state["goals"][0]["min_votes"] == 4
-            assert lob_state["goals"][1]["task"] == "unitree_go2"
-            assert len(lob_state["goals"][1]["genomes"]) == 8
-            assert lob_state["goals"][1]["min_votes"] == 4
-            assert lob_state["goals"][2]["task"] == "so101"
-            assert len(lob_state["goals"][2]["genomes"]) == 8
-            assert lob_state["goals"][2]["min_votes"] == 4
-            assert lob_state["goals"][3]["task"] == "halfcheetah"
-            assert lob_state["goals"][3]["elite_frac"] == 0.05
-            assert lob_state["goals"][3]["min_votes"] == 6
+            lob_by_name = {g["name"]: g for g in lob_state["goals"]}
+            assert lob_state["goals"][0]["name"] == "Butterfly"
+            assert lob_by_name["Lunar Lander"]["task"] == "lunarlander"
+            assert lob_by_name["Lunar Lander"]["phase"] == "simulating"
+            assert lob_by_name["Lunar Lander"]["sim_phase_enabled"] is True
+            assert len(lob_by_name["Lunar Lander"]["genomes"]) == 12
+            assert lob_by_name["Lunar Lander"]["min_votes"] == 4
+            assert lob_by_name["Lunar Lander"]["elite_frac"] == 0.25
+            assert lob_by_name["Microduck"]["task"] == "microduck"
+            assert len(lob_by_name["Microduck"]["genomes"]) == 8
+            assert lob_by_name["Microduck"]["min_votes"] == 4
+            assert lob_by_name["Unitree Go2"]["task"] == "unitree_go2"
+            assert len(lob_by_name["Unitree Go2"]["genomes"]) == 8
+            assert lob_by_name["Unitree Go2"]["min_votes"] == 4
+            assert lob_by_name["SO-102 Arm"]["task"] == "so101"
+            assert len(lob_by_name["SO-102 Arm"]["genomes"]) == 8
+            assert lob_by_name["SO-102 Arm"]["min_votes"] == 4
+            assert lob_by_name["HalfCheetah"]["task"] == "halfcheetah"
+            assert lob_by_name["HalfCheetah"]["elite_frac"] == 0.05
+            assert lob_by_name["HalfCheetah"]["min_votes"] == 6
             assert all(
                 evaluate_control_genome("halfcheetah", cand, seeds=(0, 1))["mean_distance"] < 4.5
-                for cand in lob_state["goals"][3]["genomes"]
+                for cand in lob_by_name["HalfCheetah"]["genomes"]
             )
-            assert lob_state["goals"][4]["task"] == "cartpole"
-            assert lob_state["goals"][4]["elite_frac"] == 0.0
-            assert lob_state["goals"][4]["min_votes"] == 6
+            assert lob_by_name["CartPole"]["task"] == "cartpole"
+            assert lob_by_name["CartPole"]["elite_frac"] == 0.0
+            assert lob_by_name["CartPole"]["min_votes"] == 6
             assert all(
                 evaluate_control_genome("cartpole", cand, seeds=(0, 1, 2))["mean_steps"] < 60.0
-                for cand in lob_state["goals"][4]["genomes"]
+                for cand in lob_by_name["CartPole"]["genomes"]
             )
 
         # CartPole quorum is capped by the per-person vote budget; image quorum stays independent
@@ -3089,7 +3107,7 @@ def test_so101_arm_scene_assets_populora_and_wasm_worker(client, tmp_path):
 
     pkg_dir = Path(__file__).resolve().parent.parent / "direct_evolution_together"
 
-    # 1. Verify _ensure_lobby_default_goals ALWAYS keeps Microduck as default tab #0
+    # 1. Verify _ensure_lobby_default_goals keeps Butterfly as default tab #0 and Lunar Lander + robotics in order
     partial_lobby = json.dumps({
         "default_params": {"max_votes_per_user": 20, "min_votes": 3, "mut_sigma": 0.3, "elite_frac": 0.25, "crossover_rate": 0.75},
         "goals": [
@@ -3100,7 +3118,15 @@ def test_so101_arm_scene_assets_populora_and_wasm_worker(client, tmp_path):
     upgraded_json, changed = _ensure_lobby_default_goals(partial_lobby, default_pop_size=8, default_max_votes=20)
     assert changed is True
     upgraded_names = [g["name"] for g in json.loads(upgraded_json)["goals"]]
-    assert upgraded_names[:3] == ["Microduck", "Unitree Go2", "SO-102 Arm"]
+    assert upgraded_names[:7] == [
+        "Butterfly",
+        "Galaxy",
+        "Creature",
+        "Lunar Lander",
+        "Microduck",
+        "Unitree Go2",
+        "SO-102 Arm",
+    ]
 
     # 2. Verify precompiled SO-101 assets (17.9MB raw STLs -> <15KB physics.bin + 8-body visual.bin with cube)
     m_resp = client.get("/api/sim/scene/so101/")
@@ -3296,16 +3322,16 @@ def test_lazy_active_tab_ws_loading_and_compact_crowd_wire(client):
             assert all(g["genomes_loaded"] is True and len(g["genomes"]) > 0 for g in evo_eager["goals"])
             assert len(raw_eager) > 950_000
 
-            # Default lazy client loads ONLY active first tab ("Microduck")
-            assert evo_lazy["goals"][0]["name"] == "Microduck"
+            # Default lazy client loads ONLY active first tab ("Butterfly")
+            assert evo_lazy["goals"][0]["name"] == "Butterfly"
             assert evo_lazy["goals"][0]["genomes_loaded"] is True
-            assert len(evo_lazy["goals"][0]["genomes"]) == 8
+            assert len(evo_lazy["goals"][0]["genomes"]) == 30
             for stub in evo_lazy["goals"][1:]:
                 assert stub["genomes_loaded"] is False
                 assert stub["genomes"] == []
                 assert stub["lineage"] == []
                 assert stub["population_size"] >= 8
-            assert len(raw_lazy) < 360_000
+            assert len(raw_lazy) < 75_000
 
             # Focused lazy client loads ONLY "Butterfly" (< 75 KB raw vs > 950 KB eager)
             loaded_bfly = [g["name"] for g in evo_bfly["goals"] if g["genomes_loaded"]]
@@ -3339,7 +3365,7 @@ def test_lazy_active_tab_ws_loading_and_compact_crowd_wire(client):
 
             # Compact crowd wire: 201-frame replay subsampled <= 32 keyframes, ACK omits replay/trajSample,
             # GET /crowd/evals omits server-only trajSample while server fetch_room_eval_map retains it.
-            md_hash = evo_lazy["goals"][0]["genomes"][0]["hash"]
+            md_hash = next(g for g in evo_eager["goals"] if g["name"] == "Microduck")["genomes"][0]["hash"]
             dense_poses = [[float(k * 0.01 + j * 0.001) for j in range(105)] for k in range(201)]
             traj_sample = [[float(r * 0.1 + c * 0.01) for c in range(18)] for r in range(16)]
             post_resp = client.post(
@@ -4039,7 +4065,7 @@ def test_client_asset_registry_and_lazy_wire_optimization(client, tmp_path):
 
     lean_raw = json.dumps(get_lean_task_specs_payload())
     full_raw = json.dumps(get_task_specs_payload())
-    assert len(lean_raw) < 9_500
+    assert len(lean_raw) < 11_000
     assert len(full_raw) > 22_000
     assert len(lean_raw) < len(full_raw) * 0.4
 
@@ -4050,7 +4076,7 @@ def test_client_asset_registry_and_lazy_wire_optimization(client, tmp_path):
     )
     assert lean_m is not None
     embedded_specs = json.loads(lean_m.group(1))
-    assert set(embedded_specs.keys()) >= {"image", "cartpole", "halfcheetah", "microduck", "unitree_go2", "so101"}
+    assert set(embedded_specs.keys()) >= {"image", "lunarlander", "cartpole", "halfcheetah", "microduck", "unitree_go2", "so101"}
     for tid, spec in embedded_specs.items():
         assert spec.get("is_lean") is True, f"{tid} embedded spec should be lean"
         assert "policy_spec" not in spec
@@ -4220,7 +4246,8 @@ const taskSpecs = {json.dumps(embedded_specs)};
         with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=eager_peer&gzip=1") as ws_eager:
             raw_eager, wire_eager, evo_eager = _recv_raw_type(ws_eager, "evolution_state")
             assert len(raw_eager) > 950_000
-            md_full_hashes = [g["hash"] for g in evo_eager["goals"][0]["genomes"]]
+            md_eager = next(g for g in evo_eager["goals"] if g["name"] == "Microduck")
+            md_full_hashes = [g["hash"] for g in md_eager["genomes"]]
             # Evolve Butterfly once so it accumulates non-empty lineage history
             ws_eager.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 0, "index": 0, "vote": 1}))
             _, _, bfly_evolved = _recv_raw_type(ws_eager, "goal_updated", timeout=6.0)
@@ -4228,7 +4255,7 @@ const taskSpecs = {json.dumps(embedded_specs)};
             assert bfly_evolved["goal"]["lineage_total"] >= 30
 
         with connect(
-            f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=ultralazy&gzip=1&lazy=1&defer_adapters=1&defer_lineage=1&chat_limit=10"
+            f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=ultralazy&gzip=1&lazy=1&focus=Microduck&defer_adapters=1&defer_lineage=1&chat_limit=10"
         ) as ws_ul:
             # Verify evolution_state arrives BEFORE history when defer_adapters=1
             seen_order = []
@@ -4252,11 +4279,11 @@ const taskSpecs = {json.dumps(embedded_specs)};
                     hist_ul = msg
 
             assert seen_order.index("evolution_state") < seen_order.index("history")
-            assert len(raw_ul) < 8_000
-            assert wire_ul < 2_200
-            assert len(raw_eager) / max(1, len(raw_ul)) > 130.0
+            assert len(raw_ul) < 8_500
+            assert wire_ul < 2_500
+            assert len(raw_eager) / max(1, len(raw_ul)) > 120.0
 
-            md_stub = evo_ul["goals"][0]
+            md_stub = next(g for g in evo_ul["goals"] if g["name"] == "Microduck")
             assert md_stub["name"] == "Microduck"
             assert md_stub["genomes_loaded"] is True
             assert md_stub["genomes_adapters_loaded"] is False
@@ -4900,10 +4927,10 @@ def test_one_thousand_population_sharding_evolution_and_slice_hydration(client, 
         mummy_ws.set_round_config(2, 60)
 
         # Verify Lobby Microduck honors DET_LARGE_POP=1 (250 sharded individuals) even when image pop_size=30
-        with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=lobby_probe&lazy=1") as ws_lob:
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=lobby_probe&lazy=1&focus=Microduck") as ws_lob:
             _recv_until(ws_lob, "identity")
             lob_evo = _recv_until(ws_lob, "evolution_state")
-            lob_md = lob_evo["goals"][0]
+            lob_md = next(g for g in lob_evo["goals"] if g["name"] == "Microduck")
             assert lob_md["name"] == "Microduck"
             assert lob_md["genomes_sharded"] is True
             assert len(lob_md["genomes"]) == 250
@@ -5195,6 +5222,360 @@ def test_non_crowdsourced_mode_and_legacy_production_migration(client, settings,
     rewritten = json.loads(stale_path.read_text())
     assert rewritten["obs_dim"] == 55 and rewritten["action_dim"] == 14
     assert "obsDim" not in rewritten
+
+
+@pytest.mark.django_db(transaction=True)
+def test_lunarlander_js_python_parity_convergence_and_video(client, tmp_path, settings):
+    """Verify faithful Gymnasium LunarLander-v3 parity (Box2D Python vs planck.js worker), API/MP4, & PopuLoRA."""
+    from pathlib import Path
+    import subprocess
+    from direct_evolution_together.config import get_config
+    from direct_evolution_together.environments import (
+        LUNARLANDER_FPS,
+        LUNARLANDER_GRAVITY,
+        LUNARLANDER_MAIN_ENGINE_POWER,
+        LUNARLANDER_MAX_STEPS,
+        LUNARLANDER_POLICY_SPEC,
+        LUNARLANDER_SCALE,
+        LUNARLANDER_SIDE_ENGINE_POWER,
+        LUNARLANDER_SOLVED_RETURN,
+        create_task_population,
+        evaluate_control_genome,
+        evaluate_populora_genome,
+        get_task_spec,
+        lunarlander_heuristic,
+        lunarlander_rollout,
+        render_lunarlander_ascii,
+        render_task_media,
+    )
+    from direct_evolution_together.populora_engine import get_or_create_base_model
+
+    # 1. Default production lobby tab is Butterfly (image); LunarLander-v3 is registered right after image tabs
+    lobby_specs = get_config().get_lobby_goal_specs()
+    assert lobby_specs[0][0] == "Butterfly"
+    assert lobby_specs[0][1] == "image"
+    ll_entry = next((s for s in lobby_specs if s[1] == "lunarlander"), None)
+    assert ll_entry == ("Lunar Lander", "lunarlander", 16)
+    ll_spec = get_task_spec("lunarlander")
+    assert ll_spec.genome_kind == "populora"
+    assert ll_spec.default_pop_size == 16
+    assert ll_spec.default_min_votes == 4
+    assert ll_spec.default_elite_frac == 0.25
+    assert ll_spec.max_steps == 1000
+    assert LUNARLANDER_FPS == 50
+    assert LUNARLANDER_SCALE == 30.0
+    assert LUNARLANDER_GRAVITY == -10.0
+    assert LUNARLANDER_MAIN_ENGINE_POWER == 13.0
+    assert LUNARLANDER_SIDE_ENGINE_POWER == 0.6
+    assert LUNARLANDER_SOLVED_RETURN == 200.0
+    assert LUNARLANDER_MAX_STEPS == 1000
+
+    # 2. Exact Python Box2D <-> Browser JS planck.js parity on official Gymnasium heuristic AND PopuLoRA WeightOnlyMLP
+    py_heur0 = lunarlander_rollout(lunarlander_heuristic, seed=0, max_steps=1000)
+    assert py_heur0["landed"] is True and py_heur0["on_pad"] is True
+    assert py_heur0["return"] >= 260.0
+    ascii_art = render_lunarlander_ascii(py_heur0)
+    assert "LunarLander-v3" in ascii_art and "*" in ascii_art
+
+    torch.manual_seed(17)
+    genome = create_task_population("lunarlander", 3)[0]
+    _, _, base_model_payload = get_or_create_base_model(
+        LUNARLANDER_POLICY_SPEC, base_seed=int(genome["base_seed"]), base_hash=str(genome["base_hash"])
+    )
+    py_ro0 = lunarlander_rollout(genome, seed=0, max_steps=1000)
+    py_ro_up = lunarlander_rollout(genome, seed=1, max_steps=1000, nudge="up")
+    py_ev = evaluate_control_genome("lunarlander", genome, seeds=(0, 1, 2))
+    py_pop_ev = evaluate_populora_genome("lunarlander", genome, seeds=(0, 1, 2))
+    assert abs(py_pop_ev["summary"]["return"] - py_ev["return"]) < 1e-6
+
+    repo_root = Path(__file__).resolve().parent.parent
+    planck_path = str(repo_root / "direct_evolution_together/assets/vendor/planck/planck.min.js")
+    lr_path = str(repo_root / "direct_evolution_together/frontend/lunar_renderer.js")
+    worker_path = str(repo_root / "direct_evolution_together/frontend/sim_worker.js")
+    js_script = (
+        "const fs = require('fs');\n"
+        "const vm = require('vm');\n"
+        f"const pl = require({json.dumps(planck_path)});\n"
+        f"const lr = require({json.dumps(lr_path)});\n"
+        f"const workerSrc = fs.readFileSync({json.dumps(worker_path)}, 'utf8');\n"
+        "const sandbox = {\n"
+        "  console, Math, Float32Array, Float64Array, Int32Array, Uint8Array, Uint32Array, Map, Set, Array, Object, Number, String, Boolean, JSON, Error, Promise, URL,\n"
+        "  atob: (s) => Buffer.from(s, 'base64').toString('binary'),\n"
+        "  importScripts: () => {},\n"
+        "  self: { location: { href: 'http://localhost/' }, addEventListener: () => {}, postMessage: () => {}, planck: pl, DetLunarRenderer: lr },\n"
+        "};\n"
+        "vm.createContext(sandbox);\n"
+        "vm.runInContext(workerSrc, sandbox);\n"
+        "sandbox.lunarPlanckLoaded = true;\n"
+        f"const g = {json.dumps(genome)};\n"
+        f"const bm = {json.dumps(base_model_payload)};\n"
+        "(async () => {\n"
+        "  const heur0 = lr.lunarlanderRolloutPlanck(lr.lunarlanderHeuristic, { seed: 0, maxSteps: 1000, planck: pl });\n"
+        "  const ro0 = await sandbox.lunarlanderRollout(g, 0, 1000, null, false, true, bm);\n"
+        "  const roUp = await sandbox.lunarlanderRollout(g, 1, 1000, 'up', false, true, bm);\n"
+        "  const ev = await sandbox.evaluateLunarLander(g, [0, 1, 2], bm);\n"
+        "  console.log(JSON.stringify({\n"
+        "    heur0: { steps: heur0.steps, ret: heur0.return, landed: heur0.landed, final_x: heur0.final_x },\n"
+        "    ro0: { steps: ro0.steps, ret: ro0.return, outcome: ro0.outcome, final_x: ro0.final_x, terrain_y: ro0.terrain_y },\n"
+        "    roUp: { steps: roUp.steps, ret: roUp.return, outcome: roUp.outcome },\n"
+        "    ev: ev.summary,\n"
+        "  }));\n"
+        "})().catch((e) => { console.error(e); process.exit(1); });\n"
+    )
+    js_out = json.loads(subprocess.check_output(["node", "-e", js_script], text=True))
+    assert js_out["heur0"]["steps"] == py_heur0["steps"]
+    assert js_out["heur0"]["landed"] is True
+    assert abs(js_out["heur0"]["ret"] - py_heur0["return"]) < 0.05
+    assert abs(js_out["heur0"]["final_x"] - py_heur0["final_x"]) < 1e-3
+
+    assert js_out["ro0"]["steps"] == py_ro0["steps"]
+    assert js_out["ro0"]["outcome"] == py_ro0["outcome"]
+    assert abs(js_out["ro0"]["ret"] - py_ro0["return"]) < 0.1
+    assert abs(js_out["ro0"]["final_x"] - py_ro0["final_x"]) < 1e-2
+    assert js_out["ro0"]["terrain_y"] == py_ro0["terrain_y"]
+    assert js_out["roUp"]["steps"] == py_ro_up["steps"]
+    assert abs(js_out["roUp"]["ret"] - py_ro_up["return"]) < 0.1
+    assert abs(js_out["ev"]["return"] - py_ev["return"]) < 0.2
+
+    # 3. Server rollout (including 'up' nudge), batch eval, lazy MP4 render, vendor planck asset, & HTML exposure
+    pl_resp = client.get("/assets/vendor/planck/planck.min.js")
+    assert pl_resp.status_code == 200 and len(pl_resp.content) > 100_000
+
+    ro_resp = client.post(
+        "/api/sim/rollout/",
+        data=json.dumps({"task": "lunarlander", "genome": genome, "seed": 1, "nudge": "up"}),
+        content_type="application/json",
+    )
+    assert ro_resp.status_code == 200
+    assert ro_resp.json()["rollout"]["steps"] == py_ro_up["steps"]
+
+    ev_resp = client.post(
+        "/api/sim/eval-batch/",
+        data=json.dumps({"task": "lunarlander", "genomes": [genome], "seeds": [0, 1, 2]}),
+        content_type="application/json",
+    )
+    assert ev_resp.status_code == 200
+    assert abs(ev_resp.json()["items"][0]["summary"]["return"] - py_ev["return"]) < 1e-3
+
+    media_root = tmp_path / "media"
+    settings.MEDIA_ROOT = media_root
+    media = render_task_media("lunarlander", genome, seed=0, media_root=media_root)
+    assert (media_root / media["mp4_rel"]).stat().st_size > 1000
+    assert (media_root / media["png_rel"]).stat().st_size > 500
+
+    html = client.get("/").content.decode("utf-8")
+    assert "lunar_renderer.js" in html
+    assert "LunarLander-v3" in html
+    assert "Brood Selection" in html
+    assert "10.1109/ICEC.1994.350030" in html
+
+
+@pytest.mark.django_db(transaction=True)
+def test_brood_selection_size_2_e2e(client, settings):
+    """Verify Tackett & Carmi (1994) brood selection with brood_size=2 across unit, PopuLoRA, WS E2E, and DB restore."""
+    from django.test import Client
+    from direct_evolution_together.cppn import CPPN, evolve_population_broods
+    from direct_evolution_together.environments import MICRODUCK_POLICY_SPEC, create_task_population
+    from direct_evolution_together.models import RoomEvolutionState
+    from direct_evolution_together.populora_engine import evolve_populora_broods, reset_populora_goal_runtime
+    from direct_evolution_together.ws_bridge import flush_room_states
+
+    # 1. CPPN unit test: brood_size=2 produces 2 distinct siblings per bred slot sharing parent(s)
+    torch.manual_seed(123)
+    pop6 = [CPPN.random().to_dict() for _ in range(6)]
+    scores = [2, 1, 0, 0, 0, 0]
+    ups = [2, 1, 0, 0, 0, 0]
+    bundle, top_sc = evolve_population_broods(
+        pop6, scores, ups, mut_sigma=0.30, pop_size=6, elite_frac=0.20, crossover_rate=0.75, brood_size=2
+    )
+    assert top_sc == 2
+    assert bundle["brood_size"] == 2
+    assert bundle["pop_size"] == 6
+    assert len(bundle["fixed"]) >= 1
+    assert len(bundle["broods"]) >= 1
+    assert len(bundle["fixed"]) + len(bundle["broods"]) == 6
+    all_slots = sorted([f["slot"] for f in bundle["fixed"]] + [b["slot"] for b in bundle["broods"]])
+    assert all_slots == [0, 1, 2, 3, 4, 5]
+    for grp in bundle["broods"]:
+        assert len(grp["candidates"]) == 2
+        c0, c1 = grp["candidates"]
+        assert c0["id"] != c1["id"]
+        assert c0["uuid"] != c1["uuid"]
+        assert c0["weights"] != c1["weights"]
+        assert c0["parents"] == c1["parents"]
+
+    # 2. PopuLoRA unit test: brood_size=2 produces 2 distinct f16 LoRA siblings per culled crossover slot
+    reset_populora_goal_runtime("brood_unit", "Microduck")
+    md_pop = create_task_population("microduck", 6)
+    md_bundle, _ = evolve_populora_broods(
+        room="brood_unit",
+        goal="Microduck",
+        task_id="microduck",
+        generation=0,
+        policy_spec=MICRODUCK_POLICY_SPEC,
+        genome_dicts=md_pop,
+        scores=[2, 1, 0, 0, -1, -1],
+        up_counts=[2, 1, 0, 0, 0, 0],
+        pop_size=6,
+        elite_frac=0.25,
+        brood_size=2,
+    )
+    assert md_bundle["brood_size"] == 2
+    assert len(md_bundle["broods"]) >= 1
+    assert len(md_bundle["fixed"]) + len(md_bundle["broods"]) == 6
+    for grp in md_bundle["broods"]:
+        assert len(grp["candidates"]) == 2
+        assert grp["candidates"][0]["hash"] != grp["candidates"][1]["hash"]
+
+    # 3. Full E2E WS + Django + Nim test with brood_size=2 on Lunar Lander private room
+    create_resp = client.post(
+        "/api/rooms/",
+        data=json.dumps({
+            "name": "Lunar Brood Lab",
+            "task": "lunarlander",
+            "population_size": 6,
+            "min_votes": 2,
+            "max_votes_per_user": 6,
+            "elite_frac": 0.20,
+            "crossover_rate": 0.80,
+            "brood_size": 2,
+        }),
+        content_type="application/json",
+    )
+    assert create_resp.status_code == 200
+    room_slug = create_resp.json()["slug"]
+    goal_name = create_resp.json()["goal"]
+
+    with _ws_server(seed=True, countdown_ms=150) as port:
+        settings.WS_HOST = "127.0.0.1"
+        settings.WS_PORT = port
+        seed_from_db()
+        peer_a, peer_b = Client(), Client()
+        with (
+            connect(f"ws://127.0.0.1:{port}/ws/chat/{room_slug}/?username=alice") as ws_a,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/{room_slug}/?username=bob") as ws_b,
+        ):
+            _recv_until(ws_a, "identity")
+            evo0 = _recv_until(ws_a, "evolution_state")
+            _recv_until(ws_b, "identity")
+            _recv_until(ws_b, "evolution_state")
+
+            g0 = evo0["goals"][0]
+            assert g0["name"] == goal_name
+            assert g0["task"] == "lunarlander"
+            assert g0["generation"] == 0
+            assert g0["brood_size"] == 2
+            assert g0["phases"] == ["simulating", "voting", "brood"]
+            assert g0["phase"] == "simulating"
+            assert g0["phase_index"] == 0
+            assert g0["phase_count"] == 3
+            assert g0["brood"] is None
+
+            # Phase 0 -> Phase 1: submit crowd eval results to unlock voting
+            sim_items = [
+                {
+                    "hash": cg["hash"],
+                    "uuid": cg["uuid"],
+                    "summary": {
+                        "primary_value": float(-100 + i * 25),
+                        "badge_text": f"{-100 + i * 25:+d}",
+                        "tier": "",
+                    },
+                }
+                for i, cg in enumerate(g0["genomes"])
+            ]
+            for http_peer in (peer_a, peer_b):
+                sim_resp = http_peer.post(
+                    f"/api/rooms/{room_slug}/crowd/results/",
+                    data=json.dumps({"goal": goal_name, "generation": 0, "results": sim_items}),
+                    content_type="application/json",
+                )
+                assert sim_resp.status_code == 200
+            v_open = _recv_until(ws_a, "votes_updated", timeout=5.0)
+            while v_open.get("phase") != "voting":
+                v_open = _recv_until(ws_a, "votes_updated", timeout=5.0)
+            assert v_open["phase"] == "voting"
+            assert v_open["phase_index"] == 1
+            assert v_open["phases"] == ["simulating", "voting", "brood"]
+
+            # Phase 1 (parent selection): vote on 2 parents -> triggers brood generation
+            ws_a.send(json.dumps({"type": "cast_vote", "goal": goal_name, "generation": 0, "index": 0, "vote": 1}))
+            ws_b.send(json.dumps({"type": "cast_vote", "goal": goal_name, "generation": 0, "index": 1, "vote": 1}))
+
+            brood_upd = _recv_until(ws_a, "goal_updated", timeout=6.0)
+            _recv_until(ws_b, "goal_updated", timeout=6.0)
+            gb = brood_upd["goal"]
+            assert gb["generation"] == 0  # still gen 0 until brood winners are committed
+            assert gb["phase"] == "brood"
+            assert gb["phase_index"] == 2
+            assert gb["phases"] == ["simulating", "voting", "brood"]
+            assert gb["brood"] is not None
+            assert gb["brood"]["brood_size"] == 2
+            groups = gb["brood"]["groups"]
+            assert len(groups) >= 1
+            for grp in groups:
+                assert len(grp["candidates"]) == 2
+                assert grp["candidates"][0]["uuid"] != grp["candidates"][1]["uuid"]
+
+            # Regular cast_vote is cleanly blocked during brood phase
+            ws_a.send(json.dumps({"type": "cast_vote", "goal": goal_name, "generation": 0, "index": 0, "vote": 1}))
+            throttled = _recv_until(ws_a, "vote_throttled", timeout=3.0)
+            assert "brood" in throttled["message"].lower()
+
+            # Verify mid-brood DB persistence & restore roundtrip
+            flush_room_states()
+            saved = RoomEvolutionState.objects.get(room=room_slug)
+            saved_doc = json.loads(saved.state_json)
+            assert saved_doc["goals"][0]["phase"] == "brood"
+            assert len(saved_doc["goals"][0]["brood_state"]["broods"]) == len(groups)
+
+            # Vote on each brood: pick alternating sibling (cand 1 on even broods, cand 0 on odd broods)
+            expected_winner_by_slot: dict[int, str] = {}
+            rejected_uuids: set[str] = set()
+            for bi, grp in enumerate(groups):
+                want_ci = 1 if bi % 2 == 0 else 0
+                lose_ci = 1 - want_ci
+                expected_winner_by_slot[grp["slot"]] = grp["candidates"][want_ci]["uuid"]
+                rejected_uuids.add(grp["candidates"][lose_ci]["uuid"])
+                # First cast on wrong candidate then switch (verifying switch semantics) on brood 0
+                if bi == 0:
+                    ws_a.send(json.dumps({
+                        "type": "cast_brood_vote",
+                        "goal": goal_name,
+                        "generation": 0,
+                        "brood_index": bi,
+                        "candidate_index": lose_ci,
+                    }))
+                    bv_first = _recv_until(ws_a, "brood_votes_updated", timeout=3.0)
+                    assert bv_first["brood_votes"][0]["counts"][lose_ci] == 1
+                ws_a.send(json.dumps({
+                    "type": "cast_brood_vote",
+                    "goal": goal_name,
+                    "generation": 0,
+                    "brood_index": bi,
+                    "candidate_index": want_ci,
+                }))
+                bv = _recv_until(ws_a, "brood_votes_updated", timeout=3.0)
+                assert bv["brood_votes"][bi]["leader"] == want_ci
+
+            # Wait for brood countdown to finalize into Generation 1
+            gen1_upd = _recv_until(ws_a, "goal_updated", timeout=6.0)
+            g1 = gen1_upd["goal"]
+            assert g1["generation"] == 1
+            assert g1["phase"] == "simulating"
+            assert g1["phase_index"] == 0
+            assert g1["phases"] == ["simulating", "voting", "brood"]
+            assert g1["brood"] is None
+            assert len(g1["genomes"]) == 6
+
+            # Every bred slot in Gen 1 MUST be the exact sibling chosen during brood voting!
+            for slot, expected_uuid in expected_winner_by_slot.items():
+                assert g1["genomes"][slot]["uuid"] == expected_uuid
+            gen1_uuids = {g["uuid"] for g in g1["genomes"]}
+            assert gen1_uuids.isdisjoint(rejected_uuids)
+            lineage_uuids = {n.get("uuid") for n in g1["lineage"]}
+            assert lineage_uuids.isdisjoint(rejected_uuids)
+
 
 
 

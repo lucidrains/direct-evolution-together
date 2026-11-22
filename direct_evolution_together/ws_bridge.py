@@ -10,8 +10,11 @@ from django.db import close_old_connections
 
 from direct_evolution_together import mummy_ws
 from direct_evolution_together.cppn import (
+    MAX_BROOD_SIZE,
+    MIN_BROOD_SIZE,
     ensure_genome_uuid,
     evolve_population,
+    evolve_population_broods,
     normalize_short_uuid,
     resize_population,
     sync_genome_counter,
@@ -31,6 +34,7 @@ from direct_evolution_together.environments import (
 )
 from direct_evolution_together.models import ChatMessage, RoomEvolutionState
 from direct_evolution_together.populora_engine import (
+    evolve_populora_broods,
     evolve_populora_population,
     resize_populora_population,
 )
@@ -178,6 +182,8 @@ def _build_goal_entry(
         entry["env_params"] = clean_env
     if spec.default_elite_frac is not None:
         entry["elite_frac"] = float(spec.default_elite_frac)
+    if spec.default_brood_size > 1:
+        entry["brood_size"] = int(spec.default_brood_size)
     return entry
 
 
@@ -220,6 +226,7 @@ def build_room_state_json(
     default_elite_fallback: float = 0.20,
     max_elite_frac: float = 0.50,
     crossover_rate: float = 0.75,
+    brood_size: int | None = None,
     auto_evolve: bool | None = None,
 ) -> str:
     """Serialize initial Generation-0 room state matching Mummy's RoomEvolutionState schema."""
@@ -234,12 +241,17 @@ def build_room_state_json(
         if elite_frac is None
         else max(0.0, min(max_elite_frac, float(elite_frac)))
     )
+    eff_brood_size = max(
+        MIN_BROOD_SIZE,
+        min(MAX_BROOD_SIZE, int(spec.default_brood_size if brood_size is None else brood_size)),
+    )
     params = {
         "max_votes_per_user": int(max_votes_per_user),
         "min_votes": int(eff_min_votes),
         "mut_sigma": float(mut_sigma),
         "elite_frac": float(eff_elite_frac),
         "crossover_rate": float(crossover_rate),
+        "brood_size": int(eff_brood_size),
     }
     lineage = _build_lineage_from_genomes(genomes, gen=0)
     eff_auto = spec.default_auto_evolve if auto_evolve is None else bool(auto_evolve)
@@ -397,6 +409,8 @@ def _ensure_lobby_default_goals(
                 g["generation"] = 0
                 g["genomes"] = fresh
                 g["lineage"] = _build_lineage_from_genomes(fresh, gen=0)
+                g["sim_phase_enabled"] = bool(task_spec.sim_phase_enabled)
+                g["auto_evolve"] = bool(task_spec.default_auto_evolve)
                 g["phase"] = "simulating" if task_spec.sim_phase_enabled else "voting"
                 g["sim_completed"] = 0
                 changed = True
@@ -438,6 +452,7 @@ def _ensure_lobby_default_goals(
             "mut_sigma": float(base_params.get("mut_sigma", default_mut_sigma)),
             "elite_frac": default_elite_for_task(task, float(base_params.get("elite_frac", default_elite_fallback))),
             "crossover_rate": float(base_params.get("crossover_rate", default_crossover_rate)),
+            "brood_size": int(spec.default_brood_size),
         }
         new_goal_doc: dict[str, object] = {
             "name": name,
@@ -611,26 +626,65 @@ def flush_evo_jobs() -> int:
                 )
             elif kind == "evolve":
                 spec = get_task_spec(task)
+                brood_size = max(MIN_BROOD_SIZE, min(MAX_BROOD_SIZE, int(job.get("brood_size", 1))))
                 if spec.genome_kind == "populora" and spec.policy_spec is not None:
                     close_old_connections()
                     gen_idx = int(job.get("generation", 0))
                     eval_map = fetch_room_eval_map(room, goal_name, gen_idx, trusted_only=True)
                     if not eval_map:
                         eval_map = fetch_room_eval_map(room, goal_name, gen_idx, trusted_only=False)
-                    next_genomes, top_score = evolve_populora_population(
-                        room=room,
-                        goal=goal_name,
-                        task_id=spec.task_id,
-                        generation=gen_idx,
-                        policy_spec=spec.policy_spec,
-                        genome_dicts=job["genomes"],
-                        scores=job["scores"],
-                        up_counts=job["up_counts"],
-                        eval_by_hash=eval_map,
+                    if brood_size > 1:
+                        brood_doc, top_score = evolve_populora_broods(
+                            room=room,
+                            goal=goal_name,
+                            task_id=spec.task_id,
+                            generation=gen_idx,
+                            policy_spec=spec.policy_spec,
+                            genome_dicts=job["genomes"],
+                            scores=job["scores"],
+                            up_counts=job["up_counts"],
+                            eval_by_hash=eval_map,
+                            mut_sigma=float(job.get("mut_sigma", 0.30)),
+                            pop_size=pop_size,
+                            elite_frac=float(job.get("elite_frac", 0.25)),
+                            brood_size=brood_size,
+                            max_horizon=max(1, spec.max_steps),
+                        )
+                        mummy_ws.apply_goal_brood(
+                            room, goal_name, json.dumps(brood_doc, separators=(",", ":")), int(top_score)
+                        )
+                    else:
+                        next_genomes, top_score = evolve_populora_population(
+                            room=room,
+                            goal=goal_name,
+                            task_id=spec.task_id,
+                            generation=gen_idx,
+                            policy_spec=spec.policy_spec,
+                            genome_dicts=job["genomes"],
+                            scores=job["scores"],
+                            up_counts=job["up_counts"],
+                            eval_by_hash=eval_map,
+                            mut_sigma=float(job.get("mut_sigma", 0.30)),
+                            pop_size=pop_size,
+                            elite_frac=float(job.get("elite_frac", 0.25)),
+                            max_horizon=max(1, spec.max_steps),
+                        )
+                        mummy_ws.apply_goal_evolve(
+                            room, goal_name, json.dumps(next_genomes, separators=(",", ":")), int(top_score)
+                        )
+                elif brood_size > 1:
+                    brood_doc, top_score = evolve_population_broods(
+                        job["genomes"],
+                        job["scores"],
+                        job["up_counts"],
                         mut_sigma=float(job.get("mut_sigma", 0.30)),
                         pop_size=pop_size,
-                        elite_frac=float(job.get("elite_frac", 0.25)),
-                        max_horizon=max(1, spec.max_steps),
+                        elite_frac=float(job.get("elite_frac", 0.20)),
+                        crossover_rate=float(job.get("crossover_rate", 0.75)),
+                        brood_size=brood_size,
+                    )
+                    mummy_ws.apply_goal_brood(
+                        room, goal_name, json.dumps(brood_doc, separators=(",", ":")), int(top_score)
                     )
                 else:
                     next_genomes, top_score = evolve_population(
@@ -642,9 +696,9 @@ def flush_evo_jobs() -> int:
                         elite_frac=float(job.get("elite_frac", 0.20)),
                         crossover_rate=float(job.get("crossover_rate", 0.75)),
                     )
-                mummy_ws.apply_goal_evolve(
-                    room, goal_name, json.dumps(next_genomes, separators=(",", ":")), int(top_score)
-                )
+                    mummy_ws.apply_goal_evolve(
+                        room, goal_name, json.dumps(next_genomes, separators=(",", ":")), int(top_score)
+                    )
             elif kind == "resize":
                 spec = get_task_spec(task)
                 if spec.genome_kind == "populora" and spec.policy_spec is not None:
@@ -731,6 +785,7 @@ def start_ws_server(
     mut_sigma: float = 0.30,
     elite_frac: float = 0.20,
     crossover_rate: float = 0.75,
+    brood_size: int = 1,
     admin_password: str | None = None,
     evolve_token: str | None = None,
 ) -> None:
@@ -759,6 +814,7 @@ def start_ws_server(
         mummy_ws.set_default_population_size(eff_default_pop)
         mummy_ws.set_default_max_votes(int(max_votes))
         mummy_ws.set_default_ga_params(float(mut_sigma), float(elite_frac), float(crossover_rate))
+        mummy_ws.set_default_brood_size(max(MIN_BROOD_SIZE, min(MAX_BROOD_SIZE, int(brood_size))))
         if seed:
             seed_from_db(default_pop_size=eff_pop_override, default_max_votes=int(max_votes))
         if not mummy_ws.has_room_evolution("lobby"):

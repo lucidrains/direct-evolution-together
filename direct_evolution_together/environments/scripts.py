@@ -23,9 +23,10 @@ def build_control_runner_script(
             if h.get("key") and str(h["key"]) in clean_env
         }
         env_line = f"ENV_PARAMS = {user_overrides!r}" if user_overrides else "ENV_PARAMS = None"
+        extra_deps = ("populora", "Box2D") if spec.task_id == "lunarlander" else ("populora",)
         return "\n".join(
             [
-                *build_uv_script_header(extra_deps=("populora",)),
+                *build_uv_script_header(extra_deps=extra_deps),
                 "import sys",
                 "import torch",
                 "from direct_evolution_together.environments import evaluate_populora_genome, get_task_spec",

@@ -75,6 +75,7 @@ from direct_evolution_together.environments import (
     get_scene_manifest,
     get_task_spec,
     get_task_specs_payload,
+    lunarlander_eval_seeds_for_generation,
     normalize_task_id,
     render_task_media,
     rollout_control_episode,
@@ -88,7 +89,14 @@ from direct_evolution_together.populora_engine import (
     load_populora_checkpoint_bytes,
     reset_populora_goal_runtime,
     save_populora_checkpoint_bytes,
+    validate_populora_genome_dict,
 )
+
+
+def _validate_task_genome(spec: object, raw_genome: object) -> dict:
+    if getattr(spec, "genome_kind", "cppn") == "populora" and getattr(spec, "policy_spec", None) is not None:
+        return validate_populora_genome_dict(raw_genome, getattr(spec, "policy_spec"))
+    return validate_genome_dict(raw_genome)
 
 
 _LOOPBACK_ADDRS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
@@ -225,6 +233,10 @@ def index(
     initial_crossover_rate = _parse_clamped_float_param(
         request.GET.get("crossover"), settings.CROSSOVER_RATE, 0.0, 1.0
     )
+    default_brood = task_spec.default_brood_size if task_spec.default_brood_size > 1 else settings.BROOD_SIZE
+    initial_brood_size = _parse_clamped_int_param(
+        request.GET.get("brood_size"), default_brood, 1, 8
+    )
     base_path = _resolve_base_path(request)
     ws_via_proxy = bool(getattr(settings, "WS_VIA_PROXY", False) or base_path)
     can_evolve_now = _resolve_evolve_now_access(request)
@@ -271,6 +283,7 @@ def index(
             "initial_mut_sigma": f"{initial_mut_sigma:.2f}",
             "initial_elite_frac": f"{initial_elite_frac:.2f}",
             "initial_crossover_rate": f"{initial_crossover_rate:.2f}",
+            "initial_brood_size": initial_brood_size,
             "mujoco_wasm_url": mujoco_wasm_url,
             "task_specs": get_lean_task_specs_payload(),
             "crowd_config": {
@@ -673,7 +686,14 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
     base_path = _resolve_base_path(request)
     seeded_meta: dict | None = None
 
-    if uploaded_files or task != "image":
+    raw_brood = payload.get("brood_size")
+    default_brood = task_spec.default_brood_size if task_spec.default_brood_size > 1 else settings.BROOD_SIZE
+    brood_size_val = (
+        _parse_clamped_int_param(raw_brood, default_brood, 1, 8)
+        if (raw_brood is not None and str(raw_brood).strip() != "")
+        else default_brood
+    )
+    if uploaded_files or task != "image" or brood_size_val > 1:
         if uploaded_files:
             if task_spec.genome_kind == "populora" and task_spec.policy_spec is not None:
                 try:
@@ -753,6 +773,7 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
             "crossover_rate": _parse_clamped_float_param(
                 payload.get("crossover_rate"), settings.CROSSOVER_RATE, 0.0, 1.0
             ),
+            "brood_size": brood_size_val,
         }
 
     enable_worker = task == "external" or str(payload.get("enable_worker") or "").lower() in ("1", "true", "yes")
@@ -796,6 +817,7 @@ def api_create_room(request: HttpRequest) -> JsonResponse:
             mut_sigma=seeded_meta["mut_sigma"],
             elite_frac=seeded_meta["elite_frac"],
             crossover_rate=seeded_meta["crossover_rate"],
+            brood_size=seeded_meta["brood_size"],
             auto_evolve=auto_ev_opt,
         )
         RoomEvolutionState.objects.update_or_create(
@@ -926,7 +948,7 @@ def api_render_video(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"ok": False, "error": f"Server video rendering is disabled for '{task}'."}, status=400)
 
     try:
-        genome = validate_genome_dict(payload.get("genome"))
+        genome = _validate_task_genome(spec, payload.get("genome"))
         seed = max(0, min(10_000_000, int(payload.get("seed", 0))))
     except (ValueError, TypeError) as exc:
         return JsonResponse({"ok": False, "error": str(exc)}, status=400)
@@ -974,11 +996,12 @@ def api_sim_eval_batch(request: HttpRequest) -> JsonResponse:
     raw_genomes = payload.get("genomes")
     if not isinstance(raw_genomes, list) or not raw_genomes:
         return JsonResponse({"ok": False, "error": "Non-empty genomes list is required."}, status=400)
-    if len(raw_genomes) > MAX_POPULATION_SIZE:
-        return JsonResponse({"ok": False, "error": f"Too many genomes (max {MAX_POPULATION_SIZE})."}, status=400)
+    max_batch = max(MAX_POPULATION_SIZE, int(spec.max_pop_size))
+    if len(raw_genomes) > max_batch:
+        return JsonResponse({"ok": False, "error": f"Too many genomes (max {max_batch})."}, status=400)
 
     try:
-        genomes = [validate_genome_dict(g) for g in raw_genomes]
+        genomes = [_validate_task_genome(spec, g) for g in raw_genomes]
     except ValueError as exc:
         return JsonResponse({"ok": False, "error": str(exc)}, status=400)
 
@@ -1020,13 +1043,13 @@ def api_sim_rollout(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"ok": False, "error": f"Task '{task}' is locked to client-side simulation."}, status=400)
 
     try:
-        genome = validate_genome_dict(payload.get("genome"))
+        genome = _validate_task_genome(spec, payload.get("genome"))
         seed = max(0, min(10_000_000, int(payload.get("seed", 0))))
     except (ValueError, TypeError) as exc:
         return JsonResponse({"ok": False, "error": str(exc)}, status=400)
 
     raw_nudge = str(payload.get("nudge") or "").strip().lower()
-    nudge = raw_nudge if raw_nudge in ("left", "right", "back", "fwd", "hop") else None
+    nudge = raw_nudge if raw_nudge in ("left", "right", "up", "back", "fwd", "hop") else None
     raw_steps = payload.get("max_steps")
     max_steps = int(raw_steps) if isinstance(raw_steps, int) else None
     include_geoms = bool(payload.get("include_geoms", True))
@@ -1758,7 +1781,11 @@ def api_crowd_claim(request: HttpRequest, room: str) -> JsonResponse:
             "sharded": _is_goal_sharded(spec, pop_total),
             "crowd_shard_threshold": spec.crowd_shard_threshold,
             "crowd_shard_size": spec.crowd_shard_size,
-            "eval_seeds": list(spec.eval_seeds or [0, 1]),
+            "eval_seeds": (
+                list(lunarlander_eval_seeds_for_generation(generation))
+                if task_id == "lunarlander"
+                else list(spec.eval_seeds or [0, 1])
+            ),
             "base_hash": g_index.base_hash,
             "contributor_id": cid,
             "total_count": pop_total,

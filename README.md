@@ -32,3 +32,15 @@ $ direct-evolution-together
   doi     = {10.1162/EVCO_a_00030}
 }
 ```
+
+```bibtex
+@inproceedings{tackett1994unique,
+  title        = {The unique implications of brood selection for genetic programming},
+  author       = {Tackett, Walter Alden and Carmi, Aviram},
+  booktitle    = {Proceedings of the First IEEE Conference on Evolutionary Computation. IEEE World Congress on Computational Intelligence},
+  pages        = {160--165},
+  year         = {1994},
+  organization = {IEEE},
+  doi          = {10.1109/ICEC.1994.350030}
+}
+```

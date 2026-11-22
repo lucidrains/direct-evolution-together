@@ -30,13 +30,19 @@ from populora import (
     sketch_trajectories,
 )
 from populora._utils import default, exists
-from populora.operators import _efficient_svd_of_lora
+from populora.operators import _efficient_svd_of_lora, parent_select_tournament
 import torch
 from torch import Tensor
 import torch.nn as nn
 from torch_einops_utils import z_score
 
-from direct_evolution_together.cppn import _alloc_genome_id, alloc_short_uuid, normalize_short_uuid
+from direct_evolution_together.cppn import (
+    MAX_BROOD_SIZE,
+    MIN_BROOD_SIZE,
+    _alloc_genome_id,
+    alloc_short_uuid,
+    normalize_short_uuid,
+)
 
 MAX_POPULORA_CHECKPOINT_BYTES = 4 * 1024 * 1024  # 4 MB cap for merged GRU/MLP .pt files
 
@@ -141,6 +147,60 @@ class MLPPolicy(nn.Module):
         return torch.cat((mean, self.log_std.expand_as(mean)), dim=-1)
 
 
+class WeightOnlyMLPPolicy(nn.Module):
+    """Weight-only ReLU MLP where each layer pads a constant 1.0 input so LoRA adapts every bias."""
+
+    def __init__(
+        self,
+        obs_dim: int,
+        action_dim: int,
+        hidden_dim: int = 64,
+        head_dim: int = 64,
+    ) -> None:
+        super().__init__()
+        self.obs_dim = obs_dim
+        self.action_dim = action_dim
+        self.hidden_dim = hidden_dim
+        self.head_dim = head_dim
+        self.l0 = nn.Linear(obs_dim + 1, hidden_dim, bias=False)
+        self.l1 = nn.Linear(hidden_dim + 1, head_dim, bias=False)
+        self.head = nn.Linear(head_dim + 1, action_dim, bias=False)
+        self.log_std = nn.Parameter(torch.zeros(action_dim))
+
+    def forward(self, obs: Tensor) -> Tensor:
+        ones = torch.ones(*obs.shape[:-1], 1, device=obs.device, dtype=obs.dtype)
+        h = torch.relu(self.l0(torch.cat((obs, ones), dim=-1)))
+        h = torch.relu(self.l1(torch.cat((h, ones), dim=-1)))
+        mean = self.head(torch.cat((h, ones), dim=-1))
+        return torch.cat((mean, self.log_std.expand_as(mean)), dim=-1)
+
+
+def _make_populora_population(
+    base_model: nn.Module,
+    *,
+    pop_size: int,
+    low_rank: int,
+    lora_targets: Sequence[str],
+    policy_spec: dict[str, object],
+) -> Population:
+    if bool(policy_spec.get("adaptive_epsilon", False)):
+        return Population(
+            base_model,
+            pop_size=pop_size,
+            low_rank=low_rank,
+            lora_targets=tuple(lora_targets),
+            adaptive_epsilon=True,
+            epsilon_init=float(policy_spec.get("epsilon_init", 0.15)),
+            sigma_granularity=str(policy_spec.get("sigma_granularity") or "weight"),
+        )
+    return Population(
+        base_model,
+        pop_size=pop_size,
+        low_rank=low_rank,
+        lora_targets=tuple(lora_targets),
+    )
+
+
 # serialization & tensor helpers
 
 
@@ -227,6 +287,8 @@ def build_policy_module(policy_spec: dict[str, object], *, base_seed: int = 1) -
             return Memory(net, init_memory=init_mem)
         if arch == "mlp":
             return MLPPolicy(obs_dim=obs_dim, action_dim=act_dim, hidden_dim=hidden_dim, head_dim=head_dim)
+        if arch == "weight_only_mlp":
+            return WeightOnlyMLPPolicy(obs_dim=obs_dim, action_dim=act_dim, hidden_dim=hidden_dim, head_dim=head_dim)
     raise ValueError(f"Unsupported PopuLoRA policy architecture: {arch!r}")
 
 
@@ -611,7 +673,13 @@ def _load_genomes_into_population(
         base_model, resolved_hash, _ = get_or_create_base_model(
             policy_spec, base_seed=base_seed, base_hash=base_hash or None
         )
-        pop = Population(base_model, pop_size=p_cnt, low_rank=low_rank, lora_targets=lora_targets)
+        pop = _make_populora_population(
+            base_model,
+            pop_size=p_cnt,
+            low_rank=low_rank,
+            lora_targets=lora_targets,
+            policy_spec=policy_spec,
+        )
 
     for path in lora_targets:
         key = path.replace(".", "_")
@@ -726,19 +794,19 @@ def create_populora_population(
     base_model, base_hash, _ = get_or_create_base_model(
         policy_spec, base_seed=base_seed, custom_state_dict=custom_state
     )
-    pop = Population(
+    pop = _make_populora_population(
         base_model,
         pop_size=eff_pop,
         low_rank=low_rank,
         lora_targets=lora_targets,
+        policy_spec=policy_spec,
     )
     if policy_spec.get("oscillatory_init"):
         _seed_oscillatory_population_(pop, has_warmstart=exists(custom_state), warmstart_std_up=warmstart_std_up)
-    else:
-        _rescale_init_up_(
-            pop,
-            warmstart_std_up if exists(custom_state) else float(policy_spec.get("init_std_up", default_init_std_up)),
-        )
+    elif exists(custom_state):
+        _rescale_init_up_(pop, warmstart_std_up)
+    elif "init_std_up" not in policy_spec or policy_spec.get("init_std_up") is not None:
+        _rescale_init_up_(pop, float(policy_spec.get("init_std_up", default_init_std_up)))
 
     seeded_slots = 0
     if seed_genomes:
@@ -783,6 +851,7 @@ class _GoalPopuloraRuntime:
     best_fitness: float = float("-inf")
     champ_backup: dict | None = None
     champ_parent_id: int = 0
+    pending_brood_sigmas: dict[str, list[Tensor]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.eps_schedule is None:
@@ -801,6 +870,27 @@ _GOAL_RUNTIMES: dict[tuple[str, str], _GoalPopuloraRuntime] = {}
 def reset_populora_goal_runtime(room: str, goal: str) -> None:
     with _RUNTIME_LOCK:
         _GOAL_RUNTIMES.pop((room, goal), None)
+
+
+def _restore_pending_brood_sigmas_(
+    rt: _GoalPopuloraRuntime,
+    pop: Population,
+    genomes: Sequence[dict],
+    *,
+    hash_length: int = 20,
+) -> None:
+    """Restore self-adaptive sigma tensors for winning brood children from the prior brood round."""
+    if not pop.adaptive_epsilon or not rt.pending_brood_sigmas:
+        return
+    sigma_tensors = list(pop._sigma_tensors())
+    for idx, g in enumerate(genomes):
+        gh = str(g.get("hash") or populora_genome_hash(g, length=hash_length))
+        saved = rt.pending_brood_sigmas.get(gh)
+        if saved and len(saved) == len(sigma_tensors):
+            for dst, src in zip(sigma_tensors, saved):
+                if dst.shape[1:] == src.shape:
+                    dst.data[idx].copy_(src.to(device=dst.device, dtype=dst.dtype))
+    rt.pending_brood_sigmas.clear()
 
 
 def _get_goal_runtime(
@@ -993,6 +1083,7 @@ def evolve_populora_population(
     )
     rt.pop = pop
     rt.pop_base_hash = base_hash
+    _restore_pending_brood_sigmas_(rt, pop, genomes, hash_length=hash_length)
     pop.generation = int(generation)
 
     eval_map = eval_by_hash or {}
@@ -1093,7 +1184,11 @@ def evolve_populora_population(
     old_ids = [int(g["id"]) for g in genomes]
     ranked_old = [old_ids[i] for i in fits.argsort(descending=True).tolist()]
 
-    use_dns = descriptors is not None and cur_n >= min_dns_pop
+    use_dns = bool(policy_spec.get("use_dns", True)) and descriptors is not None and cur_n >= min_dns_pop
+    use_swarm = bool(policy_spec.get("use_swarm", True))
+    use_champ_backup = bool(policy_spec.get("use_champ_backup", True))
+    eff_survive_frac = float(policy_spec.get("survive_frac", survive_frac))
+    eff_weight_decay = float(policy_spec.get("weight_decay", weight_decay))
     comp_fits = (
         _tiled_quality_dominated_novelty(
             fits,
@@ -1111,10 +1206,18 @@ def evolve_populora_population(
 
     clamped_elite = max(0.0, min(max_elite_frac, float(elite_frac)))
     n_elites = max(1, min(cur_n - 1, round(cur_n * clamped_elite))) if clamped_elite > 0 else 1
+    max_num_elites = int(policy_spec.get("max_num_elites") or 0)
+    if max_num_elites > 0:
+        n_elites = min(n_elites, max(1, max_num_elites))
+    eff_eta_min = float(policy_spec.get("eta_min", eta_min))
+    eff_eta_max = float(policy_spec.get("eta_max", eta_max))
     assert rt.eps_schedule is not None
     mult_lo, mult_hi = sigma_mult_bounds
     sigma_mult = max(mult_lo, min(mult_hi, float(mut_sigma) / max(ref_mut_sigma, 1e-6)))
-    eff_eps = float(rt.eps_schedule(generation)) * sigma_mult
+    if bool(policy_spec.get("adaptive_epsilon", False)):
+        eff_eps = float(policy_spec.get("epsilon_init", 0.15)) * sigma_mult
+    else:
+        eff_eps = float(rt.eps_schedule(generation)) * sigma_mult
     swarm_bottom = swarm_bottom_dns if use_dns else 1.0
     swarm_cfg = dict(
         beta0=swarm_beta0,
@@ -1134,7 +1237,7 @@ def evolve_populora_population(
         competition_fitnesses=comp_fits,
         descriptors=descriptors if (use_dns and cur_n <= exact_dns_threshold) else None,
         raw_elites=n_elites if use_dns else None,
-        survive_frac=survive_frac if cur_n >= small_pop_cutoff else small_pop_survive_frac,
+        survive_frac=eff_survive_frac if cur_n >= small_pop_cutoff else small_pop_survive_frac,
         elite_frac=clamped_elite if clamped_elite > 0 else (1.0 / cur_n),
         num_elites=n_elites,
         selection_type="deterministic",
@@ -1142,18 +1245,18 @@ def evolve_populora_population(
         tournament_size=min(tournament_size_large if large_pop_mode else tournament_size_small, max(2, cur_n // 2)),
         niche_k=min(niche_k_large if large_pop_mode else niche_k_small, max(1, cur_n - 1)),
         crossover_type="extrapolative",
-        eta_min=eta_min,
-        eta_max=eta_max,
+        eta_min=eff_eta_min,
+        eta_max=eff_eta_max,
         mutation_type="full_gaussian",
         epsilon=eff_eps,
-        weight_decay=weight_decay,
+        weight_decay=eff_weight_decay,
         consolidate_alpha=consolidate_alpha,
-        swarm_type=None if large_pop_mode else ("firefly" if cur_n >= min_dns_pop else None),
+        swarm_type=None if (large_pop_mode or not use_swarm) else ("firefly" if cur_n >= min_dns_pop else None),
         swarm_bottom_frac=swarm_bottom,
         swarm_kwargs=swarm_cfg,
     )
 
-    if large_pop_mode and cur_n >= min_dns_pop and len(sel.survivors) > len(sel.elites):
+    if use_swarm and large_pop_mode and cur_n >= min_dns_pop and len(sel.survivors) > len(sel.elites):
         non_elite_surv = sel.survivors[~torch.isin(sel.survivors, sel.elites)]
         if len(non_elite_surv) > 0:
             order = fits[non_elite_surv].argsort(descending=False)
@@ -1174,7 +1277,7 @@ def evolve_populora_population(
     breed_parents = ranked_old[:2] if len(ranked_old) >= 2 else [ranked_old[0]]
 
     champ_in_elites = False
-    if isinstance(rt.champ_backup, dict) and "down" in rt.champ_backup and "up" in rt.champ_backup:
+    if use_champ_backup and isinstance(rt.champ_backup, dict) and "down" in rt.champ_backup and "up" in rt.champ_backup:
         champ_down = rt.champ_backup["down"]
         champ_up = rt.champ_backup["up"]
         for e_slot in elite_set:
@@ -1187,7 +1290,7 @@ def evolve_populora_population(
                 break
 
     champ_restored_slot0 = False
-    if rt.champ_backup is not None and not champ_in_elites and 0 not in elite_set:
+    if use_champ_backup and rt.champ_backup is not None and not champ_in_elites and 0 not in elite_set:
         pop.restore_individual(0, rt.champ_backup)
         champ_restored_slot0 = True
 
@@ -1222,6 +1325,225 @@ def evolve_populora_population(
 
     top_score = int(round(best_fit)) if has_sim.any() else (max(scores) if scores else 0)
     return next_genomes, top_score
+
+
+@torch.no_grad()
+def evolve_populora_broods(
+    *,
+    room: str,
+    goal: str,
+    task_id: str,
+    generation: int,
+    policy_spec: dict[str, object],
+    genome_dicts: Iterable[dict],
+    scores: list[int],
+    up_counts: list[int],
+    eval_by_hash: dict[str, dict] | None = None,
+    mut_sigma: float = 0.30,
+    pop_size: int = 8,
+    elite_frac: float = 0.25,
+    brood_size: int = 2,
+    max_horizon: int = 400,
+    min_pop_size: int = 3,
+    ref_mut_sigma: float = 0.30,
+    sigma_mult_bounds: tuple[float, float] = (0.25, 3.0),
+    eta_min: float = 0.20,
+    eta_max: float = 1.25,
+    weight_decay: float = 1e-4,
+    hash_length: int = 20,
+) -> tuple[dict[str, object], int]:
+    """Generate a PopuLoRA brood-selection bundle (Tackett & Carmi, 1994).
+
+    Elites and surviving parents stay in `fixed`; each culled crossover slot
+    receives `brood_size` distinct stochastic offspring sharing the same parent
+    pair so clients can vote on the best child per brood.
+    """
+    eff_brood = max(MIN_BROOD_SIZE, min(MAX_BROOD_SIZE, int(brood_size)))
+    genomes = list(genome_dicts)
+    target_pop = max(min_pop_size, int(pop_size))
+    if len(genomes) != target_pop:
+        genomes = resize_populora_population(
+            genomes,
+            target_pop,
+            policy_spec=policy_spec,
+            task_id=task_id,
+            scores=scores,
+            up_counts=up_counts,
+            min_pop_size=min_pop_size,
+        )
+        scores = (list(scores) + [0] * target_pop)[:target_pop]
+        up_counts = (list(up_counts) + [0] * target_pop)[:target_pop]
+
+    rt = _get_goal_runtime(room, goal)
+    pre_pop, base_hash, base_seed = _load_genomes_into_population(
+        genomes, policy_spec, cached_pop=rt.pop, cached_base_hash=rt.pop_base_hash
+    )
+    rt.pop = pre_pop
+    rt.pop_base_hash = base_hash
+    _restore_pending_brood_sigmas_(rt, pre_pop, genomes, hash_length=hash_length)
+    pre_down = {k: v.data.clone() for k, v in pre_pop.weight_down.items()}
+    pre_up = {k: v.data.clone() for k, v in pre_pop.weight_up.items()}
+    pre_sigmas = [t.data.clone() for t in pre_pop._sigma_tensors()] if pre_pop.adaptive_epsilon else []
+    old_ids = [int(g["id"]) for g in genomes]
+
+    next_genomes, top_score = evolve_populora_population(
+        room=room,
+        goal=goal,
+        task_id=task_id,
+        generation=generation,
+        policy_spec=policy_spec,
+        genome_dicts=genomes,
+        scores=scores,
+        up_counts=up_counts,
+        eval_by_hash=eval_by_hash,
+        mut_sigma=mut_sigma,
+        pop_size=target_pop,
+        elite_frac=elite_frac,
+        max_horizon=max_horizon,
+        min_pop_size=min_pop_size,
+    )
+
+    if eff_brood <= 1:
+        return {
+            "brood_size": 1,
+            "pop_size": len(next_genomes),
+            "fixed": [{"slot": i, "genome": g} for i, g in enumerate(next_genomes)],
+            "broods": [],
+        }, top_score
+
+    fixed: list[dict[str, object]] = []
+    culled_slots: list[int] = []
+    for slot, g in enumerate(next_genomes):
+        if str(g.get("op") or "") == "crossover":
+            culled_slots.append(slot)
+        else:
+            fixed.append({"slot": slot, "genome": g})
+
+    if not culled_slots or rt.pop is None:
+        return {
+            "brood_size": eff_brood,
+            "pop_size": len(next_genomes),
+            "fixed": [{"slot": i, "genome": g} for i, g in enumerate(next_genomes)],
+            "broods": [],
+        }, top_score
+
+    pop = rt.pop
+    post_down = {k: v.data.clone() for k, v in pop.weight_down.items()}
+    post_up = {k: v.data.clone() for k, v in pop.weight_up.items()}
+    post_sigmas = [t.data.clone() for t in pop._sigma_tensors()] if pop.adaptive_epsilon else []
+
+    # Restore pre-evolve parents & adaptive sigmas to produce `eff_brood` siblings per culled slot
+    for k in pop.weight_down:
+        pop.weight_down[k].data.copy_(pre_down[k])
+        pop.weight_up[k].data.copy_(pre_up[k])
+    if pop.adaptive_epsilon and pre_sigmas:
+        for dst, src in zip(pop._sigma_tensors(), pre_sigmas):
+            dst.data.copy_(src)
+
+    cur_n = len(genomes)
+    survivor_slots = [i for i in range(cur_n) if i not in set(culled_slots)] or list(range(cur_n))
+    eval_map = eval_by_hash or {}
+    raw_fits = []
+    for i, g in enumerate(genomes):
+        gh = str(g.get("hash") or populora_genome_hash(g, length=hash_length))
+        rec = eval_map.get(gh)
+        fval = float(scores[i]) * 50.0 + float(up_counts[i]) * 5.0
+        if isinstance(rec, dict):
+            summ = rec.get("summary") or {}
+            rv = summ.get("return", summ.get("primary_value"))
+            if rv is not None and math.isfinite(float(rv)):
+                fval = float(rv) + float(scores[i]) * 25.0
+        raw_fits.append(fval)
+    fits = torch.tensor(raw_fits, dtype=torch.float32, device=pop.device)
+
+    surv_t = torch.tensor(survivor_slots, dtype=torch.long, device=pop.device)
+    if len(survivor_slots) >= 2:
+        picked_rel = parent_select_tournament(
+            fits[surv_t],
+            num_children=len(culled_slots),
+            num_parents_per_child=2,
+            tournament_size=min(3, len(survivor_slots)),
+        )
+        parent_pairs = surv_t[picked_rel]
+    else:
+        parent_pairs = surv_t[0].repeat(len(culled_slots), 2)
+
+    culled_t = torch.tensor(culled_slots, dtype=torch.long, device=pop.device)
+    mult_lo, mult_hi = sigma_mult_bounds
+    sigma_mult = max(mult_lo, min(mult_hi, float(mut_sigma) / max(ref_mut_sigma, 1e-6)))
+    assert rt.eps_schedule is not None
+    if bool(policy_spec.get("adaptive_epsilon", False)):
+        eff_eps = float(policy_spec.get("epsilon_init", 0.15)) * sigma_mult
+    else:
+        eff_eps = float(rt.eps_schedule(generation)) * sigma_mult
+    eff_weight_decay = float(policy_spec.get("weight_decay", weight_decay))
+    eff_eta_min = float(policy_spec.get("eta_min", eta_min))
+    eff_eta_max = float(policy_spec.get("eta_max", eta_max))
+
+    parent_id_lists = [
+        [old_ids[int(pair[0])], old_ids[int(pair[1])]]
+        if int(pair[0]) != int(pair[1])
+        else [old_ids[int(pair[0])]]
+        for pair in parent_pairs.tolist()
+    ]
+    brood_candidates: list[list[dict[str, object]]] = [[] for _ in culled_slots]
+    rt.pending_brood_sigmas.clear()
+    for _ in range(eff_brood):
+        cand_eps: object = eff_eps
+        if pop.adaptive_epsilon:
+            pop._sigma_recombine_(culled_t, parent_pairs)
+            cand_eps = pop._sigma_epsilon_(culled_t)
+        pop.crossover_(
+            "extrapolative",
+            parent_pairs,
+            culled_t,
+            fitnesses=fits,
+            eta_min=eff_eta_min,
+            eta_max=eff_eta_max,
+        )
+        pop.mutate_("full_gaussian", individuals=culled_t, epsilon=cand_eps)
+        if eff_weight_decay > 0:
+            pop.regularize_(weight_decay=eff_weight_decay, individuals=culled_t)
+        _quantize_pop_f16_roundtrip_(pop)
+        batch = _population_to_genome_dicts(
+            pop,
+            task_id=task_id,
+            base_hash=base_hash,
+            base_seed=base_seed,
+            indices=culled_slots,
+            parents_per_slot=parent_id_lists,
+            ops_per_slot=["crossover"] * len(culled_slots),
+        )
+        sigma_tensors = list(pop._sigma_tensors()) if pop.adaptive_epsilon else []
+        for bi, cand in enumerate(batch):
+            brood_candidates[bi].append(cand)
+            if sigma_tensors:
+                c_slot = culled_slots[bi]
+                rt.pending_brood_sigmas[str(cand["hash"])] = [t.data[c_slot].clone() for t in sigma_tensors]
+
+    # Restore post-evolve state in cached Population
+    for k in pop.weight_down:
+        pop.weight_down[k].data.copy_(post_down[k])
+        pop.weight_up[k].data.copy_(post_up[k])
+    if pop.adaptive_epsilon and post_sigmas:
+        for dst, src in zip(pop._sigma_tensors(), post_sigmas):
+            dst.data.copy_(src)
+
+    broods = [
+        {
+            "slot": slot,
+            "parents": parent_id_lists[bi],
+            "op": "crossover",
+            "candidates": brood_candidates[bi],
+        }
+        for bi, slot in enumerate(culled_slots)
+    ]
+    return {
+        "brood_size": eff_brood,
+        "pop_size": len(next_genomes),
+        "fixed": fixed,
+        "broods": broods,
+    }, top_score
 
 
 @torch.no_grad()

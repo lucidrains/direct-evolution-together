@@ -1,6 +1,6 @@
 [project]
 name = "direct-evolution-together"
-version = "0.0.3"
+version = "0.0.4"
 description = "directed evolution on neural networks, together"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }
@@ -23,6 +23,7 @@ classifiers=[
 ]
 
 dependencies = [
+    "Box2D>=2.3.10",
     "django>=5.1",
     "imageio-ffmpeg>=0.5",
     "mujoco>=3.1.0; python_version < '3.11'",

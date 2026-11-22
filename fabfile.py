@@ -68,6 +68,7 @@ class DeployConfig:
     mut_sigma: str
     elite_frac: str
     crossover_rate: str
+    brood_size: int = 1
     process_manager: str = "pm2"
 
     @classmethod
@@ -123,6 +124,7 @@ class DeployConfig:
             mut_sigma=os.getenv("MUMMY_MUT_SIGMA", "0.30"),
             elite_frac=os.getenv("MUMMY_ELITE_FRAC", "0.20"),
             crossover_rate=os.getenv("MUMMY_CROSSOVER_RATE", "0.75"),
+            brood_size=max(1, min(8, int(os.getenv("MUMMY_BROOD_SIZE", "1")))),
             process_manager=process_manager,
         )
 
@@ -195,6 +197,7 @@ def _render_runtime_env_dict(cfg: DeployConfig) -> dict[str, str]:
         "MUMMY_MUT_SIGMA": cfg.mut_sigma,
         "MUMMY_ELITE_FRAC": cfg.elite_frac,
         "MUMMY_CROSSOVER_RATE": cfg.crossover_rate,
+        "MUMMY_BROOD_SIZE": str(cfg.brood_size),
     }
     _pass_prefixes = (
         "DET_CONFIG_FILE",
@@ -206,6 +209,7 @@ def _render_runtime_env_dict(cfg: DeployConfig) -> dict[str, str]:
         "DET_MAX_POP_SIZE_",
         "DET_MIN_VOTES_",
         "DET_ELITE_FRAC_",
+        "DET_BROOD_SIZE_",
         "DET_ALLOW_VIDEO_",
     )
     for key, val in sorted(os.environ.items()):

@@ -13,10 +13,17 @@ from direct_evolution_together.cppn import (
     create_random_population,
     genome_content_hash,
 )
+from direct_evolution_together.populora_engine import populora_genome_hash
 
 from .adapters import TASK_ADAPTERS, get_task_adapter
 from .halfcheetah import HalfCheetahAdapter, get_halfcheetah_model, get_thread_halfcheetah_data
 from .registry import clamp_pop_for_task, get_task_spec, normalize_task_id
+
+
+def _any_genome_hash(genome: dict, length: int = 20) -> str:
+    if isinstance(genome, dict) and genome.get("kind") == "populora":
+        return str(genome.get("hash") or populora_genome_hash(genome, length=length))
+    return genome_content_hash(genome, length=length)
 
 
 _ROLLOUT_CACHE: OrderedDict[tuple[str, str, int, int], dict[str, object]] = OrderedDict()
@@ -35,7 +42,7 @@ def _rollout_cached(
     adapter = get_task_adapter(task_id)
     if nudge:
         return adapter.rollout(genome, seed=seed, max_steps=max_steps, nudge=nudge)
-    g_hash = genome_content_hash(genome, length=20)
+    g_hash = _any_genome_hash(genome, length=20)
     key = (adapter.task_id, g_hash, int(seed), int(max_steps))
     with _ROLLOUT_CACHE_LOCK:
         hit = _ROLLOUT_CACHE.get(key)
@@ -180,7 +187,7 @@ def evaluate_control_batch(
     eval_seeds = tuple(spec.eval_seeds if seeds is None else seeds)
     results: list[dict[str, object]] = []
     for genome in genomes:
-        g_hash = genome_content_hash(genome, length=20)
+        g_hash = _any_genome_hash(genome, length=20)
         primary_ro: dict[str, object] | None = None
         if isinstance(adapter, HalfCheetahAdapter):
             episodes: list[dict[str, object]] = []

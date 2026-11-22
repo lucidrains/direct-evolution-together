@@ -23,6 +23,7 @@ from direct_evolution_together.populora_engine import (
     populora_genome_hash,
 )
 
+from .lunarlander import _summarize_lunarlander_rollouts, lunarlander_rollout
 from .registry import get_task_spec
 from .rng import mulberry32
 from .scene_assets import ASSETS_DIR, get_scene_manifest, unpack_vfs_entries
@@ -1040,6 +1041,7 @@ _ROLLOUT_FNS = {
     "microduck": microduck_rollout,
     "unitree_go2": unitree_go2_rollout,
     "so101": so101_rollout,
+    "lunarlander": lunarlander_rollout,
 }
 
 
@@ -1080,7 +1082,9 @@ def evaluate_populora_genome(
     min_steps = min(int(r["steps"]) for r in rollouts)
     disp = _signed(mean_ret)
 
-    if spec.task_id == "microduck":
+    if spec.task_id == "lunarlander":
+        summary = _summarize_lunarlander_rollouts(rollouts, eff_seeds)
+    elif spec.task_id == "microduck":
         mean_x = round(sum(float(r["distance"]) for r in rollouts) / n, 3)
         mean_steps = round(sum(int(r["steps"]) for r in rollouts) / n, 1)
         clear_mm = round(sum(float(r["clear_mm"]) for r in rollouts) / n, 1)

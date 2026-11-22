@@ -140,6 +140,12 @@ def main() -> None:
         help="Crossover probability for breeding for public rooms and default for private rooms (0.0-1.0, default: 0.75)",
     )
     parser.add_argument(
+        "--brood-size",
+        type=int,
+        default=int(os.getenv("MUMMY_BROOD_SIZE", "1")),
+        help="Offspring brood size per bred slot for Tackett & Carmi (1994) brood selection (1-8, default: 1 = off)",
+    )
+    parser.add_argument(
         "--large-pop",
         action="store_true",
         default=os.getenv("DET_LARGE_POP", "0") == "1",
@@ -216,6 +222,7 @@ def main() -> None:
     mut_sigma = max(0.05, min(1.0, float(args.mutation_sigma)))
     elite_frac = max(0.0, min(0.5, float(args.elite_frac)))
     crossover_rate = max(0.0, min(1.0, float(args.crossover_rate)))
+    brood_size = max(1, min(8, int(args.brood_size)))
     os.environ["MUMMY_WS_HOST"] = args.ws_host
     os.environ["MUMMY_WS_PORT"] = str(args.ws_port)
     if pop_size_override:
@@ -229,6 +236,7 @@ def main() -> None:
     os.environ["MUMMY_MUT_SIGMA"] = f"{mut_sigma:.2f}"
     os.environ["MUMMY_ELITE_FRAC"] = f"{elite_frac:.2f}"
     os.environ["MUMMY_CROSSOVER_RATE"] = f"{crossover_rate:.2f}"
+    os.environ["MUMMY_BROOD_SIZE"] = str(brood_size)
     if args.large_pop:
         os.environ["DET_LARGE_POP"] = "1"
     if args.admin_password:
@@ -290,6 +298,7 @@ def main() -> None:
                 mut_sigma=mut_sigma,
                 elite_frac=elite_frac,
                 crossover_rate=crossover_rate,
+                brood_size=brood_size,
                 admin_password=det_settings.ADMIN_PASSWORD,
                 evolve_token=det_settings.EVOLVE_NOW_TOKEN,
             )

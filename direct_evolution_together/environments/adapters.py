@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from .cartpole import CartPoleAdapter
 from .halfcheetah import HalfCheetahAdapter
+from .lunarlander import LunarLanderAdapter
 from .registry import get_task_spec
 from .types import ControlTaskAdapter
 
 TASK_ADAPTERS: dict[str, ControlTaskAdapter] = {
     "cartpole": CartPoleAdapter(),
     "halfcheetah": HalfCheetahAdapter(),
+    "lunarlander": LunarLanderAdapter(),
 }
 
 

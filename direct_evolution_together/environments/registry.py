@@ -62,6 +62,7 @@ def get_task_spec(task_id: str | None) -> TaskSpec:
         max_pop_size=env_cfg.effective_max_pop_size,
         default_min_votes=env_cfg.default_min_votes,
         default_elite_frac=env_cfg.default_elite_frac,
+        default_brood_size=env_cfg.default_brood_size,
         crowd_shard_threshold=env_cfg.crowd_shard_threshold,
         crowd_shard_size=env_cfg.crowd_shard_size,
         scene_id=resolved_scene_id,
