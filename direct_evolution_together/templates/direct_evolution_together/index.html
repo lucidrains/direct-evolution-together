@@ -2110,6 +2110,736 @@
           height: 38px;
         }
       }
+      /* Swipe-to-vote interactions (Grid cards, Swipe Deck, Fullscreen 2D) */
+      .view-mode-tabs {
+        display: inline-flex;
+        align-items: center;
+        height: 28px;
+        gap: 2px;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 2px;
+      }
+      .view-mode-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        height: 22px;
+        padding: 0 0.52rem;
+        border: none;
+        border-radius: 5px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 0.72rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.12s ease, color 0.12s ease;
+      }
+      .view-mode-btn svg {
+        width: 12px;
+        height: 12px;
+        flex-shrink: 0;
+        opacity: 0.8;
+      }
+      .view-mode-btn:hover:not(:disabled) { color: var(--text); }
+      .view-mode-btn.active {
+        background: var(--surface-3);
+        color: var(--text);
+      }
+      .view-mode-btn.active svg { opacity: 1; }
+      .view-mode-btn:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+      .genome-card {
+        touch-action: pan-y;
+      }
+      .genome-card.is-swiping {
+        z-index: 18;
+        transition: none !important;
+        cursor: grabbing;
+        user-select: none;
+        box-shadow: 0 16px 38px rgba(0, 0, 0, 0.58);
+        will-change: transform;
+      }
+      .genome-card.is-swiping .card-media canvas {
+        cursor: grabbing !important;
+      }
+      .genome-card.is-swipe-spring {
+        transition: transform 0.32s cubic-bezier(0.22, 1.28, 0.36, 1), border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+      }
+      .genome-card.is-swipe-exit {
+        z-index: 18;
+        pointer-events: none;
+        transition: transform 0.24s cubic-bezier(0.2, 0.85, 0.3, 1), opacity 0.22s ease;
+      }
+      .genome-card.is-swipe-like {
+        border-color: rgba(52, 211, 153, 0.85);
+        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(52, 211, 153, 0.35);
+      }
+      .genome-card.is-swipe-nope {
+        border-color: rgba(251, 113, 133, 0.85);
+        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(251, 113, 133, 0.35);
+      }
+      .card-swipe-wash {
+        position: absolute;
+        inset: 0;
+        border-radius: 5px;
+        pointer-events: none;
+        z-index: 3;
+        opacity: 0;
+      }
+      .card-swipe-stamp {
+        position: absolute;
+        top: 10px;
+        z-index: 4;
+        pointer-events: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 2px 6px;
+        border-radius: 5px;
+        border: 1.8px solid currentColor;
+        background: rgba(9, 9, 11, 0.78);
+        backdrop-filter: blur(4px);
+        -webkit-backdrop-filter: blur(4px);
+        font-family: var(--mono);
+        font-size: 0.58rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        opacity: 0;
+        will-change: opacity, transform;
+      }
+      .card-swipe-stamp svg {
+        width: 10px;
+        height: 10px;
+        flex-shrink: 0;
+      }
+      .card-swipe-stamp.is-like {
+        left: 7px;
+        color: var(--ok);
+        transform: rotate(-12deg) scale(0.9);
+        box-shadow: 0 4px 14px rgba(52, 211, 153, 0.24);
+      }
+      .card-swipe-stamp.is-nope {
+        right: 7px;
+        color: var(--err);
+        transform: rotate(12deg) scale(0.9);
+        box-shadow: 0 4px 14px rgba(251, 113, 133, 0.24);
+      }
+      /* Dedicated Swipe Deck */
+      .swipe-stage {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.78rem;
+        padding: 0.45rem 0.5rem 0.75rem;
+        border-radius: 12px;
+        background:
+          radial-gradient(ellipse 68% 48% at 50% 0%, rgba(255, 255, 255, 0.025), transparent 72%),
+          var(--bg);
+        border: 1px solid var(--border);
+        overflow: hidden;
+      }
+      .swipe-stage[hidden] { display: none; }
+      .swipe-ambient {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.18s ease;
+        z-index: 0;
+      }
+      .swipe-hud {
+        position: relative;
+        z-index: 2;
+        width: min(376px, 100%);
+        display: flex;
+        flex-direction: column;
+        gap: 0.36rem;
+      }
+      .swipe-hud-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        font-family: var(--mono);
+        font-size: 0.69rem;
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+      }
+      .swipe-hud-tallies {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+      }
+      .swipe-tally-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.24rem;
+        padding: 0.08rem 0.42rem;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        font-family: var(--mono);
+        font-size: 0.65rem;
+        font-weight: 500;
+        color: var(--muted);
+      }
+      .swipe-tally-pill.is-up {
+        color: var(--ok);
+        border-color: rgba(52, 211, 153, 0.28);
+        background: rgba(52, 211, 153, 0.07);
+      }
+      .swipe-tally-pill.is-down {
+        color: var(--err);
+        border-color: rgba(251, 113, 133, 0.28);
+        background: rgba(251, 113, 133, 0.07);
+      }
+      .swipe-tally-pill svg {
+        width: 10px;
+        height: 10px;
+      }
+      .swipe-hud-track {
+        height: 2px;
+        border-radius: 999px;
+        background: var(--surface-3);
+        overflow: hidden;
+      }
+      .swipe-hud-fill {
+        height: 100%;
+        width: 0%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, rgba(250, 250, 250, 0.55), var(--ok));
+        transition: width 0.24s ease;
+      }
+      .swipe-lock-note {
+        position: relative;
+        z-index: 2;
+        width: min(376px, 100%);
+        padding: 0.32rem 0.6rem;
+        border-radius: 8px;
+        border: 1px solid rgba(245, 196, 81, 0.32);
+        background: rgba(245, 196, 81, 0.08);
+        color: var(--gold);
+        font-family: var(--mono);
+        font-size: 0.67rem;
+        text-align: center;
+      }
+      .swipe-lock-note[hidden] { display: none; }
+      .swipe-deck-wrap {
+        position: relative;
+        z-index: 2;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        width: min(376px, 100%);
+        padding-bottom: 20px;
+        min-height: 410px;
+      }
+      .swipe-card {
+        grid-area: 1 / 1;
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 20px 52px rgba(0, 0, 0, 0.56), 0 4px 12px rgba(0, 0, 0, 0.32);
+        transform-origin: 50% 84%;
+        will-change: transform, opacity;
+        touch-action: pan-y;
+        user-select: none;
+      }
+      .swipe-card[data-depth="0"] {
+        z-index: 4;
+        cursor: grab;
+        transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.22s ease, border-color 0.2s ease, box-shadow 0.2s ease, filter 0.22s ease;
+      }
+      .swipe-card[data-depth="0"].is-dragging {
+        cursor: grabbing;
+        transition: none !important;
+      }
+      .swipe-card[data-depth="0"].is-spring {
+        transition: transform 0.38s cubic-bezier(0.22, 1.28, 0.36, 1), border-color 0.2s ease, box-shadow 0.2s ease;
+      }
+      .swipe-card[data-depth="1"] {
+        z-index: 3;
+        pointer-events: none;
+        transform: translate3d(0, 10px, 0) scale(0.955);
+        opacity: 0.72;
+        filter: brightness(0.84);
+        transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.28s ease, filter 0.28s ease;
+      }
+      .swipe-card[data-depth="2"] {
+        z-index: 2;
+        pointer-events: none;
+        transform: translate3d(0, 20px, 0) scale(0.91);
+        opacity: 0.36;
+        filter: brightness(0.7);
+        transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.28s ease;
+      }
+      .swipe-card.is-outgoing {
+        z-index: 6;
+        pointer-events: none;
+        transition: transform 0.28s cubic-bezier(0.2, 0.85, 0.3, 1), opacity 0.24s ease;
+      }
+      .swipe-card.is-like-border {
+        border-color: rgba(52, 211, 153, 0.8);
+        box-shadow: 0 22px 54px rgba(0, 0, 0, 0.58), 0 0 0 1px rgba(52, 211, 153, 0.32);
+      }
+      .swipe-card.is-nope-border {
+        border-color: rgba(251, 113, 133, 0.8);
+        box-shadow: 0 22px 54px rgba(0, 0, 0, 0.58), 0 0 0 1px rgba(251, 113, 133, 0.32);
+      }
+      .swipe-card-media {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        background: #09090b;
+        overflow: hidden;
+      }
+      .swipe-card-media canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .swipe-card-scrim {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 2;
+        background: linear-gradient(
+          to top,
+          rgba(15, 15, 18, 0.88) 0%,
+          rgba(15, 15, 18, 0.22) 18%,
+          transparent 42%
+        );
+      }
+      .swipe-card-wash {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 3;
+        opacity: 0;
+      }
+      .swipe-card-top-badges {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        right: 10px;
+        z-index: 4;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.4rem;
+        pointer-events: none;
+      }
+      .swipe-badge-group {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.32rem;
+        min-width: 0;
+      }
+      .swipe-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.28rem;
+        padding: 0.16rem 0.5rem;
+        border-radius: 999px;
+        background: rgba(9, 9, 11, 0.8);
+        border: 1px solid var(--border-strong);
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+        font-family: var(--mono);
+        font-size: 0.66rem;
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+        color: var(--text);
+        white-space: nowrap;
+      }
+      .swipe-pill.is-muted { color: var(--muted); }
+      .swipe-pill.is-seed {
+        color: var(--seed);
+        border-color: rgba(192, 132, 252, 0.45);
+      }
+      .swipe-pill.is-live {
+        color: var(--ok);
+        border-color: rgba(52, 211, 153, 0.4);
+      }
+      .swipe-pill.is-live::before {
+        content: "";
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--ok);
+        box-shadow: 0 0 6px rgba(52, 211, 153, 0.7);
+      }
+      .swipe-pill.is-metric-solved {
+        color: var(--ok);
+        border-color: rgba(52, 211, 153, 0.45);
+      }
+      .swipe-pill.is-metric-mid {
+        color: var(--gold);
+        border-color: rgba(245, 196, 81, 0.45);
+      }
+      .swipe-pill.is-my-up {
+        color: var(--ok);
+        border-color: rgba(52, 211, 153, 0.45);
+        background: rgba(52, 211, 153, 0.16);
+      }
+      .swipe-pill.is-my-down {
+        color: var(--err);
+        border-color: rgba(251, 113, 133, 0.45);
+        background: rgba(251, 113, 133, 0.16);
+      }
+      .swipe-stamp {
+        position: absolute;
+        top: 26px;
+        z-index: 5;
+        pointer-events: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 13px;
+        border-radius: 9px;
+        border: 2.5px solid currentColor;
+        background: rgba(9, 9, 11, 0.78);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        font-family: var(--mono);
+        font-size: 0.92rem;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        opacity: 0;
+        will-change: opacity, transform;
+      }
+      .swipe-stamp svg {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+      }
+      .swipe-stamp.is-like {
+        left: 16px;
+        color: var(--ok);
+        transform: rotate(-12deg) scale(0.88);
+        box-shadow: 0 8px 26px rgba(52, 211, 153, 0.28);
+      }
+      .swipe-stamp.is-nope {
+        right: 16px;
+        color: var(--err);
+        transform: rotate(12deg) scale(0.88);
+        box-shadow: 0 8px 26px rgba(251, 113, 133, 0.28);
+      }
+      .swipe-card-body {
+        padding: 0.72rem 0.88rem 0.78rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.42rem;
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+      }
+      .swipe-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        min-width: 0;
+      }
+      .swipe-card-id-group {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.42rem;
+        min-width: 0;
+        flex-wrap: wrap;
+      }
+      .swipe-card-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+        color: var(--text);
+        white-space: nowrap;
+      }
+      .swipe-op-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.26rem;
+        padding: 0.08rem 0.42rem;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        font-family: var(--mono);
+        font-size: 0.63rem;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .swipe-card-tally {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        font-family: var(--mono);
+        font-size: 0.7rem;
+        font-variant-numeric: tabular-nums;
+        color: var(--dim);
+        flex-shrink: 0;
+      }
+      .swipe-card-tally .tally-pair {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.32rem;
+        color: var(--muted);
+        font-size: 0.66rem;
+      }
+      .swipe-card-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        min-height: 22px;
+      }
+      .swipe-card-sub {
+        font-family: var(--mono);
+        font-size: 0.67rem;
+        color: var(--dim);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+      .swipe-card-quick {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        flex-shrink: 0;
+      }
+      .swipe-dock {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.78rem;
+      }
+      .swipe-act-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+      }
+      .swipe-act-btn:hover:not(:disabled) {
+        opacity: 1;
+        transform: translateY(-1px) scale(1.05);
+      }
+      .swipe-act-btn:active:not(:disabled) {
+        transform: scale(0.94);
+      }
+      .swipe-act-btn.is-secondary {
+        width: 40px;
+        height: 40px;
+        background: var(--surface-2);
+        border: 1px solid var(--border-strong);
+        color: var(--muted);
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+      }
+      .swipe-act-btn.is-secondary svg {
+        width: 16px;
+        height: 16px;
+      }
+      .swipe-act-btn.is-undo:hover:not(:disabled) {
+        color: var(--gold);
+        border-color: rgba(245, 196, 81, 0.52);
+        background: rgba(245, 196, 81, 0.1);
+      }
+      .swipe-act-btn.is-skip:hover:not(:disabled) {
+        color: var(--text);
+        border-color: rgba(255, 255, 255, 0.32);
+        background: var(--surface-3);
+      }
+      .swipe-act-btn.is-inspect:hover:not(:disabled) {
+        color: #7dd3fc;
+        border-color: rgba(56, 189, 248, 0.5);
+        background: rgba(56, 189, 248, 0.1);
+      }
+      .swipe-act-btn.is-primary {
+        width: 56px;
+        height: 56px;
+        border-width: 1.5px;
+        box-shadow: 0 10px 26px rgba(0, 0, 0, 0.42);
+      }
+      .swipe-act-btn.is-primary svg {
+        width: 22px;
+        height: 22px;
+      }
+      .swipe-act-btn.is-down {
+        background: rgba(251, 113, 133, 0.08);
+        border-color: rgba(251, 113, 133, 0.36);
+        color: var(--err);
+      }
+      .swipe-act-btn.is-down:hover:not(:disabled),
+      .swipe-act-btn.is-down.is-armed:not(:disabled) {
+        background: rgba(251, 113, 133, 0.2);
+        border-color: rgba(251, 113, 133, 0.85);
+        box-shadow: 0 10px 28px rgba(251, 113, 133, 0.24);
+      }
+      .swipe-act-btn.is-up {
+        background: rgba(52, 211, 153, 0.08);
+        border-color: rgba(52, 211, 153, 0.36);
+        color: var(--ok);
+      }
+      .swipe-act-btn.is-up:hover:not(:disabled),
+      .swipe-act-btn.is-up.is-armed:not(:disabled) {
+        background: rgba(52, 211, 153, 0.2);
+        border-color: rgba(52, 211, 153, 0.85);
+        box-shadow: 0 10px 28px rgba(52, 211, 153, 0.24);
+      }
+      .swipe-act-btn.is-armed:not(:disabled) {
+        transform: scale(1.09);
+      }
+      .swipe-keys-hint {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 0.35rem 0.72rem;
+        font-family: var(--mono);
+        font-size: 0.64rem;
+        color: var(--dim);
+      }
+      .swipe-keys-hint span {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.26rem;
+      }
+      .swipe-keys-hint kbd {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 19px;
+        height: 18px;
+        padding: 0 4px;
+        border-radius: 4px;
+        border: 1px solid var(--border-strong);
+        background: var(--surface-2);
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.6rem;
+        line-height: 1;
+      }
+      .swipe-empty {
+        grid-area: 1 / 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        gap: 0.75rem;
+        padding: 2.2rem 1.4rem;
+        min-height: 390px;
+        background: var(--surface);
+        border: 1px dashed var(--border-strong);
+        border-radius: 16px;
+      }
+      .swipe-empty-icon {
+        width: 48px;
+        height: 48px;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--ok);
+        background: rgba(52, 211, 153, 0.1);
+        border: 1px solid rgba(52, 211, 153, 0.32);
+      }
+      .swipe-empty h3 {
+        margin: 0;
+        font-size: 0.96rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+        color: var(--text);
+      }
+      .swipe-empty p {
+        margin: 0;
+        font-size: 0.78rem;
+        line-height: 1.48;
+        color: var(--muted);
+        max-width: 280px;
+      }
+      .swipe-empty-actions {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.25rem;
+      }
+      .swipe-skeleton-card {
+        grid-area: 1 / 1;
+        display: flex;
+        flex-direction: column;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        overflow: hidden;
+      }
+      .swipe-skeleton-card .skel-thumb {
+        border-radius: 0;
+      }
+      .swipe-skeleton-body {
+        padding: 0.78rem 0.9rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      /* Fullscreen 2D swipe support */
+      #fs-canvas.is-swipeable {
+        cursor: grab;
+        touch-action: pan-y;
+        will-change: transform;
+      }
+      #fs-canvas.is-swiping {
+        cursor: grabbing;
+        transition: none !important;
+      }
+      #fs-canvas.is-swipe-spring {
+        transition: transform 0.32s cubic-bezier(0.22, 1.28, 0.36, 1), opacity 0.2s ease;
+      }
+      #fs-canvas.is-swipe-exit {
+        transition: transform 0.24s cubic-bezier(0.2, 0.85, 0.3, 1), opacity 0.22s ease;
+      }
+      @media (max-width: 640px) {
+        .swipe-stage {
+          padding: 0.38rem 0.35rem 0.65rem;
+          gap: 0.65rem;
+        }
+        .swipe-deck-wrap {
+          min-height: 360px;
+          padding-bottom: 16px;
+        }
+        .swipe-keys-hint { display: none; }
+        .swipe-act-btn.is-primary {
+          width: 52px;
+          height: 52px;
+        }
+        .swipe-dock { gap: 0.62rem; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .swipe-card,
+        .genome-card.is-swipe-spring,
+        .genome-card.is-swipe-exit,
+        #fs-canvas.is-swipe-spring,
+        #fs-canvas.is-swipe-exit {
+          transition-duration: 0.08s !important;
+        }
+      }
     </style>
   </head>
   <body class="is-population-loading">
@@ -2320,6 +3050,24 @@
 
             <div class="grid-toolbar">
               <div class="grid-toolbar-left">
+                <div id="view-mode-tabs" class="view-mode-tabs" role="tablist" aria-label="Layout mode">
+                  <button id="view-grid-btn" type="button" class="view-mode-btn active" role="tab" aria-selected="true" data-view-mode="grid" title="Grid view (drag any card left or right to vote)">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="2" y="2" width="4.7" height="4.7" rx="1" />
+                      <rect x="9.3" y="2" width="4.7" height="4.7" rx="1" />
+                      <rect x="2" y="9.3" width="4.7" height="4.7" rx="1" />
+                      <rect x="9.3" y="9.3" width="4.7" height="4.7" rx="1" />
+                    </svg>
+                    <span>Grid</span>
+                  </button>
+                  <button id="view-swipe-btn" type="button" class="view-mode-btn" role="tab" aria-selected="false" data-view-mode="swipe" title="Swipe deck (swipe right for thumbs up, left for thumbs down)">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="3.5" y="2" width="9" height="11" rx="1.6" />
+                      <path d="M5.5 14.3h5" opacity="0.55" />
+                    </svg>
+                    <span>Swipe</span>
+                  </button>
+                </div>
                 <div class="filter-tabs" role="tablist" aria-label="Candidate filter">
                   <button id="tab-all" type="button" class="filter-tab active" data-filter="all">All <span id="tab-all-count" class="tab-cnt"><span class="skel-bar" style="--skel-w: 13px; --skel-h: 8px;" aria-hidden="true"></span></span></button>
                   <button id="tab-unvoted" type="button" class="filter-tab" data-filter="unvoted">Needs vote <span id="tab-unvoted-count" class="tab-cnt"><span class="skel-bar" style="--skel-w: 13px; --skel-h: 8px;" aria-hidden="true"></span></span></button>
@@ -2381,6 +3129,64 @@
               </div>
             </div>
             <div id="genome-grid" class="grid"></div>
+            <div id="swipe-stage" class="swipe-stage" hidden aria-label="Swipe deck">
+              <div id="swipe-ambient" class="swipe-ambient" aria-hidden="true"></div>
+              <div class="swipe-hud">
+                <div class="swipe-hud-row">
+                  <span id="swipe-hud-pos">0 left in deck</span>
+                  <div class="swipe-hud-tallies">
+                    <span id="swipe-tally-up" class="swipe-tally-pill is-up" title="Your likes this round">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7v6H2.5a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1H5Zm0 0 2.6-4.4a1.3 1.3 0 0 1 2.3.8V6h3.1a1.2 1.2 0 0 1 1.2 1.4l-.8 4.4a1.3 1.3 0 0 1-1.3 1.2H5"/></svg>
+                      <span class="cnt">0</span>
+                    </span>
+                    <span id="swipe-tally-down" class="swipe-tally-pill is-down" title="Your dislikes this round">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 9V3H2.5a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1H5Zm0 0 2.6 4.4a1.3 1.3 0 0 0 2.3-.8V10h3.1a1.2 1.2 0 0 0 1.2-1.4l-.8-4.4A1.3 1.3 0 0 0 12.1 3H5"/></svg>
+                      <span class="cnt">0</span>
+                    </span>
+                  </div>
+                </div>
+                <div class="swipe-hud-track" aria-hidden="true">
+                  <div id="swipe-hud-fill" class="swipe-hud-fill"></div>
+                </div>
+              </div>
+              <div id="swipe-lock-note" class="swipe-lock-note" hidden></div>
+              <div id="swipe-deck-wrap" class="swipe-deck-wrap"></div>
+              <div id="swipe-dock" class="swipe-dock" aria-label="Swipe actions">
+                <button id="swipe-undo-btn" type="button" class="swipe-act-btn is-secondary is-undo" aria-label="Undo last swipe" title="Undo last swipe (Z)" disabled>
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3.2 6.4H10a3.5 3.5 0 1 1 0 7H6.8" />
+                    <path d="M5.8 3.8 3.2 6.4 5.8 9" />
+                  </svg>
+                </button>
+                <button id="swipe-down-btn" type="button" class="swipe-act-btn is-primary is-down" aria-label="Thumbs down (swipe left)" title="Thumbs down / Dislike (←)">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M5 9V3H2.5a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1H5Zm0 0 2.6 4.4a1.3 1.3 0 0 0 2.3-.8V10h3.1a1.2 1.2 0 0 0 1.2-1.4l-.8-4.4A1.3 1.3 0 0 0 12.1 3H5" />
+                  </svg>
+                </button>
+                <button id="swipe-skip-btn" type="button" class="swipe-act-btn is-secondary is-skip" aria-label="Skip for now" title="Skip for now (Space)">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3.2 4.2 8 8l-4.8 3.8M8.8 4.2 13.6 8l-4.8 3.8" />
+                  </svg>
+                </button>
+                <button id="swipe-up-btn" type="button" class="swipe-act-btn is-primary is-up" aria-label="Thumbs up (swipe right)" title="Thumbs up / Like (→)">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M5 7v6H2.5a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1H5Zm0 0 2.6-4.4a1.3 1.3 0 0 1 2.3.8V6h3.1a1.2 1.2 0 0 1 1.2 1.4l-.8 4.4a1.3 1.3 0 0 1-1.3 1.2H5" />
+                  </svg>
+                </button>
+                <button id="swipe-inspect-btn" type="button" class="swipe-act-btn is-secondary is-inspect" aria-label="Inspect full screen" title="Inspect full screen &amp; network (Enter)">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10" />
+                  </svg>
+                </button>
+              </div>
+              <div class="swipe-keys-hint" aria-hidden="true">
+                <span><kbd>&larr;</kbd> Thumbs down</span>
+                <span><kbd>&rarr;</kbd> Thumbs up</span>
+                <span><kbd>Space</kbd> Skip</span>
+                <span><kbd>Z</kbd> Undo</span>
+                <span><kbd>Enter</kbd> Inspect</span>
+              </div>
+            </div>
 
             {% if is_private %}
               <div class="private-footnote">
@@ -2532,6 +3338,14 @@
             <canvas id="fs-canvas" width="512" height="512"></canvas>
             <canvas id="fs-gl-canvas" width="512" height="340" hidden></canvas>
             <span id="fs-gl-hint" class="fs-gl-hint" hidden>3D MuJoCo · drag to orbit · scroll to zoom</span>
+            <span id="fs-swipe-like" class="swipe-stamp is-like" aria-hidden="true">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7v6H2.5a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1H5Zm0 0 2.6-4.4a1.3 1.3 0 0 1 2.3.8V6h3.1a1.2 1.2 0 0 1 1.2 1.4l-.8 4.4a1.3 1.3 0 0 1-1.3 1.2H5"/></svg>
+              LIKE
+            </span>
+            <span id="fs-swipe-nope" class="swipe-stamp is-nope" aria-hidden="true">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9V3H2.5a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1H5Zm0 0 2.6 4.4a1.3 1.3 0 0 0 2.3-.8V10h3.1a1.2 1.2 0 0 0 1.2-1.4l-.8-4.4A1.3 1.3 0 0 0 12.1 3H5"/></svg>
+              DISLIKE
+            </span>
           </div>
           <div id="fs-network-panel" class="fs-network-panel" hidden></div>
           <button id="fs-next-btn" type="button" class="fs-nav-btn" aria-label="Next individual">&rsaquo;</button>
@@ -6144,11 +6958,30 @@
       const tabUnvotedBtn = document.getElementById("tab-unvoted");
       const tabAllCountEl = document.getElementById("tab-all-count");
       const tabUnvotedCountEl = document.getElementById("tab-unvoted-count");
+      const viewModeTabsEl = document.getElementById("view-mode-tabs");
+      const viewGridBtn = document.getElementById("view-grid-btn");
+      const viewSwipeBtn = document.getElementById("view-swipe-btn");
       const sortTabsEl = document.getElementById("sort-tabs");
       const sortStepsBtn = document.getElementById("sort-steps-btn");
       const sortSlotBtn = document.getElementById("sort-slot-btn");
       const nextUnvotedBtn = document.getElementById("next-unvoted-btn");
       const genomeGridEl = document.getElementById("genome-grid");
+      const swipeStageEl = document.getElementById("swipe-stage");
+      const swipeAmbientEl = document.getElementById("swipe-ambient");
+      const swipeHudPosEl = document.getElementById("swipe-hud-pos");
+      const swipeHudFillEl = document.getElementById("swipe-hud-fill");
+      const swipeTallyUpEl = document.getElementById("swipe-tally-up");
+      const swipeTallyDownEl = document.getElementById("swipe-tally-down");
+      const swipeLockNoteEl = document.getElementById("swipe-lock-note");
+      const swipeDeckWrapEl = document.getElementById("swipe-deck-wrap");
+      const swipeDockEl = document.getElementById("swipe-dock");
+      const swipeUndoBtn = document.getElementById("swipe-undo-btn");
+      const swipeDownBtn = document.getElementById("swipe-down-btn");
+      const swipeSkipBtn = document.getElementById("swipe-skip-btn");
+      const swipeUpBtn = document.getElementById("swipe-up-btn");
+      const swipeInspectBtn = document.getElementById("swipe-inspect-btn");
+      const fsSwipeLikeEl = document.getElementById("fs-swipe-like");
+      const fsSwipeNopeEl = document.getElementById("fs-swipe-nope");
       const evoWorkspaceEl = document.getElementById("evo-workspace");
       const privateEmptyStateEl = document.getElementById("private-empty-state");
       const emptyCancelBtn = document.getElementById("empty-cancel-btn");
@@ -6525,8 +7358,21 @@
       let activeGoalName = null;
       let activeGoalRenderToken = 0;
       let gridFilter = "all";
+      let viewMode = (() => {
+        try { return localStorage.getItem("det_view_mode") === "swipe" ? "swipe" : "grid"; } catch { return "grid"; }
+      })();
       let controlSortMode = "steps";
       let activeHoverAnim = null;
+      let swipeLiveAnim = null;
+      const SWIPE_IMAGE_SIZE = 256;
+      const SWIPE_SIM_SIZE = 320;
+      const swipeState = {
+        goalKey: "",
+        queue: [],
+        history: [],
+        dragging: false,
+        hydrateToken: 0,
+      };
       let addingExtraGoal = false;
       let lineageFilter = "active";
       let lineageCollapsed = (() => {
@@ -6739,6 +7585,12 @@
           if (isWindowedGrid(goal)) needsRerender = true;
           else applyCardFilter(true);
         }
+        if (isSwipeViewActive(goal)) {
+          focusIndexInSwipeDeck(goal, idx);
+          renderIndividualsPanel(goal);
+          if (openModal) openFullscreen(idx);
+          return;
+        }
         if (isWindowedGrid(goal)) {
           if (gridFilter === "unvoted" && hasMyVote(goal, idx)) {
             gridFilter = "all";
@@ -6809,9 +7661,10 @@
           const hidden = isIndividualHidden(goal, idx);
 
           const row = document.createElement("div");
+          const isSwipeTop = isSwipeViewActive(goal) && swipeState.queue.length > 0 && swipeState.queue[0] === idx;
           row.className = "ind-row"
             + (hidden ? " is-hidden-ind" : "")
-            + (fullscreenIdx === idx ? " is-active" : "");
+            + ((fullscreenIdx === idx || isSwipeTop) ? " is-active" : "");
           row.setAttribute("role", "listitem");
           row.dataset.idx = String(idx);
           if (indUuid) row.dataset.uuid = indUuid;
@@ -7559,16 +8412,20 @@
         }
       }
 
-      function hasMyVote(goal, idx) {
-        const mine = myVotes.get(voteKey(goal.name, goal.generation, idx)) || 0;
-        if (mine !== 0) return true;
+      function getMyVote(goal, idx) {
+        if (!goal) return 0;
+        const k = voteKey(goal.name, goal.generation, idx);
+        if (myVotes.has(k)) return myVotes.get(k) || 0;
         const v = (goal.votes && goal.votes[idx]) || null;
         const me = (savedUsername || nameInput.value || "").trim();
-        if (!v || !me) return false;
-        return (
-          (Array.isArray(v.up_users) && v.up_users.includes(me)) ||
-          (Array.isArray(v.down_users) && v.down_users.includes(me))
-        );
+        if (!v || !me) return 0;
+        if (Array.isArray(v.up_users) && v.up_users.includes(me)) return 1;
+        if (Array.isArray(v.down_users) && v.down_users.includes(me)) return -1;
+        return 0;
+      }
+
+      function hasMyVote(goal, idx) {
+        return getMyVote(goal, idx) !== 0;
       }
 
       function applyCardFilter(refilter) {
@@ -7620,6 +8477,19 @@
       function scrollToNextUnvoted() {
         const goal = goalsByName.get(activeGoalName);
         if (!goal || goal.genomes_loaded === false) return;
+        if (isSwipeViewActive(goal)) {
+          const nextInQueue = swipeState.queue.find((idx) => !hasMyVote(goal, idx));
+          if (nextInQueue !== undefined) {
+            focusIndexInSwipeDeck(goal, nextInQueue);
+            return;
+          }
+          const allVisible = getGoalOrderedIndices(goal, false, true);
+          const unvoted = allVisible.find((idx) => !hasMyVote(goal, idx));
+          if (unvoted !== undefined) {
+            focusIndexInSwipeDeck(goal, unvoted);
+          }
+          return;
+        }
         if (isBroodPhaseGoal(goal)) {
           const groups = Array.from(genomeGridEl.querySelectorAll(".brood-group[data-brood-idx]"));
           if (gridFilter === "unvoted") applyCardFilter(true);
@@ -7764,7 +8634,7 @@
           downBtn.disabled = !isConnected || goal.evolving || simPhaseLocked || capBlocked;
         });
 
-        if (isWindowedGrid(goal)) {
+        if (isWindowedGrid(goal) || isSwipeViewActive(goal)) {
           let totalAll = 0;
           let totalUnvoted = 0;
           for (let i = 0; i < goal.genomes.length; i++) {
@@ -7784,35 +8654,1248 @@
         renderFullscreenVotes();
         renderRoundStatus();
         renderIndividualsPanel(goal);
+        if (isSwipeViewActive(goal)) {
+          refreshSwipeDeckLiveVotes(goal);
+        }
       }
 
-      function sendVote(goal, idx, val) {
-        if (!socket || socket.readyState !== WebSocket.OPEN || goal.evolving) return;
+      function canVoteOnGoal(goal, idx, targetVal) {
+        if (!goal || !isConnected || !socket || socket.readyState !== WebSocket.OPEN || goal.evolving) {
+          return { ok: false, prev: 0, reason: !isConnected ? "Offline — reconnecting..." : "" };
+        }
         if (goal.sim_phase_enabled && goal.phase === "simulating") {
-          showThrottleNotice("Client simulation phase in progress — voting unlocks once candidates are verified.");
-          return;
+          return {
+            ok: false,
+            prev: 0,
+            reason: "Client simulation phase in progress — voting unlocks once candidates are verified.",
+          };
         }
         if (goal.phase === "brood") {
-          showThrottleNotice("Brood selection is active — pick the strongest sibling in each brood.");
-          return;
+          return {
+            ok: false,
+            prev: 0,
+            reason: "Brood selection is active — pick the strongest sibling in each brood.",
+          };
+        }
+        const prev = getMyVote(goal, idx);
+        const maxVotesPerUser = goal.max_votes_per_user || initialMaxVotes || 5;
+        if (prev === 0 && targetVal !== 0 && countMyActiveVotes(goal) >= maxVotesPerUser) {
+          return {
+            ok: false,
+            prev,
+            reason: `Vote cap reached (${maxVotesPerUser} active votes/round) — undo or click an existing vote to free a slot.`,
+          };
+        }
+        return { ok: true, prev, reason: "" };
+      }
+
+      function setExplicitVote(goal, idx, targetVal) {
+        const check = canVoteOnGoal(goal, idx, targetVal);
+        if (!check.ok) {
+          if (check.reason) showThrottleNotice(check.reason);
+          return { ok: false, prev: check.prev, changed: false };
+        }
+        const prev = check.prev;
+        if (prev === targetVal) {
+          return { ok: true, prev, changed: false };
         }
         const k = voteKey(goal.name, goal.generation, idx);
-        const prev = myVotes.get(k) || 0;
-        const maxVotesPerUser = goal.max_votes_per_user || initialMaxVotes || 5;
-        if (prev === 0 && countMyActiveVotes(goal) >= maxVotesPerUser) {
-          showThrottleNotice(`Vote cap reached (${maxVotesPerUser} active votes/round) — click an existing vote to free a slot.`);
-          return;
-        }
-        const nextVote = prev === val ? 0 : val;
-        myVotes.set(k, nextVote);
+        myVotes.set(k, targetVal);
         updateVoteCards();
         socket.send(JSON.stringify({
           type: "cast_vote",
           goal: goal.name,
           generation: goal.generation,
           index: idx,
-          vote: nextVote,
+          vote: targetVal,
         }));
+        return { ok: true, prev, changed: true };
+      }
+
+      function sendVote(goal, idx, val) {
+        const prev = getMyVote(goal, idx);
+        const nextVote = prev === val ? 0 : val;
+        setExplicitVote(goal, idx, nextVote);
+      }
+
+      const THUMB_UP_SVG =
+        '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7v6H2.5a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1H5Zm0 0 2.6-4.4a1.3 1.3 0 0 1 2.3.8V6h3.1a1.2 1.2 0 0 1 1.2 1.4l-.8 4.4a1.3 1.3 0 0 1-1.3 1.2H5"/></svg>';
+      const THUMB_DOWN_SVG =
+        '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 9V3H2.5a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1H5Zm0 0 2.6 4.4a1.3 1.3 0 0 0 2.3-.8V10h3.1a1.2 1.2 0 0 0 1.2-1.4l-.8-4.4A1.3 1.3 0 0 0 12.1 3H5"/></svg>';
+
+      function attachGridCardSwipe(card, mediaWrap, goal, idx) {
+        const washEl = document.createElement("div");
+        washEl.className = "card-swipe-wash";
+        washEl.setAttribute("aria-hidden", "true");
+        mediaWrap.appendChild(washEl);
+
+        const likeStamp = document.createElement("span");
+        likeStamp.className = "card-swipe-stamp is-like";
+        likeStamp.setAttribute("aria-hidden", "true");
+        likeStamp.innerHTML = `${THUMB_UP_SVG}<span>LIKE</span>`;
+        mediaWrap.appendChild(likeStamp);
+
+        const nopeStamp = document.createElement("span");
+        nopeStamp.className = "card-swipe-stamp is-nope";
+        nopeStamp.setAttribute("aria-hidden", "true");
+        nopeStamp.innerHTML = `${THUMB_DOWN_SVG}<span>DISLIKE</span>`;
+        mediaWrap.appendChild(nopeStamp);
+
+        let tracking = false;
+        let swiping = false;
+        let pointerId = null;
+        let startX = 0;
+        let startY = 0;
+        let lastX = 0;
+        let lastDx = 0;
+        let lastDy = 0;
+        let samples = [];
+        let cleanupTimer = 0;
+
+        function clearVisualState() {
+          card.classList.remove("is-swiping", "is-swipe-spring", "is-swipe-exit", "is-swipe-like", "is-swipe-nope");
+          card.style.transform = "";
+          card.style.opacity = "";
+          likeStamp.style.opacity = "0";
+          likeStamp.style.transform = "rotate(-12deg) scale(0.9)";
+          nopeStamp.style.opacity = "0";
+          nopeStamp.style.transform = "rotate(12deg) scale(0.9)";
+          washEl.style.opacity = "0";
+          washEl.style.background = "";
+        }
+
+        function updateDragVisuals(dx, dy) {
+          const w = Math.max(120, card.getBoundingClientRect().width || 160);
+          const threshold = Math.min(64, Math.max(44, w * 0.32));
+          const progress = Math.min(1, Math.max(0, (Math.abs(dx) - 8) / threshold));
+          const clampedDx = Math.sign(dx) * Math.min(Math.abs(dx), w * 0.95);
+          const clampedDy = Math.max(-24, Math.min(24, dy * 0.14));
+          const rot = Math.max(-14, Math.min(14, clampedDx * 0.085));
+          card.style.transform = `translate3d(${clampedDx.toFixed(1)}px, ${clampedDy.toFixed(1)}px, 0) rotate(${rot.toFixed(2)}deg)`;
+
+          const isRight = dx > 0;
+          card.classList.toggle("is-swipe-like", isRight && progress > 0.14);
+          card.classList.toggle("is-swipe-nope", !isRight && progress > 0.14);
+          if (isRight) {
+            likeStamp.style.opacity = String(progress.toFixed(3));
+            likeStamp.style.transform = `rotate(-12deg) scale(${(0.88 + progress * 0.16).toFixed(3)})`;
+            nopeStamp.style.opacity = "0";
+            washEl.style.background = "linear-gradient(125deg, rgba(52, 211, 153, 0.28) 0%, transparent 68%)";
+            washEl.style.opacity = String((progress * 0.95).toFixed(3));
+          } else {
+            nopeStamp.style.opacity = String(progress.toFixed(3));
+            nopeStamp.style.transform = `rotate(12deg) scale(${(0.88 + progress * 0.16).toFixed(3)})`;
+            likeStamp.style.opacity = "0";
+            washEl.style.background = "linear-gradient(235deg, rgba(251, 113, 133, 0.28) 0%, transparent 68%)";
+            washEl.style.opacity = String((progress * 0.95).toFixed(3));
+          }
+        }
+
+        function springBack() {
+          card.classList.remove("is-swiping");
+          card.classList.add("is-swipe-spring");
+          card.style.transform = "";
+          card.classList.remove("is-swipe-like", "is-swipe-nope");
+          likeStamp.style.opacity = "0";
+          nopeStamp.style.opacity = "0";
+          washEl.style.opacity = "0";
+          if (cleanupTimer) clearTimeout(cleanupTimer);
+          cleanupTimer = setTimeout(() => {
+            cleanupTimer = 0;
+            clearVisualState();
+          }, 340);
+        }
+
+        card.addEventListener("pointerdown", (e) => {
+          if (e.pointerType === "mouse" && e.button !== 0) return;
+          if (e.target && e.target.closest("button, a, input, select, textarea")) return;
+          if (card.classList.contains("is-swipe-exit")) return;
+          if (cleanupTimer) {
+            clearTimeout(cleanupTimer);
+            cleanupTimer = 0;
+            clearVisualState();
+          }
+          tracking = true;
+          swiping = false;
+          pointerId = e.pointerId;
+          startX = e.clientX;
+          startY = e.clientY;
+          lastX = e.clientX;
+          lastDx = 0;
+          lastDy = 0;
+          samples = [{ x: e.clientX, t: performance.now() }];
+        });
+
+        card.addEventListener("pointermove", (e) => {
+          if (!tracking || e.pointerId !== pointerId) return;
+          const dx = e.clientX - startX;
+          const dy = e.clientY - startY;
+          lastDx = dx;
+          lastDy = dy;
+          lastX = e.clientX;
+          const now = performance.now();
+          samples.push({ x: e.clientX, t: now });
+          while (samples.length > 2 && now - samples[0].t > 90) samples.shift();
+
+          if (!swiping) {
+            if (Math.abs(dy) >= 12 && Math.abs(dy) >= Math.abs(dx)) {
+              tracking = false;
+              pointerId = null;
+              return;
+            }
+            if (Math.abs(dx) < 10 || Math.abs(dx) <= Math.abs(dy) * 1.15) return;
+            swiping = true;
+            stopCardHoverAnim();
+            card._suppressClickUntil = now + 420;
+            card.classList.add("is-swiping");
+            try { card.setPointerCapture(pointerId); } catch {}
+          }
+          e.preventDefault();
+          updateDragVisuals(dx, dy);
+        });
+
+        function finishPointer(e, cancelled) {
+          if (!tracking || e.pointerId !== pointerId) return;
+          tracking = false;
+          const pid = pointerId;
+          pointerId = null;
+          if (!swiping) return;
+          swiping = false;
+          try { if (card.hasPointerCapture(pid)) card.releasePointerCapture(pid); } catch {}
+          card._suppressClickUntil = performance.now() + 420;
+
+          if (cancelled) {
+            springBack();
+            return;
+          }
+
+          const now = performance.now();
+          const first = samples[0] || { x: startX, t: now - 16 };
+          const dt = Math.max(12, now - first.t);
+          const vx = (lastX - first.x) / dt;
+          const w = Math.max(120, card.getBoundingClientRect().width || 160);
+          const threshold = Math.min(64, Math.max(44, w * 0.32));
+          const committed = Math.abs(lastDx) >= threshold || (Math.abs(vx) >= 0.42 && Math.abs(lastDx) >= 26);
+
+          if (!committed) {
+            springBack();
+            return;
+          }
+
+          const dir = lastDx > 0 ? 1 : -1;
+          const activeGoal = goalsByName.get(activeGoalName);
+          const targetGoal = activeGoal && activeGoal.name === goal.name && activeGoal.generation === goal.generation
+            ? activeGoal
+            : goal;
+          const res = setExplicitVote(targetGoal, idx, dir);
+          if (!res.ok) {
+            springBack();
+            return;
+          }
+
+          const activeStamp = dir > 0 ? likeStamp : nopeStamp;
+          const otherStamp = dir > 0 ? nopeStamp : likeStamp;
+          activeStamp.style.opacity = "1";
+          activeStamp.style.transform = `rotate(${dir > 0 ? -12 : 12}deg) scale(1.06)`;
+          otherStamp.style.opacity = "0";
+          card.classList.remove("is-swiping");
+
+          if (gridFilter === "unvoted") {
+            card.classList.add("is-swipe-exit");
+            card.style.transform = `translate3d(${(dir * (w + 72)).toFixed(0)}px, ${(lastDy * 0.14 + 14).toFixed(0)}px, 0) rotate(${dir * 16}deg)`;
+            card.style.opacity = "0";
+            if (cleanupTimer) clearTimeout(cleanupTimer);
+            cleanupTimer = setTimeout(() => {
+              cleanupTimer = 0;
+              clearVisualState();
+              if (goalsByName.get(activeGoalName) === targetGoal) {
+                applyCardFilter(true);
+                updateVoteCards();
+              }
+            }, 235);
+          } else {
+            card.classList.add("is-swipe-spring");
+            card.style.transform = `translate3d(${dir * 16}px, 0, 0) rotate(${dir * 3}deg)`;
+            setTimeout(() => {
+              if (!card.isConnected) return;
+              card.style.transform = "";
+              washEl.style.opacity = "0";
+            }, 95);
+            if (cleanupTimer) clearTimeout(cleanupTimer);
+            cleanupTimer = setTimeout(() => {
+              cleanupTimer = 0;
+              clearVisualState();
+            }, 380);
+          }
+        }
+
+        card.addEventListener("pointerup", (e) => finishPointer(e, false));
+        card.addEventListener("pointercancel", (e) => finishPointer(e, true));
+      }
+
+      function isSwipeViewActive(goal) {
+        return Boolean(viewMode === "swipe" && goal && !isBroodPhaseGoal(goal));
+      }
+
+      function stopSwipeLiveAnim() {
+        if (!swipeLiveAnim) return;
+        cancelAnimationFrame(swipeLiveAnim.raf);
+        swipeLiveAnim = null;
+      }
+
+      function setSwipeAmbient(dir, progress) {
+        if (!swipeAmbientEl) return;
+        if (!dir || progress <= 0.04) {
+          swipeAmbientEl.style.opacity = "0";
+          return;
+        }
+        swipeAmbientEl.style.background = dir > 0
+          ? "radial-gradient(ellipse 72% 60% at 78% 44%, rgba(52, 211, 153, 0.14), transparent 72%)"
+          : "radial-gradient(ellipse 72% 60% at 22% 44%, rgba(251, 113, 133, 0.14), transparent 72%)";
+        swipeAmbientEl.style.opacity = String(Math.min(1, progress).toFixed(3));
+      }
+
+      function setSwipeDockArmed(dir) {
+        if (swipeUpBtn) swipeUpBtn.classList.toggle("is-armed", dir === 1);
+        if (swipeDownBtn) swipeDownBtn.classList.toggle("is-armed", dir === -1);
+      }
+
+      function syncViewModeUI(goal) {
+        const inBrood = Boolean(goal && isBroodPhaseGoal(goal));
+        const swipeActive = Boolean(goal && viewMode === "swipe" && !inBrood);
+        if (viewGridBtn) {
+          viewGridBtn.classList.toggle("active", !swipeActive);
+          viewGridBtn.setAttribute("aria-selected", !swipeActive ? "true" : "false");
+        }
+        if (viewSwipeBtn) {
+          viewSwipeBtn.disabled = inBrood;
+          viewSwipeBtn.classList.toggle("active", swipeActive);
+          viewSwipeBtn.setAttribute("aria-selected", swipeActive ? "true" : "false");
+          viewSwipeBtn.title = inBrood
+            ? "Brood sibling selection uses grid picker"
+            : "Swipe deck (swipe right for thumbs up, left for thumbs down)";
+        }
+        if (genomeGridEl) genomeGridEl.hidden = swipeActive;
+        if (swipeStageEl) swipeStageEl.hidden = !swipeActive;
+        if (swipeActive && gridPageBarEl) gridPageBarEl.hidden = true;
+        if (!swipeActive) {
+          stopSwipeLiveAnim();
+          setSwipeAmbient(0, 0);
+          setSwipeDockArmed(0);
+        }
+      }
+
+      function setViewMode(nextMode) {
+        const normalized = nextMode === "swipe" ? "swipe" : "grid";
+        if (viewMode === normalized) return;
+        viewMode = normalized;
+        try { localStorage.setItem("det_view_mode", viewMode); } catch {}
+        const goal = goalsByName.get(activeGoalName);
+        if (viewMode === "swipe") {
+          stopCardHoverAnim();
+        } else {
+          stopSwipeLiveAnim();
+        }
+        renderActiveGoal(true);
+        if (goal) renderIndividualsPanel(goal);
+      }
+
+      if (viewGridBtn) viewGridBtn.addEventListener("click", () => setViewMode("grid"));
+      if (viewSwipeBtn) viewSwipeBtn.addEventListener("click", () => setViewMode("swipe"));
+
+      function buildSwipeQueueIndices(goal, includeVotedOverride = false) {
+        if (!goal || !Array.isArray(goal.genomes)) return [];
+        const includeAll = includeVotedOverride || gridFilter !== "unvoted";
+        const ordered = getGoalOrderedIndices(goal, false, includeAll);
+        if (!includeAll) return ordered;
+        const unvoted = [];
+        const voted = [];
+        for (const idx of ordered) {
+          if (hasMyVote(goal, idx)) voted.push(idx);
+          else unvoted.push(idx);
+        }
+        return unvoted.concat(voted);
+      }
+
+      function syncSwipeQueue(goal, forceRebuild = false, includeVotedOverride = false) {
+        if (!goal || !Array.isArray(goal.genomes)) {
+          swipeState.goalKey = "";
+          swipeState.queue = [];
+          swipeState.history = [];
+          return;
+        }
+        const gKey = `${goal.name}:${goal.generation}`;
+        if (forceRebuild || swipeState.goalKey !== gKey) {
+          if (swipeState.goalKey !== gKey) {
+            swipeState.history = [];
+          }
+          swipeState.goalKey = gKey;
+          swipeState.queue = buildSwipeQueueIndices(goal, includeVotedOverride);
+          return;
+        }
+        swipeState.queue = swipeState.queue.filter((idx) => (
+          idx >= 0 && idx < goal.genomes.length && !isIndividualHidden(goal, idx)
+        ));
+      }
+
+      function focusIndexInSwipeDeck(goal, idx) {
+        if (!goal || !Array.isArray(goal.genomes) || idx < 0 || idx >= goal.genomes.length) return;
+        syncSwipeQueue(goal, false);
+        swipeState.queue = [idx, ...swipeState.queue.filter((i) => i !== idx)];
+        renderSwipeDeck(goal, false);
+      }
+
+      function startSwipeLiveAnim(genome, canvas, maxSteps, taskId, envParams = null) {
+        stopSwipeLiveAnim();
+        if (!genome || !canvas || taskId === "external") return;
+        const spec = getTaskSpec(taskId);
+        const dt = spec.dt || 0.02;
+        const sceneTask = isSceneTask(taskId);
+        const sceneKey = resolveSceneKey(taskId, envParams);
+        const activeGoal = goalsByName.get(activeGoalName);
+        const crowdFallback = activeGoal && goalTaskId(activeGoal) === taskId
+          ? getCrowdTrustEntry(activeGoal.name, activeGoal.generation, genome)
+          : null;
+        const cached = getCachedControlEntry(taskId, genome, envParams) || crowdFallback;
+        const stateObj = {
+          raf: 0,
+          genome,
+          canvas,
+          taskId,
+          env_params: envParams,
+          rollout: cached && cached.primary_rollout ? cached.primary_rollout : null,
+          summary: cached && cached.summary ? cached.summary : null,
+          elapsedMs: 0,
+          lastTickPerf: performance.now(),
+        };
+        swipeLiveAnim = stateObj;
+
+        if (sceneTask) ensureSceneVisualResources(taskId, envParams).catch(() => {});
+        else if (taskId === "halfcheetah") ensureCheetahRenderer().catch(() => {});
+        else if (taskId === "lunarlander") ensureLunarRenderer().catch(() => {});
+
+        if (!stateObj.rollout && hasGenomePayload(genome)) {
+          const seed = Array.isArray(spec.eval_seeds) && spec.eval_seeds.length ? spec.eval_seeds[0] : 0;
+          fetchTaskRollout(taskId, genome, seed, maxSteps, null, false, false, envParams)
+            .then((ro) => {
+              if (swipeLiveAnim === stateObj && canvas.isConnected && ro) {
+                stateObj.rollout = ro;
+              }
+            })
+            .catch(() => {});
+        }
+
+        let lastFrameIdx = -1;
+        function tick(now) {
+          if (swipeLiveAnim !== stateObj || !canvas.isConnected) return;
+          const deltaMs = Math.min(100, Math.max(0, now - stateObj.lastTickPerf));
+          stateObj.lastTickPerf = now;
+          if (swipeState.dragging || !fullscreenModalEl.hidden) {
+            stateObj.raf = requestAnimationFrame(tick);
+            return;
+          }
+          stateObj.elapsedMs += deltaMs;
+          const ro = stateObj.rollout;
+          if (!ro) {
+            stateObj.raf = requestAnimationFrame(tick);
+            return;
+          }
+          if (sceneTask && Array.isArray(ro.body_poses) && ro.body_poses.length > 0 && window.DetMujocoGL) {
+            const pack = sceneVisualPackCache.get(sceneKey);
+            if (pack) {
+              const frameDt = dt * Math.max(1, Number(ro.pose_stride || 1));
+              const frameIdx = Math.floor((stateObj.elapsedMs / 1000) / frameDt) % ro.body_poses.length;
+              if (frameIdx !== lastFrameIdx) {
+                lastFrameIdx = frameIdx;
+                window.DetMujocoGL.renderSceneCardLiveFrame(canvas, pack, ro, frameIdx, maxSteps, stateObj.summary || null);
+              }
+            }
+          } else if (taskId === "lunarlander" && ro.frames && ro.frames.length > 0 && window.DetLunarRenderer) {
+            const frameIdx = Math.floor((stateObj.elapsedMs / 1000) / dt) % ro.frames.length;
+            if (frameIdx !== lastFrameIdx) {
+              lastFrameIdx = frameIdx;
+              window.DetLunarRenderer.renderLunarLiveFrame(canvas, ro, frameIdx, maxSteps);
+            }
+          } else if (taskId === "halfcheetah" && ro.frames && ro.frames.length > 0 && window.DetCheetahRenderer) {
+            const frameIdx = Math.floor((stateObj.elapsedMs / 1000) / dt) % ro.frames.length;
+            if (frameIdx !== lastFrameIdx) {
+              lastFrameIdx = frameIdx;
+              window.DetCheetahRenderer.renderCheetahLiveFrame(canvas, ro.frames, frameIdx, maxSteps);
+            }
+          } else if (ro.states && ro.states.length > 0) {
+            const frameIdx = Math.floor((stateObj.elapsedMs / 1000) / dt) % ro.states.length;
+            if (frameIdx !== lastFrameIdx) {
+              lastFrameIdx = frameIdx;
+              const frame = ro.states[frameIdx];
+              if (frame) {
+                const force = ro.forces && ro.forces.length > 0
+                  ? ro.forces[Math.min(frameIdx, ro.forces.length - 1)]
+                  : 0;
+                renderCartpoleLiveFrame(canvas, frame, force, frameIdx, maxSteps);
+              }
+            }
+          }
+          stateObj.raf = requestAnimationFrame(tick);
+        }
+        stateObj.raf = requestAnimationFrame(tick);
+      }
+
+      function renderSwipeCardCanvas(goal, genome, canvas, entry, isTopCard) {
+        const isCtrl = isControlGoal(goal);
+        const taskId = goalTaskId(goal);
+        const renderer = getTaskRenderer(goal);
+        if (!isCtrl) {
+          const size = isTopCard ? SWIPE_IMAGE_SIZE : 128;
+          canvas.width = size;
+          canvas.height = size;
+          if (hasGenomePayload(genome)) {
+            renderCppnToCanvas(genome, canvas, size);
+          } else {
+            const ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#111116";
+            ctx.fillRect(0, 0, size, size);
+          }
+          return;
+        }
+        canvas.width = SWIPE_SIM_SIZE;
+        canvas.height = SWIPE_SIM_SIZE;
+        renderer.renderCard(genome, canvas, entry);
+      }
+
+      function updateSwipeHudAndDock(goal) {
+        if (!goal || !swipeStageEl || swipeStageEl.hidden) return;
+        const total = Array.isArray(goal.genomes) ? goal.genomes.length : 0;
+        let visibleTotal = 0;
+        let myUps = 0;
+        let myDowns = 0;
+        let unvotedTotal = 0;
+        for (let i = 0; i < total; i++) {
+          if (isIndividualHidden(goal, i)) continue;
+          visibleTotal += 1;
+          const mv = getMyVote(goal, i);
+          if (mv === 1) myUps += 1;
+          else if (mv === -1) myDowns += 1;
+          else unvotedTotal += 1;
+        }
+        const votedTotal = myUps + myDowns;
+        const rem = swipeState.queue.length;
+        if (swipeHudPosEl) {
+          swipeHudPosEl.textContent = rem > 0
+            ? `${rem} in deck \u00b7 ${unvotedTotal} unvoted`
+            : `All ${visibleTotal} reviewed \u00b7 ${votedTotal} voted`;
+        }
+        if (swipeHudFillEl) {
+          const pct = visibleTotal > 0 ? Math.min(100, Math.round((votedTotal / visibleTotal) * 100)) : 0;
+          swipeHudFillEl.style.width = `${pct}%`;
+        }
+        if (swipeTallyUpEl) swipeTallyUpEl.querySelector(".cnt").textContent = String(myUps);
+        if (swipeTallyDownEl) swipeTallyDownEl.querySelector(".cnt").textContent = String(myDowns);
+
+        const hasTop = rem > 0;
+        const topIdx = hasTop ? swipeState.queue[0] : -1;
+        const simPhaseLocked = Boolean(goal.sim_phase_enabled && goal.phase === "simulating");
+        const maxVotesPerUser = goal.max_votes_per_user || initialMaxVotes || 5;
+        const topMyVote = hasTop ? getMyVote(goal, topIdx) : 0;
+        const capBlocked = hasTop && topMyVote === 0 && votedTotal >= maxVotesPerUser;
+        const voteDisabled = !hasTop || !isConnected || goal.evolving || simPhaseLocked || capBlocked;
+
+        if (swipeLockNoteEl) {
+          if (simPhaseLocked) {
+            swipeLockNoteEl.textContent = "Phase 1 simulations running \u2014 thumbs up/down unlocks once verified";
+            swipeLockNoteEl.hidden = false;
+          } else if (capBlocked) {
+            swipeLockNoteEl.textContent = `Vote limit reached (${votedTotal}/${maxVotesPerUser}) \u2014 press Undo (Z) or switch an existing vote`;
+            swipeLockNoteEl.hidden = false;
+          } else {
+            swipeLockNoteEl.hidden = true;
+          }
+        }
+        if (swipeUndoBtn) swipeUndoBtn.disabled = swipeState.history.length === 0 || !isConnected || goal.evolving;
+        if (swipeDownBtn) swipeDownBtn.disabled = voteDisabled;
+        if (swipeUpBtn) swipeUpBtn.disabled = voteDisabled;
+        if (swipeSkipBtn) swipeSkipBtn.disabled = rem <= 1;
+        if (swipeInspectBtn) swipeInspectBtn.disabled = !hasTop;
+      }
+
+      function refreshSwipeDeckLiveVotes(goal) {
+        if (!goal || !swipeDeckWrapEl || swipeStageEl.hidden) return;
+        updateSwipeHudAndDock(goal);
+        const cards = swipeDeckWrapEl.querySelectorAll(".swipe-card:not(.is-outgoing)[data-idx]");
+        cards.forEach((cardEl) => {
+          const idx = Number(cardEl.dataset.idx);
+          const v = (goal.votes && goal.votes[idx]) || { up: 0, down: 0, score: 0 };
+          const mine = getMyVote(goal, idx);
+          const scoreEl = cardEl.querySelector(".score-badge");
+          if (scoreEl) {
+            scoreEl.textContent = v.score > 0 ? `+${v.score}` : String(v.score);
+            scoreEl.className = "score-badge" + (v.score > 0 ? " pos" : v.score < 0 ? " neg" : "");
+          }
+          const upCntEl = cardEl.querySelector(".swipe-crowd-up");
+          const downCntEl = cardEl.querySelector(".swipe-crowd-down");
+          if (upCntEl) upCntEl.textContent = `\u25b2 ${v.up}`;
+          if (downCntEl) downCntEl.textContent = `\u25bc ${v.down}`;
+          const myPill = cardEl.querySelector(".swipe-my-vote-pill");
+          if (myPill) {
+            if (mine === 1) {
+              myPill.className = "swipe-pill is-my-up swipe-my-vote-pill";
+              myPill.textContent = "Liked";
+              myPill.hidden = false;
+            } else if (mine === -1) {
+              myPill.className = "swipe-pill is-my-down swipe-my-vote-pill";
+              myPill.textContent = "Disliked";
+              myPill.hidden = false;
+            } else {
+              myPill.hidden = true;
+            }
+          }
+        });
+      }
+
+      function bindSwipeTopCardDrag(cardEl, goal, idx) {
+        const likeStamp = cardEl.querySelector(".swipe-stamp.is-like");
+        const nopeStamp = cardEl.querySelector(".swipe-stamp.is-nope");
+        const washEl = cardEl.querySelector(".swipe-card-wash");
+
+        let tracking = false;
+        let dragging = false;
+        let pointerId = null;
+        let startX = 0;
+        let startY = 0;
+        let lastX = 0;
+        let lastDx = 0;
+        let lastDy = 0;
+        let samples = [];
+
+        function getSecondCard() {
+          return swipeDeckWrapEl ? swipeDeckWrapEl.querySelector('.swipe-card[data-depth="1"]:not(.is-outgoing)') : null;
+        }
+
+        function resetSecondCard() {
+          const nextCard = getSecondCard();
+          if (!nextCard) return;
+          nextCard.style.transition = "";
+          nextCard.style.transform = "";
+          nextCard.style.opacity = "";
+          nextCard.style.filter = "";
+        }
+
+        function updateDragVisuals(dx, dy) {
+          const rect = cardEl.getBoundingClientRect();
+          const w = Math.max(220, rect.width || 360);
+          const threshold = Math.min(115, Math.max(72, w * 0.28));
+          const progress = Math.min(1, Math.max(0, (Math.abs(dx) - 10) / threshold));
+          const dampedDy = Math.max(-75, Math.min(75, dy * 0.26));
+          const rot = Math.max(-20, Math.min(20, dx * 0.052));
+          cardEl.style.transform = `translate3d(${dx.toFixed(1)}px, ${dampedDy.toFixed(1)}px, 0) rotate(${rot.toFixed(2)}deg)`;
+
+          const isRight = dx > 0;
+          cardEl.classList.toggle("is-like-border", isRight && progress > 0.16);
+          cardEl.classList.toggle("is-nope-border", !isRight && progress > 0.16);
+
+          if (likeStamp && nopeStamp) {
+            if (isRight) {
+              likeStamp.style.opacity = String(progress.toFixed(3));
+              likeStamp.style.transform = `rotate(-12deg) scale(${(0.86 + progress * 0.18).toFixed(3)})`;
+              nopeStamp.style.opacity = "0";
+            } else {
+              nopeStamp.style.opacity = String(progress.toFixed(3));
+              nopeStamp.style.transform = `rotate(12deg) scale(${(0.86 + progress * 0.18).toFixed(3)})`;
+              likeStamp.style.opacity = "0";
+            }
+          }
+          if (washEl) {
+            washEl.style.background = isRight
+              ? "linear-gradient(125deg, rgba(52, 211, 153, 0.22) 0%, transparent 62%)"
+              : "linear-gradient(235deg, rgba(251, 113, 133, 0.22) 0%, transparent 62%)";
+            washEl.style.opacity = String((progress * 0.95).toFixed(3));
+          }
+          setSwipeAmbient(isRight ? 1 : -1, progress);
+          setSwipeDockArmed(progress >= 0.45 ? (isRight ? 1 : -1) : 0);
+
+          const nextCard = getSecondCard();
+          if (nextCard) {
+            const s = 0.955 + progress * 0.04;
+            const ty = 10 * (1 - progress);
+            const op = 0.72 + progress * 0.25;
+            const br = 0.84 + progress * 0.15;
+            nextCard.style.transition = "none";
+            nextCard.style.transform = `translate3d(0, ${ty.toFixed(1)}px, 0) scale(${s.toFixed(4)})`;
+            nextCard.style.opacity = String(op.toFixed(3));
+            nextCard.style.filter = `brightness(${br.toFixed(3)})`;
+          }
+        }
+
+        function springBack() {
+          cardEl.classList.remove("is-dragging", "is-like-border", "is-nope-border");
+          cardEl.classList.add("is-spring");
+          cardEl.style.transform = "";
+          if (likeStamp) likeStamp.style.opacity = "0";
+          if (nopeStamp) nopeStamp.style.opacity = "0";
+          if (washEl) washEl.style.opacity = "0";
+          setSwipeAmbient(0, 0);
+          setSwipeDockArmed(0);
+          resetSecondCard();
+          setTimeout(() => {
+            cardEl.classList.remove("is-spring");
+          }, 380);
+        }
+
+        cardEl.addEventListener("pointerdown", (e) => {
+          if (e.pointerType === "mouse" && e.button !== 0) return;
+          if (e.target && e.target.closest("button, a, input, select, textarea")) return;
+          if (cardEl.classList.contains("is-outgoing")) return;
+          tracking = true;
+          dragging = false;
+          pointerId = e.pointerId;
+          startX = e.clientX;
+          startY = e.clientY;
+          lastX = e.clientX;
+          lastDx = 0;
+          lastDy = 0;
+          samples = [{ x: e.clientX, t: performance.now() }];
+        });
+
+        cardEl.addEventListener("pointermove", (e) => {
+          if (!tracking || e.pointerId !== pointerId) return;
+          const dx = e.clientX - startX;
+          const dy = e.clientY - startY;
+          lastDx = dx;
+          lastDy = dy;
+          lastX = e.clientX;
+          const now = performance.now();
+          samples.push({ x: e.clientX, t: now });
+          while (samples.length > 2 && now - samples[0].t > 90) samples.shift();
+
+          if (!dragging) {
+            if (Math.abs(dy) >= 14 && Math.abs(dy) > Math.abs(dx) * 1.2) {
+              tracking = false;
+              pointerId = null;
+              return;
+            }
+            if (Math.abs(dx) < 8) return;
+            dragging = true;
+            swipeState.dragging = true;
+            cardEl.classList.remove("is-spring");
+            cardEl.classList.add("is-dragging");
+            try { cardEl.setPointerCapture(pointerId); } catch {}
+          }
+          e.preventDefault();
+          updateDragVisuals(dx, dy);
+        });
+
+        function finishDrag(e, cancelled) {
+          if (!tracking || e.pointerId !== pointerId) return;
+          tracking = false;
+          const pid = pointerId;
+          pointerId = null;
+          if (!dragging) return;
+          dragging = false;
+          swipeState.dragging = false;
+          try { if (cardEl.hasPointerCapture(pid)) cardEl.releasePointerCapture(pid); } catch {}
+
+          if (cancelled) {
+            springBack();
+            return;
+          }
+
+          const now = performance.now();
+          const first = samples[0] || { x: startX, t: now - 16 };
+          const dt = Math.max(12, now - first.t);
+          const vx = (lastX - first.x) / dt;
+          const w = Math.max(220, cardEl.getBoundingClientRect().width || 360);
+          const threshold = Math.min(115, Math.max(72, w * 0.28));
+          const committed = Math.abs(lastDx) >= threshold || (Math.abs(vx) >= 0.48 && Math.abs(lastDx) >= 34);
+
+          if (!committed) {
+            springBack();
+            return;
+          }
+
+          const dir = lastDx > 0 ? 1 : -1;
+          const ok = commitSwipeDeckDecision(dir, { cardEl, dx: lastDx, dy: lastDy * 0.26 });
+          if (!ok) {
+            springBack();
+          }
+        }
+
+        cardEl.addEventListener("pointerup", (e) => finishDrag(e, false));
+        cardEl.addEventListener("pointercancel", (e) => finishDrag(e, true));
+      }
+
+      function buildSwipeCardElement(goal, idx, depth) {
+        const genome = goal.genomes[idx];
+        const taskId = goalTaskId(goal);
+        const envParams = goal.env_params || null;
+        const spec = getTaskSpec(taskId);
+        const isCtrl = isControlGoal(goal);
+        const maxSteps = spec.max_steps || CARTPOLE_MAX_STEPS;
+        const indUuid = getIndividualUuid(genome);
+        const entry = isCtrl
+          ? (taskId === "external"
+            ? getExternalEvalEntry(goal.name, goal.generation, genome)
+            : (getCachedControlEntry(taskId, genome, envParams) || (spec.crowd_contribute ? getCrowdTrustEntry(goal.name, goal.generation, genome) : null)))
+          : null;
+        const summary = entry ? entry.summary : null;
+        const v = (goal.votes && goal.votes[idx]) || { up: 0, down: 0, score: 0 };
+        const mine = getMyVote(goal, idx);
+        const opKey = LINEAGE_OP_META[genome.op] ? genome.op : "random";
+        const opMeta = LINEAGE_OP_META[opKey];
+
+        const cardEl = document.createElement("div");
+        cardEl.className = "swipe-card";
+        cardEl.dataset.idx = String(idx);
+        cardEl.dataset.depth = String(depth);
+        if (indUuid) cardEl.dataset.uuid = indUuid;
+
+        const mediaEl = document.createElement("div");
+        mediaEl.className = "swipe-card-media";
+
+        const canvas = document.createElement("canvas");
+        renderSwipeCardCanvas(goal, genome, canvas, entry, depth === 0);
+        mediaEl.appendChild(canvas);
+
+        const scrim = document.createElement("div");
+        scrim.className = "swipe-card-scrim";
+        scrim.setAttribute("aria-hidden", "true");
+        mediaEl.appendChild(scrim);
+
+        const wash = document.createElement("div");
+        wash.className = "swipe-card-wash";
+        wash.setAttribute("aria-hidden", "true");
+        mediaEl.appendChild(wash);
+
+        const topBadges = document.createElement("div");
+        topBadges.className = "swipe-card-top-badges";
+
+        const leftBadges = document.createElement("div");
+        leftBadges.className = "swipe-badge-group";
+        const slotPill = document.createElement("span");
+        slotPill.className = "swipe-pill";
+        slotPill.textContent = `#${idx + 1}`;
+        leftBadges.appendChild(slotPill);
+        if (genome.op === "seed") {
+          const seedPill = document.createElement("span");
+          seedPill.className = "swipe-pill is-seed";
+          seedPill.textContent = "seed";
+          leftBadges.appendChild(seedPill);
+        }
+        if (depth === 0 && isCtrl && taskId !== "external") {
+          const livePill = document.createElement("span");
+          livePill.className = "swipe-pill is-live";
+          livePill.textContent = "LIVE";
+          leftBadges.appendChild(livePill);
+        }
+        topBadges.appendChild(leftBadges);
+
+        const rightBadges = document.createElement("div");
+        rightBadges.className = "swipe-badge-group";
+        if (isCtrl) {
+          const metricPill = document.createElement("span");
+          const tierCls = summary && summary.tier === "solved"
+            ? " is-metric-solved"
+            : (summary && summary.tier === "mid" ? " is-metric-mid" : " is-muted");
+          metricPill.className = "swipe-pill swipe-metric-pill" + tierCls;
+          metricPill.textContent = summary
+            ? (summary.badge_text || summary.primary_display || "ready")
+            : (isGoalSharded(goal) ? "pending shard" : "evaluating...");
+          rightBadges.appendChild(metricPill);
+        }
+        const myVotePill = document.createElement("span");
+        myVotePill.className = "swipe-pill swipe-my-vote-pill" + (mine === 1 ? " is-my-up" : mine === -1 ? " is-my-down" : "");
+        myVotePill.textContent = mine === 1 ? "Liked" : (mine === -1 ? "Disliked" : "");
+        myVotePill.hidden = mine === 0;
+        rightBadges.appendChild(myVotePill);
+        topBadges.appendChild(rightBadges);
+        mediaEl.appendChild(topBadges);
+
+        const likeStamp = document.createElement("span");
+        likeStamp.className = "swipe-stamp is-like";
+        likeStamp.setAttribute("aria-hidden", "true");
+        likeStamp.innerHTML = `${THUMB_UP_SVG}<span>LIKE</span>`;
+        mediaEl.appendChild(likeStamp);
+
+        const nopeStamp = document.createElement("span");
+        nopeStamp.className = "swipe-stamp is-nope";
+        nopeStamp.setAttribute("aria-hidden", "true");
+        nopeStamp.innerHTML = `${THUMB_DOWN_SVG}<span>DISLIKE</span>`;
+        mediaEl.appendChild(nopeStamp);
+
+        cardEl.appendChild(mediaEl);
+
+        const bodyEl = document.createElement("div");
+        bodyEl.className = "swipe-card-body";
+
+        const headEl = document.createElement("div");
+        headEl.className = "swipe-card-head";
+
+        const idGroup = document.createElement("div");
+        idGroup.className = "swipe-card-id-group";
+        const titleSpan = document.createElement("span");
+        titleSpan.className = "swipe-card-title";
+        titleSpan.textContent = `Individual #${idx + 1}`;
+        idGroup.appendChild(titleSpan);
+        if (indUuid) {
+          const uuidBtn = document.createElement("button");
+          uuidBtn.type = "button";
+          uuidBtn.className = "uuid-chip";
+          uuidBtn.dataset.copyLabel = "1";
+          uuidBtn.textContent = `#${indUuid}`;
+          uuidBtn.title = `Copy direct link (/i/${indUuid}/)`;
+          uuidBtn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            copyIndividualLink(indUuid, uuidBtn);
+          });
+          idGroup.appendChild(uuidBtn);
+        }
+        const opBadge = document.createElement("span");
+        opBadge.className = "swipe-op-badge";
+        opBadge.innerHTML = `<span class="legend-dot ${opKey}"></span><span>Gen ${goal.generation} \u00b7 ${opKey}</span>`;
+        opBadge.title = opMeta.title;
+        idGroup.appendChild(opBadge);
+        headEl.appendChild(idGroup);
+
+        const tallyEl = document.createElement("div");
+        tallyEl.className = "swipe-card-tally";
+        const pairEl = document.createElement("span");
+        pairEl.className = "tally-pair";
+        pairEl.innerHTML = `<span class="swipe-crowd-up">\u25b2 ${v.up}</span><span class="swipe-crowd-down">\u25bc ${v.down}</span>`;
+        const scoreEl = document.createElement("span");
+        scoreEl.className = "score-badge" + (v.score > 0 ? " pos" : v.score < 0 ? " neg" : "");
+        scoreEl.textContent = v.score > 0 ? `+${v.score}` : String(v.score);
+        tallyEl.appendChild(pairEl);
+        tallyEl.appendChild(scoreEl);
+        headEl.appendChild(tallyEl);
+        bodyEl.appendChild(headEl);
+
+        const footEl = document.createElement("div");
+        footEl.className = "swipe-card-foot";
+        const subEl = document.createElement("span");
+        subEl.className = "swipe-card-sub";
+        if (isCtrl && summary && summary.secondary_text) {
+          subEl.textContent = `${summary.primary_display || ""} \u00b7 ${summary.secondary_text}`;
+        } else if (Array.isArray(genome.parents) && genome.parents.length > 0) {
+          subEl.textContent = `Parents: ${genome.parents.map((p) => `#${p}`).join(" \u00d7 ")}`;
+        } else {
+          subEl.textContent = "Swipe right to like \u00b7 left to dislike";
+        }
+        footEl.appendChild(subEl);
+
+        const quickEl = document.createElement("div");
+        quickEl.className = "swipe-card-quick";
+
+        const netBtn = document.createElement("button");
+        netBtn.type = "button";
+        netBtn.className = "vote-btn net-btn";
+        netBtn.title = "Inspect network structure";
+        netBtn.innerHTML =
+          '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="3" cy="4" r="1.5"/><circle cx="3" cy="12" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="13" cy="4" r="1.5"/><circle cx="13" cy="12" r="1.5"/><path d="M4.4 4.7 6.7 7.1M4.4 11.3 6.7 8.9M9.3 7.1 11.6 4.7M9.3 8.9 11.6 11.3"/></svg>';
+        netBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          openFullscreen(idx, "net");
+        });
+
+        const dlBtn = document.createElement("button");
+        dlBtn.type = "button";
+        dlBtn.className = "vote-btn dl-btn";
+        dlBtn.title = "Download weights + uv runner (.zip)";
+        dlBtn.innerHTML =
+          '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.5v8m0 0-3-3m3 3 3-3M2.5 13h11"/></svg>';
+        dlBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          downloadPolicy(goal, idx);
+        });
+
+        const hideBtn = document.createElement("button");
+        hideBtn.type = "button";
+        hideBtn.className = "card-hide-btn";
+        hideBtn.title = "Hide individual";
+        hideBtn.textContent = "hide";
+        hideBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          toggleHideIndividual(goal, idx);
+        });
+
+        quickEl.appendChild(netBtn);
+        quickEl.appendChild(dlBtn);
+        quickEl.appendChild(hideBtn);
+        footEl.appendChild(quickEl);
+        bodyEl.appendChild(footEl);
+        cardEl.appendChild(bodyEl);
+
+        if (depth === 0) {
+          bindSwipeTopCardDrag(cardEl, goal, idx);
+          if (isCtrl && taskId !== "external") {
+            startSwipeLiveAnim(genome, canvas, maxSteps, taskId, envParams);
+          }
+        }
+        return cardEl;
+      }
+
+      async function hydrateSwipeDeckCards(goal) {
+        if (!goal || !isSwipeViewActive(goal) || !swipeState.queue.length) return;
+        const token = ++swipeState.hydrateToken;
+        const goalName = goal.name;
+        const gen = goal.generation;
+        const topIdxs = swipeState.queue.slice(0, 3);
+        const isCtrl = isControlGoal(goal);
+        const taskId = goalTaskId(goal);
+        const envParams = goal.env_params || null;
+        const spec = getTaskSpec(taskId);
+        const sharded = isGoalSharded(goal);
+        const isStale = () => (
+          token !== swipeState.hydrateToken ||
+          !isSwipeViewActive(goalsByName.get(activeGoalName)) ||
+          activeGoalName !== goalName ||
+          (goalsByName.get(activeGoalName)?.generation !== gen)
+        );
+
+        const needWeights = topIdxs.filter((i) => goal.genomes[i] && !hasGenomePayload(goal.genomes[i]));
+        if (needWeights.length > 0) {
+          await ensureGoalGenomesHydrated(goal, needWeights);
+          if (isStale()) return;
+        }
+
+        if (!isCtrl) {
+          topIdxs.forEach((idx, depth) => {
+            const cardEl = swipeDeckWrapEl.querySelector(`.swipe-card:not(.is-outgoing)[data-idx="${idx}"]`);
+            const cvs = cardEl && cardEl.querySelector("canvas");
+            if (cvs && goal.genomes[idx]) {
+              renderSwipeCardCanvas(goal, goal.genomes[idx], cvs, null, depth === 0);
+            }
+          });
+          return;
+        }
+
+        if (taskId === "external") {
+          await Promise.all([
+            fetchExternalRoomEvals(goal),
+            Promise.all(topIdxs.map((i) => goal.genomes[i]).filter(Boolean).map(ensureGenomeSha256)),
+          ]);
+          if (isStale()) return;
+          topIdxs.forEach((idx, depth) => {
+            const g = goal.genomes[idx];
+            const cardEl = swipeDeckWrapEl.querySelector(`.swipe-card:not(.is-outgoing)[data-idx="${idx}"]`);
+            const cvs = cardEl && cardEl.querySelector("canvas");
+            const ext = g ? getExternalEvalEntry(goal.name, goal.generation, g) : null;
+            if (cvs && g) renderSwipeCardCanvas(goal, g, cvs, ext, depth === 0);
+          });
+          return;
+        }
+
+        const evalSeeds = spec.eval_seeds || [0, 1];
+        const tKey = evalTaskCacheKey(taskId, envParams);
+        const topGenomes = topIdxs.map((i) => goal.genomes[i]).filter(Boolean);
+        await Promise.all([
+          spec.crowd_contribute ? Promise.all(topGenomes.map(ensureGenomeSha256)) : Promise.resolve(),
+          sharded ? Promise.resolve() : hydrateControlEvalsFromDb(tKey, topGenomes, evalSeeds, simResultCache),
+        ]);
+        if (isStale()) return;
+
+        const missingIdxs = sharded ? [] : topIdxs.filter((idx) => {
+          const g = goal.genomes[idx];
+          if (!g || !hasGenomePayload(g)) return false;
+          const localEnt = getCachedControlEntry(taskId, g, envParams);
+          if (localEnt && (!isSceneTask(taskId) || hasSceneReplayPoses(localEnt))) return false;
+          const crowdEnt = spec.crowd_contribute ? getCrowdTrustEntry(goal.name, goal.generation, g) : null;
+          return !(crowdEnt && crowdEnt.primary_rollout);
+        });
+
+        if (missingIdxs.length > 0) {
+          try {
+            await evaluateControlGenomes(taskId, missingIdxs.map((i) => goal.genomes[i]), null, envParams);
+          } catch {}
+          if (isStale()) return;
+        }
+
+        const maxSteps = spec.max_steps || CARTPOLE_MAX_STEPS;
+        topIdxs.forEach((idx, depth) => {
+          const g = goal.genomes[idx];
+          const cardEl = swipeDeckWrapEl.querySelector(`.swipe-card:not(.is-outgoing)[data-idx="${idx}"]`);
+          const cvs = cardEl && cardEl.querySelector("canvas");
+          if (!g || !cardEl || !cvs) return;
+          const ent = getCachedControlEntry(taskId, g, envParams)
+            || (spec.crowd_contribute ? getCrowdTrustEntry(goal.name, goal.generation, g) : null);
+          renderSwipeCardCanvas(goal, g, cvs, ent, depth === 0);
+          const metricPill = cardEl.querySelector(".swipe-metric-pill");
+          if (metricPill && ent && ent.summary) {
+            metricPill.textContent = ent.summary.badge_text || ent.summary.primary_display || "ready";
+            metricPill.className = "swipe-pill swipe-metric-pill" + (
+              ent.summary.tier === "solved" ? " is-metric-solved" : ent.summary.tier === "mid" ? " is-metric-mid" : " is-muted"
+            );
+          }
+          if (depth === 0 && ent && ent.primary_rollout) {
+            startSwipeLiveAnim(g, cvs, maxSteps, taskId, envParams);
+          }
+        });
+      }
+
+      function renderSwipeDeck(goal, forceRebuild = false, rewindFromDir = 0) {
+        if (!swipeDeckWrapEl || !goal || !isSwipeViewActive(goal)) return;
+        stopSwipeLiveAnim();
+        setSwipeAmbient(0, 0);
+        setSwipeDockArmed(0);
+
+        if (goal.genomes_loaded === false) {
+          swipeDeckWrapEl.innerHTML =
+            '<div class="swipe-skeleton-card" aria-hidden="true">' +
+              '<div class="skel-thumb"></div>' +
+              '<div class="swipe-skeleton-body">' +
+                '<span class="skel-bar" style="--skel-w: 58%; --skel-h: 12px;"></span>' +
+                '<span class="skel-bar" style="--skel-w: 36%; --skel-h: 9px;"></span>' +
+              '</div>' +
+            '</div>';
+          updateSwipeHudAndDock(goal);
+          return;
+        }
+
+        syncSwipeQueue(goal, forceRebuild);
+
+        // Preserve any currently flying outgoing card so rapid swipes animate cleanly
+        const outgoingEls = Array.from(swipeDeckWrapEl.querySelectorAll(".swipe-card.is-outgoing"));
+        const frag = document.createDocumentFragment();
+
+        if (swipeState.queue.length === 0) {
+          let myUps = 0;
+          let myDowns = 0;
+          for (let i = 0; i < goal.genomes.length; i++) {
+            const mv = getMyVote(goal, i);
+            if (mv === 1) myUps += 1;
+            else if (mv === -1) myDowns += 1;
+          }
+          const emptyEl = document.createElement("div");
+          emptyEl.className = "swipe-empty";
+          emptyEl.innerHTML =
+            '<div class="swipe-empty-icon" aria-hidden="true">' +
+              '<svg width="22" height="22" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5 6.4 11.8 13.2 4.5" /></svg>' +
+            '</div>' +
+            '<h3>Deck complete</h3>' +
+            `<p>You voted on ${myUps + myDowns} individual${myUps + myDowns === 1 ? "" : "s"} this round (${myUps} liked, ${myDowns} disliked).</p>`;
+
+          const actions = document.createElement("div");
+          actions.className = "swipe-empty-actions";
+
+          const reviewBtn = document.createElement("button");
+          reviewBtn.type = "button";
+          reviewBtn.textContent = "Review all again";
+          reviewBtn.addEventListener("click", () => {
+            if (gridFilter === "unvoted") {
+              gridFilter = "all";
+              tabAllBtn.classList.add("active");
+              tabUnvotedBtn.classList.remove("active");
+            }
+            syncSwipeQueue(goal, true, true);
+            renderSwipeDeck(goal, false);
+          });
+
+          const gridBtn = document.createElement("button");
+          gridBtn.type = "button";
+          gridBtn.className = "ghost";
+          gridBtn.textContent = "Back to Grid";
+          gridBtn.addEventListener("click", () => setViewMode("grid"));
+
+          actions.appendChild(reviewBtn);
+          actions.appendChild(gridBtn);
+          emptyEl.appendChild(actions);
+          frag.appendChild(emptyEl);
+        } else {
+          const visible = swipeState.queue.slice(0, 3);
+          for (let d = visible.length - 1; d >= 0; d--) {
+            const cardEl = buildSwipeCardElement(goal, visible[d], d);
+            if (d === 0 && rewindFromDir !== 0) {
+              cardEl.style.transition = "none";
+              cardEl.style.transform = `translate3d(${rewindFromDir * 240}px, 14px, 0) rotate(${rewindFromDir * 14}deg)`;
+              cardEl.style.opacity = "0";
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  if (!cardEl.isConnected) return;
+                  cardEl.style.transition = "";
+                  cardEl.style.transform = "";
+                  cardEl.style.opacity = "";
+                });
+              });
+            }
+            frag.appendChild(cardEl);
+          }
+        }
+
+        outgoingEls.forEach((el) => frag.appendChild(el));
+        swipeDeckWrapEl.replaceChildren(frag);
+        updateSwipeHudAndDock(goal);
+        renderIndividualsPanel(goal);
+        hydrateSwipeDeckCards(goal);
+      }
+
+      function commitSwipeDeckDecision(dir, dragInfo = null) {
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal || !isSwipeViewActive(goal) || swipeState.queue.length === 0) return false;
+        const idx = swipeState.queue[0];
+        const res = setExplicitVote(goal, idx, dir);
+        if (!res.ok) return false;
+
+        swipeState.history.push({ idx, prevVote: res.prev, dir, skipped: false });
+        swipeState.queue.shift();
+
+        const cardEl = (dragInfo && dragInfo.cardEl)
+          || swipeDeckWrapEl.querySelector('.swipe-card[data-depth="0"]:not(.is-outgoing)');
+        if (cardEl && cardEl.isConnected) {
+          const w = Math.max(260, cardEl.getBoundingClientRect().width || 360);
+          const stamp = cardEl.querySelector(dir > 0 ? ".swipe-stamp.is-like" : ".swipe-stamp.is-nope");
+          const other = cardEl.querySelector(dir > 0 ? ".swipe-stamp.is-nope" : ".swipe-stamp.is-like");
+          if (stamp) {
+            stamp.style.opacity = "1";
+            stamp.style.transform = `rotate(${dir > 0 ? -12 : 12}deg) scale(1.06)`;
+          }
+          if (other) other.style.opacity = "0";
+          cardEl.classList.remove("is-dragging", "is-spring");
+          cardEl.classList.toggle("is-like-border", dir > 0);
+          cardEl.classList.toggle("is-nope-border", dir < 0);
+          cardEl.classList.add("is-outgoing");
+          const startY = dragInfo ? Number(dragInfo.dy || 0) : 0;
+          requestAnimationFrame(() => {
+            if (!cardEl.isConnected) return;
+            cardEl.style.transform = `translate3d(${(dir * (w + 180)).toFixed(0)}px, ${(startY + 26).toFixed(0)}px, 0) rotate(${dir * 22}deg)`;
+            cardEl.style.opacity = "0";
+          });
+          setTimeout(() => {
+            if (cardEl.isConnected) cardEl.remove();
+          }, 290);
+        }
+
+        renderSwipeDeck(goal, false);
+        return true;
+      }
+
+      function skipSwipeDeckCard() {
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal || !isSwipeViewActive(goal) || swipeState.queue.length <= 1) return;
+        const idx = swipeState.queue.shift();
+        swipeState.queue.push(idx);
+        swipeState.history.push({ idx, prevVote: null, dir: 0, skipped: true });
+        renderSwipeDeck(goal, false);
+      }
+
+      function undoSwipeDeckDecision() {
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal || !isSwipeViewActive(goal) || swipeState.history.length === 0) return;
+        const last = swipeState.history.pop();
+        if (!last.skipped && typeof last.prevVote === "number") {
+          setExplicitVote(goal, last.idx, last.prevVote);
+        }
+        swipeState.queue = [last.idx, ...swipeState.queue.filter((i) => i !== last.idx)];
+        renderSwipeDeck(goal, false, last.dir || 0);
+      }
+
+      if (swipeUpBtn) swipeUpBtn.addEventListener("click", () => commitSwipeDeckDecision(1));
+      if (swipeDownBtn) swipeDownBtn.addEventListener("click", () => commitSwipeDeckDecision(-1));
+      if (swipeSkipBtn) swipeSkipBtn.addEventListener("click", () => skipSwipeDeckCard());
+      if (swipeUndoBtn) swipeUndoBtn.addEventListener("click", () => undoSwipeDeckDecision());
+      if (swipeInspectBtn) {
+        swipeInspectBtn.addEventListener("click", () => {
+          const goal = goalsByName.get(activeGoalName);
+          if (goal && isSwipeViewActive(goal) && swipeState.queue.length > 0) {
+            openFullscreen(swipeState.queue[0]);
+          }
+        });
       }
 
       const dlToast = document.getElementById("dl-toast");
@@ -8332,6 +10415,9 @@
           }
         }
         renderIndividualsPanel(goal);
+        if (isSwipeViewActive(goal) && !swipeState.dragging) {
+          hydrateSwipeDeckCards(goal);
+        }
       }
 
       function getControlLineageEntry(taskId, node, envParams = null) {
@@ -8665,6 +10751,8 @@
         const goal = goalsByName.get(activeGoalName);
         if (!goal || addingExtraGoal) {
           stopCardHoverAnim();
+          stopSwipeLiveAnim();
+          syncViewModeUI(null);
           if (gridPageBarEl) gridPageBarEl.hidden = true;
           syncSimModeUI("image");
           updateWorkerBanner(null);
@@ -8719,6 +10807,7 @@
 
         const inBroodPhase = isBroodPhaseGoal(goal);
         genomeGridEl.classList.toggle("is-brood-grid", inBroodPhase);
+        syncViewModeUI(goal);
 
         syncSimModeUI(taskId);
         updateWorkerBanner(goal);
@@ -8875,6 +10964,7 @@
           if (gridPageBarEl) gridPageBarEl.hidden = true;
           if (panelLoadingSheenEl) panelLoadingSheenEl.hidden = false;
           genomeGridEl.replaceChildren(buildSkeletonGridFragment(popSize || spec.default_pop_size || 8, isCtrl));
+          if (isSwipeViewActive(goal)) renderSwipeDeck(goal, false);
           renderLineageSkeleton(goal);
           renderIndividualsPanel(null);
           tabAllCountEl.textContent = String(popSize || 0);
@@ -8909,7 +10999,7 @@
             const totalFiltered = filteredOrdered.length;
             visibleIndices = slice;
             if (gridPageBarEl) {
-              gridPageBarEl.hidden = false;
+              gridPageBarEl.hidden = isSwipeViewActive(goal);
               if (gridPageSummaryEl) {
                 gridPageSummaryEl.textContent = totalFiltered > 0
                   ? `Showing ${startPos + 1}\u2013${endPos} of ${totalFiltered}${totalFiltered < goal.genomes.length ? ` (${goal.genomes.length} total)` : ""}`
@@ -8987,16 +11077,23 @@
             canvas.height = isCtrl ? CONTROL_CARD_SIZE : CANVAS_SIZE;
             canvas.style.cursor = "zoom-in";
             canvas.title = isCtrl
-              ? (taskId === "external" ? "Click for network structure & telemetry" : "Hover for live rollout \u00b7 click for interactive player + network")
-              : "Click to open full screen & CPPN network";
+              ? (taskId === "external" ? "Swipe right to like \u00b7 left to dislike \u00b7 click for network & telemetry" : "Swipe right to like \u00b7 left to dislike \u00b7 hover for live rollout \u00b7 click to inspect")
+              : "Swipe right to like \u00b7 left to dislike \u00b7 click for full screen & CPPN network";
             renderer.renderCard(genome, canvas, entry);
             syncCardLoadingState(card, taskId, entry, envParams, sharded && !entry);
-            canvas.addEventListener("click", () => openFullscreen(idx));
+            canvas.addEventListener("click", () => {
+              if (card._suppressClickUntil && performance.now() < card._suppressClickUntil) return;
+              openFullscreen(idx);
+            });
             if (isCtrl && taskId !== "external") {
-              card.addEventListener("mouseenter", () => startCardHoverAnim(genome, canvas, maxSteps, taskId, envParams));
+              card.addEventListener("mouseenter", () => {
+                if (card.classList.contains("is-swiping")) return;
+                startCardHoverAnim(genome, canvas, maxSteps, taskId, envParams);
+              });
               card.addEventListener("mouseleave", () => stopCardHoverAnim());
             }
             mediaWrap.appendChild(canvas);
+            attachGridCardSwipe(card, mediaWrap, goal, idx);
             card.appendChild(mediaWrap);
 
             const metaRow = document.createElement("div");
@@ -9135,6 +11232,9 @@
               });
             }
           }
+        }
+        if (isSwipeViewActive(goal)) {
+          renderSwipeDeck(goal, Boolean(rerenderCanvases));
         }
         updateVoteCards();
         if (fullscreenIdx !== null || fullscreenNode !== null) {
@@ -11217,6 +13317,11 @@
         tabUnvotedBtn.classList.toggle("active", gridFilter === "unvoted");
         lastJumpIdx = -1;
         const goal = goalsByName.get(activeGoalName);
+        if (isSwipeViewActive(goal)) {
+          renderSwipeDeck(goal, true);
+          updateVoteCards();
+          return;
+        }
         if (isWindowedGrid(goal)) {
           setGoalGridPage(goal, 0);
           renderActiveGoal(true);
@@ -12368,6 +14473,9 @@
       }
 
       function renderFullscreenVotes() {
+        if (fsCanvasEl) {
+          fsCanvasEl.classList.toggle("is-swipeable", fullscreenIdx !== null && fullscreenNode === null);
+        }
         if (fullscreenNode !== null) {
           fsScoreEl.textContent = "archive";
           fsScoreEl.className = "score-badge";
@@ -12819,11 +14927,181 @@
       }
       fsPrevBtn.addEventListener("click", () => stepFullscreen(-1));
       fsNextBtn.addEventListener("click", () => stepFullscreen(1));
+
+      if (fsCanvasEl) {
+        let fsTracking = false;
+        let fsSwiping = false;
+        let fsPointerId = null;
+        let fsStartX = 0;
+        let fsStartY = 0;
+        let fsLastX = 0;
+        let fsLastDx = 0;
+        let fsLastDy = 0;
+        let fsSamples = [];
+
+        function resetFsSwipeVisuals() {
+          fsCanvasEl.classList.remove("is-swiping", "is-swipe-spring", "is-swipe-exit");
+          fsCanvasEl.style.transform = "";
+          fsCanvasEl.style.opacity = "";
+          if (fsSwipeLikeEl) {
+            fsSwipeLikeEl.style.opacity = "0";
+            fsSwipeLikeEl.style.transform = "rotate(-12deg) scale(0.88)";
+          }
+          if (fsSwipeNopeEl) {
+            fsSwipeNopeEl.style.opacity = "0";
+            fsSwipeNopeEl.style.transform = "rotate(12deg) scale(0.88)";
+          }
+        }
+
+        function springFsSwipeBack() {
+          fsCanvasEl.classList.remove("is-swiping");
+          fsCanvasEl.classList.add("is-swipe-spring");
+          fsCanvasEl.style.transform = "";
+          if (fsSwipeLikeEl) fsSwipeLikeEl.style.opacity = "0";
+          if (fsSwipeNopeEl) fsSwipeNopeEl.style.opacity = "0";
+          setTimeout(resetFsSwipeVisuals, 340);
+        }
+
+        fsCanvasEl.addEventListener("pointerdown", (e) => {
+          if (e.pointerType === "mouse" && e.button !== 0) return;
+          if (fullscreenIdx === null || fullscreenNode !== null || fsCanvasEl.hidden) return;
+          fsTracking = true;
+          fsSwiping = false;
+          fsPointerId = e.pointerId;
+          fsStartX = e.clientX;
+          fsStartY = e.clientY;
+          fsLastX = e.clientX;
+          fsLastDx = 0;
+          fsLastDy = 0;
+          fsSamples = [{ x: e.clientX, t: performance.now() }];
+        });
+
+        fsCanvasEl.addEventListener("pointermove", (e) => {
+          if (!fsTracking || e.pointerId !== fsPointerId) return;
+          const dx = e.clientX - fsStartX;
+          const dy = e.clientY - fsStartY;
+          fsLastDx = dx;
+          fsLastDy = dy;
+          fsLastX = e.clientX;
+          const now = performance.now();
+          fsSamples.push({ x: e.clientX, t: now });
+          while (fsSamples.length > 2 && now - fsSamples[0].t > 90) fsSamples.shift();
+
+          if (!fsSwiping) {
+            if (Math.abs(dy) >= 14 && Math.abs(dy) > Math.abs(dx) * 1.2) {
+              fsTracking = false;
+              fsPointerId = null;
+              return;
+            }
+            if (Math.abs(dx) < 10) return;
+            fsSwiping = true;
+            fsCanvasEl.classList.remove("is-swipe-spring", "is-swipe-exit");
+            fsCanvasEl.classList.add("is-swiping");
+            try { fsCanvasEl.setPointerCapture(fsPointerId); } catch {}
+          }
+          e.preventDefault();
+          const w = Math.max(240, fsCanvasEl.getBoundingClientRect().width || 420);
+          const threshold = Math.min(120, Math.max(76, w * 0.25));
+          const progress = Math.min(1, Math.max(0, (Math.abs(dx) - 10) / threshold));
+          const rot = Math.max(-16, Math.min(16, dx * 0.042));
+          fsCanvasEl.style.transform = `translate3d(${dx.toFixed(1)}px, ${(dy * 0.2).toFixed(1)}px, 0) rotate(${rot.toFixed(2)}deg)`;
+          if (dx > 0) {
+            if (fsSwipeLikeEl) {
+              fsSwipeLikeEl.style.opacity = String(progress.toFixed(3));
+              fsSwipeLikeEl.style.transform = `rotate(-12deg) scale(${(0.88 + progress * 0.16).toFixed(3)})`;
+            }
+            if (fsSwipeNopeEl) fsSwipeNopeEl.style.opacity = "0";
+          } else {
+            if (fsSwipeNopeEl) {
+              fsSwipeNopeEl.style.opacity = String(progress.toFixed(3));
+              fsSwipeNopeEl.style.transform = `rotate(12deg) scale(${(0.88 + progress * 0.16).toFixed(3)})`;
+            }
+            if (fsSwipeLikeEl) fsSwipeLikeEl.style.opacity = "0";
+          }
+        });
+
+        function finishFsSwipe(e, cancelled) {
+          if (!fsTracking || e.pointerId !== fsPointerId) return;
+          fsTracking = false;
+          const pid = fsPointerId;
+          fsPointerId = null;
+          if (!fsSwiping) return;
+          fsSwiping = false;
+          try { if (fsCanvasEl.hasPointerCapture(pid)) fsCanvasEl.releasePointerCapture(pid); } catch {}
+
+          if (cancelled || fullscreenIdx === null || fullscreenNode !== null) {
+            springFsSwipeBack();
+            return;
+          }
+          const now = performance.now();
+          const first = fsSamples[0] || { x: fsStartX, t: now - 16 };
+          const dt = Math.max(12, now - first.t);
+          const vx = (fsLastX - first.x) / dt;
+          const w = Math.max(240, fsCanvasEl.getBoundingClientRect().width || 420);
+          const threshold = Math.min(120, Math.max(76, w * 0.25));
+          const committed = Math.abs(fsLastDx) >= threshold || (Math.abs(vx) >= 0.48 && Math.abs(fsLastDx) >= 34);
+          if (!committed) {
+            springFsSwipeBack();
+            return;
+          }
+          const dir = fsLastDx > 0 ? 1 : -1;
+          const goal = goalsByName.get(activeGoalName);
+          const res = goal ? setExplicitVote(goal, fullscreenIdx, dir) : { ok: false };
+          if (!res.ok) {
+            springFsSwipeBack();
+            return;
+          }
+          fsCanvasEl.classList.remove("is-swiping");
+          fsCanvasEl.classList.add("is-swipe-exit");
+          fsCanvasEl.style.transform = `translate3d(${(dir * (w + 140)).toFixed(0)}px, ${(fsLastDy * 0.2 + 18).toFixed(0)}px, 0) rotate(${dir * 18}deg)`;
+          fsCanvasEl.style.opacity = "0";
+          setTimeout(() => {
+            resetFsSwipeVisuals();
+            if (fullscreenIdx !== null && fullscreenNode === null) {
+              stepFullscreen(1);
+            }
+          }, 220);
+        }
+
+        fsCanvasEl.addEventListener("pointerup", (e) => finishFsSwipe(e, false));
+        fsCanvasEl.addEventListener("pointercancel", (e) => finishFsSwipe(e, true));
+      }
+
       window.addEventListener("keydown", (e) => {
-        if (fullscreenIdx === null && fullscreenNode === null) return;
-        if (e.key === "Escape") closeFullscreen();
-        else if (e.key === "ArrowLeft" && fullscreenNode === null) fsPrevBtn.click();
-        else if (e.key === "ArrowRight" && fullscreenNode === null) fsNextBtn.click();
+        if (fullscreenIdx !== null || fullscreenNode !== null) {
+          if (e.key === "Escape") closeFullscreen();
+          else if (e.key === "ArrowLeft" && fullscreenNode === null) fsPrevBtn.click();
+          else if (e.key === "ArrowRight" && fullscreenNode === null) fsNextBtn.click();
+          return;
+        }
+        if (newRoomModalEl && !newRoomModalEl.hidden) return;
+        const activeEl = document.activeElement;
+        if (activeEl && (
+          activeEl.tagName === "INPUT" ||
+          activeEl.tagName === "TEXTAREA" ||
+          activeEl.tagName === "SELECT" ||
+          activeEl.isContentEditable
+        )) {
+          return;
+        }
+        const goal = goalsByName.get(activeGoalName);
+        if (!goal || !isSwipeViewActive(goal)) return;
+        if (e.key === "ArrowRight") {
+          e.preventDefault();
+          commitSwipeDeckDecision(1);
+        } else if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          commitSwipeDeckDecision(-1);
+        } else if (e.key === " " || e.code === "Space") {
+          e.preventDefault();
+          skipSwipeDeckCard();
+        } else if ((e.key === "z" || e.key === "Z") && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          e.preventDefault();
+          undoSwipeDeckDecision();
+        } else if (e.key === "Enter" && swipeState.queue.length > 0) {
+          e.preventDefault();
+          openFullscreen(swipeState.queue[0]);
+        }
       });
 
       function renderLoadingSkeletons() {

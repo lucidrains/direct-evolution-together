@@ -5577,6 +5577,130 @@ def test_brood_selection_size_2_e2e(client, settings):
             assert lineage_uuids.isdisjoint(rejected_uuids)
 
 
+@pytest.mark.django_db
+def test_swipe_voting_ui_semantics_and_ws_undo(client, tmp_path):
+    """Verify swipe-to-vote UI markers, explicit set/flip/undo JS semantics, and live WS cast_vote undo."""
+    html = client.get("/").content.decode("utf-8")
+    for marker in (
+        'id="view-grid-btn"',
+        'id="view-swipe-btn"',
+        'id="swipe-stage"',
+        'id="swipe-deck-wrap"',
+        'id="swipe-up-btn"',
+        'id="swipe-down-btn"',
+        'id="swipe-undo-btn"',
+        'id="swipe-skip-btn"',
+        'id="swipe-inspect-btn"',
+        'id="fs-swipe-like"',
+        'id="fs-swipe-nope"',
+        "function setExplicitVote(",
+        "function attachGridCardSwipe(",
+        "function commitSwipeDeckDecision(",
+        "function undoSwipeDeckDecision(",
+    ):
+        assert marker in html, f"Missing swipe marker {marker} in index.html"
+
+    # Extract and execute real voting helpers from index.html in Node
+    js_main = html.split("<script>\n", 1)[1].rsplit("</script>", 1)[0]
+    fn_start = js_main.index("function getMyVote(goal, idx) {")
+    fn_end = js_main.index("function applyCardFilter(refilter) {")
+    vote_start = js_main.index("function canVoteOnGoal(goal, idx, targetVal) {")
+    vote_end = js_main.index("const THUMB_UP_SVG =")
+
+    harness = tmp_path / "swipe_vote_semantics.js"
+    harness.write_text(
+        f"""
+const WebSocket = {{ OPEN: 1 }};
+const myVotes = new Map();
+const sent = [];
+const notices = [];
+let isConnected = true;
+const initialMaxVotes = 2;
+const savedUsername = "alice";
+const nameInput = {{ value: "alice" }};
+const socket = {{ readyState: 1, send(raw) {{ sent.push(JSON.parse(raw)); }} }};
+function voteKey(goalName, generation, idx) {{ return `${{goalName}}:${{generation}}:${{idx}}`; }}
+function showThrottleNotice(msg) {{ notices.push(msg); }}
+function updateVoteCards() {{}}
+function countMyActiveVotes(goal) {{
+  let cnt = 0;
+  for (let i = 0; i < goal.genomes.length; i++) if (hasMyVote(goal, i)) cnt += 1;
+  return cnt;
+}}
+{js_main[fn_start:fn_end]}
+{js_main[vote_start:vote_end]}
+
+const goal = {{
+  name: "Butterfly",
+  generation: 0,
+  evolving: false,
+  phase: "voting",
+  sim_phase_enabled: false,
+  max_votes_per_user: 2,
+  genomes: [{{}}, {{}}, {{}}],
+  votes: [
+    {{ up: 0, down: 0, score: 0, up_users: [], down_users: [] }},
+    {{ up: 0, down: 0, score: 0, up_users: [], down_users: [] }},
+    {{ up: 0, down: 0, score: 0, up_users: [], down_users: [] }},
+  ],
+}};
+
+const r1 = setExplicitVote(goal, 0, 1);   // swipe right -> +1
+const r2 = setExplicitVote(goal, 0, 1);   // swipe right again -> keeps +1, no redundant WS toggle
+const r3 = setExplicitVote(goal, 0, -1);  // swipe left -> flips to -1
+const r4 = setExplicitVote(goal, 1, 1);   // swipe right on #2 -> +1 (now at cap 2/2)
+const r5 = setExplicitVote(goal, 2, 1);   // blocked by cap 2/2
+const r6 = setExplicitVote(goal, 1, -1);  // flipping already-voted #2 is allowed at cap
+const r7 = setExplicitVote(goal, 1, 0);   // undo #2 -> clears vote (frees slot)
+const r8 = setExplicitVote(goal, 2, 1);   // now allowed after undo!
+goal.phase = "simulating";
+goal.sim_phase_enabled = true;
+const r9 = setExplicitVote(goal, 0, 1);   // blocked while simulating
+
+console.log(JSON.stringify({{
+  r1, r2, r3, r4, r5, r6, r7, r8, r9,
+  sentVotes: sent.map((m) => [m.index, m.vote]),
+  finalVotes: [getMyVote(goal, 0), getMyVote(goal, 1), getMyVote(goal, 2)],
+  noticeCount: notices.length,
+}}));
+""",
+        encoding="utf-8",
+    )
+    out = json.loads(subprocess.check_output(["node", str(harness)], text=True))
+    assert out["r1"] == {"ok": True, "prev": 0, "changed": True}
+    assert out["r2"] == {"ok": True, "prev": 1, "changed": False}
+    assert out["r3"] == {"ok": True, "prev": 1, "changed": True}
+    assert out["r4"] == {"ok": True, "prev": 0, "changed": True}
+    assert out["r5"]["ok"] is False
+    assert out["r6"] == {"ok": True, "prev": 1, "changed": True}
+    assert out["r7"] == {"ok": True, "prev": -1, "changed": True}
+    assert out["r8"] == {"ok": True, "prev": 0, "changed": True}
+    assert out["r9"]["ok"] is False
+    assert out["sentVotes"] == [[0, 1], [0, -1], [1, 1], [1, -1], [1, 0], [2, 1]]
+    assert out["finalVotes"] == [-1, 0, 1]
+    assert out["noticeCount"] == 2
+
+    # Verify live Nim WS server handles explicit swipe right (+1), flip (-1), and undo (0)
+    with _ws_server(seed=True, pop_size=8, max_votes=2) as port:
+        seed_from_db(default_pop_size=8, default_max_votes=2)
+        with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=swiper") as ws:
+            _recv_until(ws, "identity")
+            _recv_until(ws, "evolution_state")
+
+            ws.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 0, "index": 0, "vote": 1}))
+            v1 = _recv_until(ws, "votes_updated")
+            assert v1["votes"][0]["up"] == 1 and v1["votes"][0]["down"] == 0
+
+            ws.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 0, "index": 0, "vote": -1}))
+            v2 = _recv_until(ws, "votes_updated")
+            assert v2["votes"][0]["up"] == 0 and v2["votes"][0]["down"] == 1
+
+            ws.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 0, "index": 0, "vote": 0}))
+            v3 = _recv_until(ws, "votes_updated")
+            assert v3["votes"][0]["up"] == 0 and v3["votes"][0]["down"] == 0 and v3["total_votes"] == 0
+
+
+
 
 
 
