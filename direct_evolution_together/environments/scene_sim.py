@@ -39,10 +39,6 @@ def default(val: Any, d: Any) -> Any:
     return val if exists(val) else d
 
 
-def clamp(val: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, val))
-
-
 def _sigmoid(x: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-np.clip(x, -40.0, 40.0)))
 

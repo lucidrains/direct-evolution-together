@@ -124,7 +124,7 @@ SO102_ALIASES = ("so102", "so_102", "so_arm_102", "soarm102")
 SO101_HYPERPARAM_SPECS: tuple[dict[str, Any], ...] = (
     {
         "key": "arm_model",
-        "aliases": ["arm_model", "scene_id"],
+        "aliases": ["scene_id"],
         "label": "Arm Hardware Model",
         "type": "select",
         "default": "so102",
@@ -158,7 +158,7 @@ def normalize_so_arm_model(raw: object) -> str:
 def resolve_so_arm_env_params(overrides: Mapping[str, object] | None = None) -> dict[str, Any]:
     """Return canonical arm environment hyperparameters pointing at SO-101 or SO-102 scene/URDF/STL files."""
     ov = overrides or {}
-    arm_model = normalize_so_arm_model(ov.get("arm_model") or ov.get("arm_model") or ov.get("scene_id"))
+    arm_model = normalize_so_arm_model(ov.get("arm_model") or ov.get("scene_id"))
     resolved = dict(SO_ARM_VARIANTS[arm_model])
     return {
         **resolved,

@@ -10,11 +10,8 @@ import threading
 import imageio_ffmpeg
 from PIL import Image
 
-from direct_evolution_together.cppn import genome_content_hash
-from direct_evolution_together.populora_engine import populora_genome_hash
-
 from .adapters import TASK_ADAPTERS, get_task_adapter
-from .evaluation import _rollout_cached
+from .evaluation import _any_genome_hash, _rollout_cached
 from .registry import get_task_spec
 from .types import ControlTaskAdapter
 
@@ -88,11 +85,7 @@ def render_task_media(
 
     adapter = get_task_adapter(spec.task_id)
     seed = int(seed)
-    g_hash = (
-        str(genome.get("hash") or populora_genome_hash(genome, length=20))
-        if isinstance(genome, dict) and genome.get("kind") == "populora"
-        else genome_content_hash(genome, length=20)
-    )
+    g_hash = _any_genome_hash(genome, length=20)
     key = f"{spec.task_id}_{g_hash}_s{seed}"
     renders_dir = Path(media_root) / "renders"
     if not renders_dir.is_dir():

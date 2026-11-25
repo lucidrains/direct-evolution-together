@@ -46,5 +46,6 @@ class DirectEvolutionTogetherConfig(AppConfig):
                 elite_frac=settings.ELITE_FRAC,
                 crossover_rate=settings.CROSSOVER_RATE,
                 brood_size=settings.BROOD_SIZE,
+                admin_password=settings.ADMIN_PASSWORD,
                 evolve_token=settings.EVOLVE_NOW_TOKEN,
             )

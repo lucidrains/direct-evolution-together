@@ -88,31 +88,6 @@
     return p.finally(() => inFlight.delete(key));
   }
 
-  function fetchJsonAsset(url, cacheKey) {
-    const key = cacheKey || `json:${url}`;
-    if (memCache.has(key)) return Promise.resolve(memCache.get(key));
-    if (inFlight.has(key)) return inFlight.get(key);
-
-    const p = (async () => {
-      const hit = await idbGet(key);
-      if (hit && typeof hit === "object") {
-        memCache.set(key, hit);
-        return hit;
-      }
-      const resp = await fetch(url, { cache: "force-cache" });
-      if (!resp.ok) {
-        throw new Error(`Failed to fetch JSON asset ${url} (${resp.status})`);
-      }
-      const parsed = await resp.json();
-      memCache.set(key, parsed);
-      idbSet(key, parsed).catch(() => {});
-      return parsed;
-    })();
-
-    inFlight.set(key, p);
-    return p.finally(() => inFlight.delete(key));
-  }
-
   function parseVisualMeshpack(arrayBuffer, manifest) {
     const bytes = new Uint8Array(arrayBuffer);
     if (bytes.byteLength < 12) throw new Error("Truncated DETVIS1 meshpack.");
@@ -243,7 +218,6 @@
 
   global.DetSceneCache = {
     fetchBinaryAsset,
-    fetchJsonAsset,
     parseVisualMeshpack,
     loadSceneVisualPack,
     loadScenePhysicsBuffer,

@@ -76,17 +76,16 @@ def extract_task_env_overrides(task_id: str | None, source: Mapping[str, Any] | 
         return {}
     spec = get_task_spec(task_id)
     out: dict[str, object] = {}
-    for container_key in ("env_params",):
-        raw_box = source.get(container_key)
-        if isinstance(raw_box, Mapping):
-            out.update({str(k): v for k, v in raw_box.items() if v is not None and v != ""})
-        elif isinstance(raw_box, str) and raw_box.strip():
-            try:
-                parsed = json.loads(raw_box)
-                if isinstance(parsed, Mapping):
-                    out.update({str(k): v for k, v in parsed.items() if v is not None and v != ""})
-            except ValueError:
-                pass
+    raw_box = source.get("env_params")
+    if isinstance(raw_box, Mapping):
+        out.update({str(k): v for k, v in raw_box.items() if v is not None and v != ""})
+    elif isinstance(raw_box, str) and raw_box.strip():
+        try:
+            parsed = json.loads(raw_box)
+            if isinstance(parsed, Mapping):
+                out.update({str(k): v for k, v in parsed.items() if v is not None and v != ""})
+        except ValueError:
+            pass
     for hspec in spec.hyperparam_specs:
         hkey = str(hspec.get("key") or "")
         if not hkey:

@@ -35,7 +35,6 @@ from direct_evolution_together import mummy_ws, ws_bridge
 from direct_evolution_together.config import get_config
 from direct_evolution_together.crowd_trust import (
     MAX_SHARD_CLAIM_BATCH,
-    SQLITE_SYNC_LOCK,
     claim_crowd_eval_shard_indices,
     compute_goal_eval_rankings,
     count_verified_population,
@@ -532,16 +531,30 @@ def _extract_uploaded_populora_strains(
         if filename.lower().endswith(".zip"):
             try:
                 with zipfile.ZipFile(io.BytesIO(raw_bytes)) as zf:
-                    pt_members = [
-                        m for m in zf.infolist()
-                        if not m.is_dir() and m.filename.lower().endswith(".pt")
-                    ]
+                    pt_members = []
+                    for m in zf.infolist():
+                        if m.is_dir():
+                            continue
+                        norm = m.filename.replace("\\", "/")
+                        parts = [p for p in norm.split("/") if p]
+                        if (
+                            not parts
+                            or ".." in parts
+                            or parts[0] == "__MACOSX"
+                            or parts[-1].startswith("._")
+                            or not norm.lower().endswith(".pt")
+                        ):
+                            continue
+                        pt_members.append(m)
                     if not pt_members:
                         raise ValueError(f"{filename}: No .pt checkpoint found inside zip archive.")
                     for info in pt_members[:remaining_slots]:
                         if info.file_size > MAX_POPULORA_CHECKPOINT_BYTES:
                             raise ValueError(f"{info.filename}: Checkpoint inside zip exceeds size limit.")
-                        pt_b = zf.read(info)
+                        with zf.open(info, "r") as zfh:
+                            pt_b = zfh.read(MAX_POPULORA_CHECKPOINT_BYTES + 1)
+                        if len(pt_b) > MAX_POPULORA_CHECKPOINT_BYTES:
+                            raise ValueError(f"{info.filename}: Checkpoint inside zip exceeds size limit.")
                         genome = load_populora_checkpoint_bytes(
                             pt_b,
                             policy_spec,
@@ -1426,9 +1439,6 @@ def api_worker_jobs(request: HttpRequest, room: str) -> JsonResponse:
     )
 
 
-_MAX_WORKER_POSTER_B64 = 128 * 1024
-
-
 @csrf_exempt
 @require_POST
 def api_worker_results(request: HttpRequest, room: str) -> JsonResponse:
@@ -1465,7 +1475,7 @@ def api_worker_results(request: HttpRequest, room: str) -> JsonResponse:
     )
     stored_items = outcome["items"]
     if stored_items:
-        ws_items = [{k: v for k, v in it.items() if k != "traj_sample"} for it in stored_items]
+        ws_items = [_strip_traj_sample(it) for it in stored_items]
         _broadcast_room_event(
             room,
             {
@@ -1919,7 +1929,7 @@ def api_crowd_results(request: HttpRequest, room: str) -> JsonResponse:
     items = outcome["items"]
     changed_items = outcome.get("changed_items") or []
     if changed_items:
-        ws_items = [{k: v for k, v in it.items() if k != "traj_sample"} for it in changed_items]
+        ws_items = [_strip_traj_sample(it) for it in changed_items]
         _broadcast_room_event(
             room,
             {
@@ -2242,7 +2252,7 @@ def _clear_persisted_room_state(room: str, goal: str) -> None:
 
 def _room_goal_tasks(room: str) -> dict[str, str]:
     tasks: dict[str, str] = (
-        {name: task for name, task, _ in ws_bridge.DEFAULT_GOAL_SPECS}
+        {name: task for name, task, _ in get_config().get_lobby_goal_specs()}
         if room == "lobby"
         else {}
     )
@@ -2308,6 +2318,8 @@ def _perform_admin_clear(room: str, goal: str, configured: str) -> tuple[bool, i
         task_by_goal = _room_goal_tasks(room)
         cap_by_goal = {name: cap for name, _, cap in lobby_specs}
         if is_all:
+            for g_name in known_goals:
+                reset_populora_goal_runtime(room, g_name)
             goals_payload = [
                 ws_bridge._build_goal_entry(
                     g_name,
@@ -2325,6 +2337,7 @@ def _perform_admin_clear(room: str, goal: str, configured: str) -> tuple[bool, i
         if goal not in known_goals:
             available = ", ".join(known_goals)
             return False, 404, f"Goal '{goal}' not found in room '{room}' (available: {available}).", []
+        reset_populora_goal_runtime(room, goal)
         default_p = cap_by_goal.get(goal) or settings.POPULATION_SIZE
         genomes = create_task_population(
             task_by_goal.get(goal, "image"), int(pop_map.get(goal, default_p))
@@ -2375,7 +2388,7 @@ def _collect_room_summaries() -> list[dict]:
     for slug in ordered_rooms:
         goals = saved_by_room.get(slug, [])
         if slug == "lobby" and not goals:
-            goals = [{"name": g, "gen": 0} for g in ws_bridge.DEFAULT_GOALS]
+            goals = [{"name": name, "gen": 0} for name, _, _ in get_config().get_lobby_goal_specs()]
         summaries.append({
             "slug": slug,
             "label": "Front Lobby" if slug == "lobby" else meta_by_slug.get(slug, slug),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import math
 from typing import Any, Callable, Mapping, Sequence
 
@@ -525,8 +526,6 @@ def lunarlander_heuristic(obs: Sequence[float]) -> tuple[float, float]:
 
 
 def _decode_base_tensor_np(entry: Mapping[str, Any]) -> np.ndarray:
-    import base64
-
     shape = tuple(int(d) for d in entry["shape"])
     raw = base64.b64decode(str(entry["b64"]), validate=True)
     dtype = "<f4" if entry.get("dtype") == "f32" else "<f2"
@@ -778,7 +777,7 @@ def _render_lunarlander_frame(
         LUNARLANDER_WORLD_H,
         +0.05,
     ]
-    x, y, vx, vy, angle, _omega, leg0_c, leg1_c, m_power, s_signed, cum_ret = [float(v) for v in fr[:11]]
+    x, y, _vx, vy, angle, _omega, leg0_c, leg1_c, m_power, s_signed, cum_ret = [float(v) for v in fr[:11]]
     has_leg_poses = len(fr) >= 17
 
     img = Image.new("RGB", (width, height), (0, 0, 0))

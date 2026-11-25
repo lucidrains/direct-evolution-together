@@ -16,9 +16,6 @@
     ACTIVATION_META,
     getActMeta,
     applyActivation,
-    linspace,
-    hashText,
-    genomeFingerprint,
     evalCppnPoint,
     decodeHyperNeatWeights,
   } = core;
@@ -499,10 +496,8 @@
 
     // Drop empty internal layers if any (keep 0 and outputLayer compacted)
     const compactLayers = [];
-    const oldToNew = new Map();
     for (let l = 0; l < layersNodes.length; l++) {
       if (layersNodes[l].length > 0) {
-        oldToNew.set(l, compactLayers.length);
         compactLayers.push(layersNodes[l]);
       }
     }
@@ -640,7 +635,9 @@
       14
     );
 
-    const isMlpArch = String(policySpec.arch || "").toLowerCase() === "mlp" ||
+    const archLower = String(policySpec.arch || "").toLowerCase();
+    const isWeightOnlyMlp = archLower === "weight_only_mlp" || (!adapters.net_encoder_0 && Boolean(adapters.l0));
+    const isMlpArch = isWeightOnlyMlp || archLower === "mlp" ||
       (!adapters.net_encoder_0 && Boolean(adapters.encoder_0 || adapters.head));
     // Sampled slice matching createPopuLoraRunner stepActivations
     const nSample = obsDim > 0 ? Math.min(16, obsDim) : 16;
@@ -697,9 +694,11 @@
       totalParams += (Number(ad.in_dim || 0) + Number(ad.out_dim || 0)) * r;
     }
 
-    const stageKeys = isMlpArch
-      ? ["encoder_0", "encoder_2", "head"]
-      : ["net_encoder_0", "net_cell_linear_ih", "net_decoder_0", "net_decoder_2"];
+    const stageKeys = isWeightOnlyMlp
+      ? ["l0", "l1", "head"]
+      : isMlpArch
+        ? ["encoder_0", "encoder_2", "head"]
+        : ["net_encoder_0", "net_cell_linear_ih", "net_decoder_0", "net_decoder_2"];
     for (let s = 0; s < stageKeys.length; s++) {
       const srcCol = layersNodes[s];
       const dstCol = layersNodes[s + 1];
@@ -845,7 +844,6 @@
       this._nodeDom = new Map();
       this._edgeDom = new Map();
       this._outputBarDom = new Map();
-      this._matrixHitBoxes = [];
       this._buildShell();
     }
 
@@ -1571,7 +1569,6 @@
     _renderMatrices() {
       const m = this.model;
       this.stage.innerHTML = "";
-      this._matrixHitBoxes = [];
       if (!m.matrices || m.matrices.length === 0) {
         const msg = m.kind === "populora" && !m.hasAdapters
           ? "Archived PopuLoRA lineage ancestor — full LoRA adapter matrices are only retained on live generation individuals."

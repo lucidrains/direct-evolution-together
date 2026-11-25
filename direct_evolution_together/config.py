@@ -332,27 +332,6 @@ _TRUST_FIELDS: tuple[tuple[str, str, float | None, float | None], ...] = (
 )
 
 
-def _coerce_field(raw: object, default: object, lo: float | None, hi: float | None) -> object:
-    if isinstance(default, bool):
-        if isinstance(raw, bool):
-            return raw
-        return str(raw).strip().lower() in ("1", "true", "yes", "on")
-    if isinstance(default, int):
-        try:
-            v = int(str(raw).strip()) if isinstance(raw, str) else int(raw)  # type: ignore[arg-type]
-            return max(int(lo), min(int(hi), v)) if lo is not None else v
-        except (TypeError, ValueError):
-            return default
-    if isinstance(default, float):
-        try:
-            v = float(raw)  # type: ignore[arg-type]
-            return max(float(lo), min(float(hi), v)) if lo is not None else v
-        except (TypeError, ValueError):
-            return default
-    s = str(raw).strip().lower()
-    return s if s in _VALID_AGGS else default
-
-
 def _coerce_bool(raw: object, default: bool) -> bool:
     if isinstance(raw, bool):
         return raw
@@ -370,6 +349,26 @@ def _coerce_int(raw: object, default: int, lo: int, hi: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, value))
+
+
+def _coerce_field(raw: object, default: object, lo: float | None, hi: float | None) -> object:
+    if isinstance(default, bool):
+        return _coerce_bool(raw, default)
+    if isinstance(default, int):
+        if lo is not None and hi is not None:
+            return _coerce_int(raw, default, int(lo), int(hi))
+        try:
+            return int(str(raw).strip()) if isinstance(raw, str) else int(raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return default
+    if isinstance(default, float):
+        try:
+            v = float(raw)  # type: ignore[arg-type]
+            return max(float(lo), min(float(hi), v)) if lo is not None and hi is not None else v
+        except (TypeError, ValueError):
+            return default
+    s = str(raw).strip().lower()
+    return s if s in _VALID_AGGS else default
 
 
 def _coerce_env_value(field_name: str, raw: object, default: object) -> object:
@@ -421,7 +420,7 @@ def _coerce_env_value(field_name: str, raw: object, default: object) -> object:
 def build_config() -> CentralConfig:
     t_dict = asdict(TrustPolicyConfig())
     envs = dict(DEFAULT_ENV_POLICIES)
-    wasm_url = os.getenv("DET_MUJOCO_WASM_URL", "").strip()
+    wasm_url = ""
     large_pop = False
     loaded: dict[str, object] = {}
 
@@ -461,6 +460,9 @@ def build_config() -> CentralConfig:
                         values[field_name] = _coerce_env_value(field_name, raw, values[field_name])
                 values["max_pop_size"] = max(int(values["default_pop_size"]), int(values["max_pop_size"]))
                 envs[tid] = EnvPolicyConfig(**values)
+
+    if (raw_wasm := os.getenv("DET_MUJOCO_WASM_URL")) is not None and raw_wasm.strip():
+        wasm_url = raw_wasm.strip()
 
     for fname, env_key, lo, hi in _TRUST_FIELDS:
         raw_env = os.getenv(env_key)

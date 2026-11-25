@@ -136,7 +136,6 @@ SUBPATH = f"/{_raw_subpath}" if _raw_subpath else ""
 WS_VIA_PROXY = os.getenv("DET_WS_PROXY", "1" if SUBPATH else "0") == "1"
 WS_HOST = os.getenv("MUMMY_WS_HOST", "127.0.0.1")
 WS_PORT = int(os.getenv("MUMMY_WS_PORT", "8001"))
-POPULATION_SIZE_EXPLICIT = bool(os.getenv("MUMMY_POP_SIZE", "").strip())
 POPULATION_SIZE_OVERRIDE = os.getenv("MUMMY_POP_SIZE_OVERRIDE", "0") == "1"
 POPULATION_SIZE = max(3, min(1024, int(os.getenv("MUMMY_POP_SIZE", "30"))))
 MIN_VOTES_EXPLICIT = bool(os.getenv("MUMMY_MIN_VOTES", "").strip())

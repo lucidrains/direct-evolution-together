@@ -1020,7 +1020,6 @@ async function microduckRollout(
 
       const fxy0 = [data.site_xpos[meta.footSites[0] * 3], data.site_xpos[meta.footSites[0] * 3 + 1]];
       const fxy1 = [data.site_xpos[meta.footSites[1] * 3], data.site_xpos[meta.footSites[1] * 3 + 1]];
-      const fxy = [fxy0, fxy1];
       const fspd0 = Math.hypot(fxy0[0] - prevFootXY[0][0], fxy0[1] - prevFootXY[0][1]) / ctrlDt;
       const fspd1 = Math.hypot(fxy1[0] - prevFootXY[1][0], fxy1[1] - prevFootXY[1][1]) / ctrlDt;
       prevFootXY[0] = fxy0;

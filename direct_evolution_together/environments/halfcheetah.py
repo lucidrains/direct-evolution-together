@@ -148,12 +148,6 @@ def _fill_cheetah_obs(obs: np.ndarray, qpos: np.ndarray, qvel: np.ndarray, step_
         obs[20] = math.cos(2.0 * ang)
 
 
-def _cheetah_obs(data: mujoco.MjData, step_idx: int) -> np.ndarray:
-    raw = np.empty(HALFCHEETAH_OBS_DIM, dtype=np.float64)
-    _fill_cheetah_obs(raw, data.qpos, data.qvel, step_idx)
-    return raw
-
-
 def halfcheetah_rollout(
     genome_or_net: dict | CPPN,
     *,

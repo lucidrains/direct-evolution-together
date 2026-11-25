@@ -16,7 +16,6 @@ from direct_evolution_together.cppn import (
     evolve_population,
     evolve_population_broods,
     normalize_short_uuid,
-    resize_population,
     sync_genome_counter,
 )
 from direct_evolution_together.config import get_config
@@ -36,7 +35,6 @@ from direct_evolution_together.models import ChatMessage, RoomEvolutionState
 from direct_evolution_together.populora_engine import (
     evolve_populora_broods,
     evolve_populora_population,
-    resize_populora_population,
 )
 
 HISTORY_LIMIT = 100
@@ -699,28 +697,6 @@ def flush_evo_jobs() -> int:
                     mummy_ws.apply_goal_evolve(
                         room, goal_name, json.dumps(next_genomes, separators=(",", ":")), int(top_score)
                     )
-            elif kind == "resize":
-                spec = get_task_spec(task)
-                if spec.genome_kind == "populora" and spec.policy_spec is not None:
-                    resized = resize_populora_population(
-                        job["genomes"],
-                        pop_size,
-                        policy_spec=spec.policy_spec,
-                        task_id=spec.task_id,
-                        scores=job["scores"],
-                        up_counts=job["up_counts"],
-                    )
-                else:
-                    resized = resize_population(
-                        job["genomes"],
-                        pop_size,
-                        job["scores"],
-                        job["up_counts"],
-                        mut_sigma=float(job.get("mut_sigma", 0.30)),
-                    )
-                mummy_ws.apply_goal_resize(
-                    room, goal_name, job["username"], json.dumps(resized, separators=(",", ":"))
-                )
             processed += 1
         except Exception as exc:
             import sys

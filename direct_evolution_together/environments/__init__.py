@@ -349,6 +349,7 @@ __all__ = [
     "evaluate_control_genome",
     "evaluate_populora_genome",
     "evaluate_populora_shard",
+    "extract_task_env_overrides",
     "get_halfcheetah_model",
     "get_lean_task_specs_payload",
     "get_nim_task_configs_payload",

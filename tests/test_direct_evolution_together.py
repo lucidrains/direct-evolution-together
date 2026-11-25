@@ -1547,23 +1547,19 @@ def test_nginx_conf_handles_media_and_compression_for_subpath_and_root():
 
 @pytest.mark.django_db
 def test_halfcheetah_fk_parity_convergence_server_eval_and_video(client, settings, tmp_path):
-    import base64
     from pathlib import Path
     import random
-    import re
     import mujoco
-    from direct_evolution_together.cppn import genome_content_hash
     from direct_evolution_together.environments import (
         TASK_SPECS,
         _cheetah_fk_segments,
         attach_halfcheetah_geoms,
         create_task_population,
         evaluate_control_batch,
-        evaluate_control_genome,
         get_halfcheetah_model,
         get_substrate,
         halfcheetah_reset,
-        render_task_media,
+        halfcheetah_rollout,
     )
 
     settings.MEDIA_ROOT = tmp_path
@@ -1590,7 +1586,7 @@ def test_halfcheetah_fk_parity_convergence_server_eval_and_video(client, setting
         mujoco.mj_step(model, data)
     mujoco.mj_forward(model, data)
     frame = [float(data.qpos[i]) for i in range(model.nq)] + [0.0, 0.0, 0.0]
-    py_segs = dict((name, (p0, p1)) for name, p0, p1 in _cheetah_fk_segments(frame))
+    py_segs = {name: (p0, p1) for name, p0, p1 in _cheetah_fk_segments(frame)}
 
     def _geom_xz(gname: str):
         gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, gname)
@@ -1626,7 +1622,6 @@ console.log(JSON.stringify(segs));
                 assert abs(py_segs[k][pt_idx][coord_idx] - js_segs[k][pt_idx][coord_idx]) < 1e-9
 
     # 3. Verify Python vs JS anatomical (21, 12, 6) HyperNEAT substrate weight decoding parity
-    rng = random.Random(1234)
     torch.manual_seed(1234)
     torch_free_genome = create_task_population("halfcheetah", 1)[0]
     substrate = get_substrate(hc_spec.substrate_dims, hc_spec.layer_coords)
@@ -1684,8 +1679,6 @@ console.log(JSON.stringify({{
     assert best_summary["mean_upright"] >= 0.40
 
     # 5. Client-locked policy enforcement for HalfCheetah + direct attach_halfcheetah_geoms + CartPole server fallback
-    from direct_evolution_together.environments import halfcheetah_rollout, attach_halfcheetah_geoms
-
     locked_batch = client.post(
         "/api/sim/eval-batch/",
         data=json.dumps({"task": "halfcheetah", "genomes": [best_genome], "include_rollout": True}),
@@ -2898,7 +2891,6 @@ def test_unitree_go2_scene_assets_populora_and_wasm_worker(client, tmp_path):
     from direct_evolution_together.environments import (
         UNITREE_GO2_POLICY_SPEC,
         create_task_population,
-        get_scene_manifest,
         get_task_specs_payload,
         unpack_vfs_entries,
     )
@@ -4244,7 +4236,7 @@ const taskSpecs = {json.dumps(embedded_specs)};
     with _ws_server(seed=True) as port:
         mummy_ws.set_round_config(1, 60)
         with connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=eager_peer&gzip=1") as ws_eager:
-            raw_eager, wire_eager, evo_eager = _recv_raw_type(ws_eager, "evolution_state")
+            raw_eager, _wire_eager, evo_eager = _recv_raw_type(ws_eager, "evolution_state")
             assert len(raw_eager) > 950_000
             md_eager = next(g for g in evo_eager["goals"] if g["name"] == "Microduck")
             md_full_hashes = [g["hash"] for g in md_eager["genomes"]]
@@ -5700,9 +5692,266 @@ console.log(JSON.stringify({{
             assert v3["votes"][0]["up"] == 0 and v3["votes"][0]["down"] == 0 and v3["total_votes"] == 0
 
 
+@pytest.mark.django_db
+def test_individuals_panel_no_load_jerk_and_mobile_rpg_vote_popups(client, tmp_path):
+    """Verify zero-jerk initial hiding of #individuals-panel and mobile RPG +1/-1 peer vote popups."""
+    html = client.get("/").content.decode("utf-8")
+
+    # 1. Initial HTML/CSS prevents individuals panel flash/layout shift before population loads
+    for marker in (
+        '<script id="det-boot-layout">',
+        '<aside id="individuals-panel" class="card left-rail is-collapsed" hidden',
+        "body.is-population-loading .left-rail,",
+        "body:not(.left-rail-collapsed) main,",
+        'id="rpg-vote-fx-layer"',
+        "function collectPeerVoteEvents(",
+        "function spawnMobileRpgVotePop(",
+    ):
+        assert marker in html, f"Missing expected marker {marker} in index.html"
+
+    # 2. Extract and run real RPG vote popup helpers from index.html in Node
+    js_main = html.split("<script>\n", 1)[1].rsplit("</script>", 1)[0]
+    start = js_main.index("const THUMB_UP_SVG =")
+    end = js_main.index("function attachGridCardSwipe(")
+
+    harness = tmp_path / "rpg_vote_popups.js"
+    harness.write_text(
+        f"""
+class FakeEl {{
+  constructor(tag) {{
+    this.tagName = tag.toUpperCase();
+    this.className = "";
+    this.textContent = "";
+    this.innerHTML = "";
+    this.children = [];
+    this.parent = null;
+    this.isConnected = false;
+    this.style = {{ props: {{}}, setProperty(k, v) {{ this.props[k] = v; }} }};
+    this.listeners = {{}};
+  }}
+  get childElementCount() {{ return this.children.length; }}
+  get firstElementChild() {{ return this.children[0] || null; }}
+  appendChild(child) {{
+    child.parent = this;
+    child.isConnected = true;
+    this.children.push(child);
+    return child;
+  }}
+  remove() {{
+    if (this.parent) {{
+      const i = this.parent.children.indexOf(this);
+      if (i >= 0) this.parent.children.splice(i, 1);
+    }}
+    this.parent = null;
+    this.isConnected = false;
+  }}
+  addEventListener(type, fn) {{ (this.listeners[type] ||= []).push(fn); }}
+}}
+
+const fxLayer = new FakeEl("div");
+fxLayer.isConnected = true;
+globalThis.window = {{
+  innerWidth: 390,
+  matchMedia: () => ({{ matches: true }}),
+}};
+globalThis.document = {{
+  hidden: false,
+  getElementById: (id) => (id === "rpg-vote-fx-layer" ? fxLayer : null),
+  createElement: (tag) => new FakeEl(tag),
+}};
+let fullscreenIdx = null;
+const swipeState = {{ queue: [0] }};
+function isSwipeViewActive() {{ return true; }}
+function colorForUser(name) {{ return `hsl(${{name.length * 40}}, 82%, 66%)`; }}
+
+{js_main[start:end]}
+
+// Self votes must never emit events
+const selfUp = collectPeerVoteEvents({{ vote_event: {{ username: "Alice", index: 0, vote: 1, prev_vote: 0 }} }}, [], "alice");
+const selfDown = collectPeerVoteEvents({{ vote_event: {{ username: "alice", index: 1, vote: -1, prev_vote: 0 }} }}, [], "alice");
+// Peer unvote (0) must never emit events
+const peerUnvote = collectPeerVoteEvents({{ vote_event: {{ username: "bob", index: 0, vote: 0, prev_vote: 1 }} }}, [], "alice");
+// Peer +1 and -1 emit exact events
+const peerUp = collectPeerVoteEvents({{ vote_event: {{ username: "bob", index: 0, vote: 1, prev_vote: 0 }} }}, [], "alice");
+const peerDown = collectPeerVoteEvents({{ vote_event: {{ username: "charlie_longname", index: 2, vote: -1, prev_vote: 0 }} }}, [], "alice");
+
+// Fallback diff (without vote_event): detects peer vote, ignores self & handle rename
+const prevVotes = [
+  {{ up: 1, down: 0, up_users: ["bob"], down_users: [] }},
+  {{ up: 0, down: 0, up_users: [], down_users: [] }},
+];
+const renameOnly = collectPeerVoteEvents({{
+  votes: [
+    {{ up: 1, down: 0, up_users: ["bob_renamed"], down_users: [] }},
+    {{ up: 0, down: 0, up_users: [], down_users: [] }},
+  ],
+}}, prevVotes, "alice");
+const fallbackPeerDown = collectPeerVoteEvents({{
+  votes: [
+    {{ up: 1, down: 0, up_users: ["bob"], down_users: [] }},
+    {{ up: 0, down: 1, up_users: [], down_users: ["dave"] }},
+  ],
+}}, prevVotes, "alice");
+
+const goal = {{ name: "Butterfly" }};
+spawnMobileRpgVotePop(peerUp[0], goal);
+spawnMobileRpgVotePop(peerDown[0], goal);
+const mobileClasses = fxLayer.children.map((c) => c.className);
+const mobileDeltas = fxLayer.children.map((c) => c.children[1].textContent);
+
+// Rapid burst caps DOM count to MAX_RPG_VOTE_POPS (8)
+for (let i = 0; i < 12; i++) {{
+  spawnMobileRpgVotePop({{ vote: i % 2 === 0 ? 1 : -1, index: i, username: `peer${{i}}` }}, goal);
+}}
+const cappedCount = fxLayer.childElementCount;
+
+// Desktop viewport must not spawn any mobile RPG popups
+fxLayer.children.length = 0;
+globalThis.window.innerWidth = 1440;
+globalThis.window.matchMedia = () => ({{ matches: false }});
+spawnMobileRpgVotePop(peerUp[0], goal);
+const desktopCount = fxLayer.childElementCount;
+
+console.log(JSON.stringify({{
+  selfUp,
+  selfDown,
+  peerUnvote,
+  peerUp,
+  peerDown,
+  renameOnly,
+  fallbackPeerDown,
+  mobileClasses,
+  mobileDeltas,
+  cappedCount,
+  desktopCount,
+}}));
+process.exit(0);
+""",
+        encoding="utf-8",
+    )
+    out = json.loads(subprocess.check_output(["node", str(harness)], text=True))
+    assert out["selfUp"] == []
+    assert out["selfDown"] == []
+    assert out["peerUnvote"] == []
+    assert out["peerUp"] == [{"vote": 1, "index": 0, "username": "bob"}]
+    assert out["peerDown"] == [{"vote": -1, "index": 2, "username": "charlie_longname"}]
+    assert out["renameOnly"] == []
+    assert out["fallbackPeerDown"] == [{"vote": -1, "index": 1, "username": "dave"}]
+    assert out["mobileClasses"] == [
+        "rpg-vote-pop is-up is-focused-target",
+        "rpg-vote-pop is-down",
+    ]
+    assert out["mobileDeltas"] == ["+1", "-1"]
+    assert out["cappedCount"] == 8
+    assert out["desktopCount"] == 0
+
+    # 3. Live Nim WS E2E: vote_event broadcasts voter/index/vote on cast_vote and omits it on rename
+    with _ws_server(seed=True, pop_size=8, max_votes=4) as port:
+        seed_from_db(default_pop_size=8, default_max_votes=4)
+        with (
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=alice") as ws_a,
+            connect(f"ws://127.0.0.1:{port}/ws/chat/lobby/?username=bob") as ws_b,
+        ):
+            _recv_until(ws_a, "identity")
+            _recv_until(ws_a, "evolution_state")
+            _recv_until(ws_b, "identity")
+            _recv_until(ws_b, "evolution_state")
+
+            ws_a.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 0, "index": 0, "vote": 1}))
+            ev_b1 = _recv_until(ws_b, "votes_updated")
+            _recv_until(ws_a, "votes_updated")
+            assert ev_b1["vote_event"] == {"username": "alice", "index": 0, "vote": 1, "prev_vote": 0}
+
+            ws_b.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 0, "index": 2, "vote": -1}))
+            ev_a2 = _recv_until(ws_a, "votes_updated")
+            _recv_until(ws_b, "votes_updated")
+            assert ev_a2["vote_event"] == {"username": "bob", "index": 2, "vote": -1, "prev_vote": 0}
+
+            ws_a.send(json.dumps({"type": "cast_vote", "goal": "Butterfly", "generation": 0, "index": 0, "vote": 0}))
+            ev_b3 = _recv_until(ws_b, "votes_updated")
+            _recv_until(ws_a, "votes_updated")
+            assert ev_b3["vote_event"] == {"username": "alice", "index": 0, "vote": 0, "prev_vote": 1}
+
+            # Handle rename rebroadcasts votes_updated WITHOUT vote_event so RPG popups never misfire
+            ws_b.send(json.dumps({"type": "rename", "username": "bobby"}))
+            ev_a_ren = _recv_until(ws_a, "votes_updated")
+            assert "vote_event" not in ev_a_ren
 
 
+@pytest.mark.django_db
+def test_audit_fixes_crowd_trust_config_and_lunarlander_lora_graph(monkeypatch, tmp_path):
+    """Regression coverage for crowd_trust max_attestations scoring, topology sanitization, config precedence, and LunarLander LoRA graph."""
+    from pathlib import Path
+    from direct_evolution_together.config import reload_config
+    from direct_evolution_together.crowd_trust import sanitize_topology, submit_eval_attestations
+    from direct_evolution_together.environments import create_task_population, get_task_specs_payload
+    from direct_evolution_together.models import ContributorTrust
 
+    # 1. Non-finite / non-numeric topology fields are sanitized cleanly without raising 500
+    clean_topo = sanitize_topology({
+        "nodes": [{"id": "n0", "bias": "not-a-num"}, {"id": "n1", "bias": float("nan")}],
+        "edges": [{"from": "n0", "to": "n1", "weight": float("inf")}],
+    })
+    assert clean_topo is not None
+    assert [n["bias"] for n in clean_topo["nodes"]] == [0.0, 0.0]
+    assert clean_topo["edges"][0]["weight"] == 0.0
 
+    # 2. The max_attestations-th contributor is scored exactly once (no double reputation delta)
+    monkeypatch.setenv("DET_CROWD_MAX_ATTESTATIONS", "2")
+    monkeypatch.setenv("DET_CROWD_QUORUM", "2")
+    reload_config()
+    try:
+        item = {"hash": "abc1234567890def", "summary": {"primary_value": 12.0, "badge_text": "12"}}
+        submit_eval_attestations(
+            room="trust_room", goal="GoalA", generation=0, results=[item], contributor_id="peer_1", active_peers=2
+        )
+        submit_eval_attestations(
+            room="trust_room", goal="GoalA", generation=0, results=[item], contributor_id="peer_2", active_peers=2
+        )
+        p1 = ContributorTrust.objects.get(room="trust_room", contributor_id="peer_1")
+        p2 = ContributorTrust.objects.get(room="trust_room", contributor_id="peer_2")
+        assert p1.submissions == 1 and p1.agreements == 1
+        assert p2.submissions == 1 and p2.agreements == 1
+        assert abs(p1.reputation - p2.reputation) < 1e-6
+
+        # 3. DET_MUJOCO_WASM_URL env var overrides DET_CONFIG_FILE (matching file < env precedence)
+        cfg_file = tmp_path / "det_cfg.json"
+        cfg_file.write_text(json.dumps({"mujoco_wasm_url": "https://file.example/mujoco.js"}), encoding="utf-8")
+        monkeypatch.setenv("DET_CONFIG_FILE", str(cfg_file))
+        monkeypatch.setenv("DET_MUJOCO_WASM_URL", "https://env.example/mujoco.js")
+        assert reload_config().mujoco_wasm_url == "https://env.example/mujoco.js"
+    finally:
+        monkeypatch.delenv("DET_CROWD_MAX_ATTESTATIONS", raising=False)
+        monkeypatch.delenv("DET_CROWD_QUORUM", raising=False)
+        monkeypatch.delenv("DET_CONFIG_FILE", raising=False)
+        monkeypatch.delenv("DET_MUJOCO_WASM_URL", raising=False)
+        reload_config()
+
+    # 4. LunarLander weight_only_mlp LoRA graph preserves l0, l1, and head adapter matrices in network_viz.js
+    ll_genome = create_task_population("lunarlander", 1)[0]
+    ll_spec = get_task_specs_payload()["lunarlander"]
+    nv_path = Path(__file__).resolve().parent.parent / "direct_evolution_together" / "frontend" / "network_viz.js"
+    node_out = json.loads(
+        subprocess.check_output(
+            [
+                "node",
+                "-e",
+                f"""
+const nv = require({json.dumps(str(nv_path))});
+const g = nv.buildGraphModel({json.dumps(ll_genome)}, {json.dumps(ll_spec)});
+console.log(JSON.stringify({{
+  matrices: g.matrices.map((m) => m.title),
+  edgeCount: g.edges.length,
+}}));
+""",
+            ],
+            text=True,
+        )
+    )
+    assert len(node_out["matrices"]) == 3
+    assert "l0" in node_out["matrices"][0]
+    assert "l1" in node_out["matrices"][1]
+    assert "head" in node_out["matrices"][2]
+    assert node_out["edgeCount"] > 0
 
 

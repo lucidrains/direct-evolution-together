@@ -1,6 +1,6 @@
 [project]
 name = "direct-evolution-together"
-version = "0.0.4"
+version = "0.0.5"
 description = "directed evolution on neural networks, together"
 authors = [
     { name = "Phil Wang", email = "lucidrains@gmail.com" }
@@ -65,10 +65,6 @@ testpaths = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.rye]
-managed = true
-dev-dependencies = []
-
 [tool.hatch.metadata]
 allow-direct-references = true
 
@@ -95,19 +91,6 @@ exclude = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["direct_evolution_together"]
-exclude = [
-    "**/__pycache__",
-    "*.so",
-    "*.pyd",
-    "*.dylib",
-    "*.dll",
-    "**/nimble.paths",
-    "**/nimble.develop",
-    "**/nimbledeps",
-    "**/nimcache",
-    "*.sqlite3",
-    "*.sqlite3-*",
-]
 
 [dependency-groups]
 dev = [

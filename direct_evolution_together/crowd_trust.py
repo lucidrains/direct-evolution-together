@@ -137,6 +137,14 @@ def sanitize_replay(raw_replay: object) -> dict[str, object] | None:
     return out
 
 
+def _safe_finite_float(raw: object, fallback: float = 0.0) -> float:
+    try:
+        val = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return fallback
+    return val if math.isfinite(val) else fallback
+
+
 def sanitize_topology(raw_topo: object) -> dict | None:
     if not isinstance(raw_topo, dict) or not isinstance(raw_topo.get("nodes"), list):
         return None
@@ -150,7 +158,7 @@ def sanitize_topology(raw_topo: object) -> dict | None:
                 "kind": str(n.get("kind") or n.get("type") or "hidden")[:16],
                 "label": str(n.get("label") or "")[:24] if n.get("label") else None,
                 "activation": str(n.get("activation") or "tanh")[:16],
-                "bias": float(n.get("bias", 0.0)),
+                "bias": _safe_finite_float(n.get("bias", 0.0)),
             }
             for i, n in enumerate(raw_topo["nodes"])
             if isinstance(n, dict)
@@ -159,7 +167,7 @@ def sanitize_topology(raw_topo: object) -> dict | None:
             {
                 "from": str(e.get("from", e.get("in", "")))[:24],
                 "to": str(e.get("to", e.get("out", "")))[:24],
-                "weight": float(e.get("weight", 0.0)),
+                "weight": _safe_finite_float(e.get("weight", 0.0)),
                 "enabled": bool(e.get("enabled", True)),
             }
             for e in raw_edges
@@ -337,11 +345,13 @@ def _ingest_peer(
         "summary": clean_sum,
         "scored": False,
     }
+    appended = False
     if already_idx is not None:
         if prev_status != "verified" and not atts[already_idx].get("scored"):
             atts[already_idx] = att_entry
     elif len(atts) < trust_cfg.max_attestations:
         atts.append(att_entry)
+        appended = True
 
     cluster = _find_best_cluster(atts, trust_cfg)
     cluster_cids = {c.get("cid") for c in cluster}
@@ -358,7 +368,7 @@ def _ingest_peer(
                 _queue_reputation_delta(rep_deltas, newly_outlier, False)
             for c in atts:
                 c["scored"] = True
-            if already_idx is None and len(atts) >= trust_cfg.max_attestations:
+            if already_idx is None and not appended and len(atts) >= trust_cfg.max_attestations:
                 _queue_reputation_delta(
                     rep_deltas,
                     [contrib.contributor_id],
@@ -578,12 +588,6 @@ def submit_eval_attestations(
         "verified_count": verified_count,
         "quorum": eff_quorum,
     }
-
-
-def count_verified_room_evals(room: str, goal: str, generation: int) -> int:
-    return ExternalEvalResult.objects.filter(
-        room=room, goal=goal, generation=generation, status="verified"
-    ).count()
 
 
 def fetch_room_eval_map(room: str, goal: str, generation: int, *, trusted_only: bool = True) -> dict[str, dict]:
@@ -847,51 +851,6 @@ def claim_crowd_eval_shard_indices(
             if gh and gh not in done and gh in leases
         )
         return [idx for _, _, idx in leased_undone[:eff_batch]], completed_cnt
-
-
-def claim_crowd_eval_shard(
-    room: str,
-    goal: str,
-    generation: int,
-    candidates: list[dict],
-    *,
-    peer_id: str,
-    batch_size: int = 4,
-    lease_ttl_sec: float = 45.0,
-    done_hashes: set[str] | None = None,
-) -> list[dict]:
-    """Assign a disjoint batch of unevaluated candidates to ``peer_id`` with TTL lease expiry."""
-    if not candidates or batch_size <= 0:
-        return []
-    pop_hashes = [str(c.get("hash") or "") for c in candidates]
-    chosen_idxs, _ = claim_crowd_eval_shard_indices(
-        room,
-        goal,
-        generation,
-        pop_hashes,
-        peer_id=peer_id,
-        batch_size=batch_size,
-        lease_ttl_sec=lease_ttl_sec,
-        done_hashes=done_hashes,
-    )
-    return [candidates[i] for i in chosen_idxs]
-
-
-def release_completed_shard_leases(
-    room: str,
-    goal: str,
-    generation: int,
-    completed_hashes: Iterable[str],
-) -> None:
-    key = (room, goal, int(generation))
-    with _SHARD_LOCK:
-        leases = _SHARD_LEASES.get(key)
-        if not leases:
-            return
-        for gh in completed_hashes:
-            leases.pop(str(gh), None)
-        if not leases:
-            _SHARD_LEASES.pop(key, None)
 
 
 def compute_goal_eval_rankings(

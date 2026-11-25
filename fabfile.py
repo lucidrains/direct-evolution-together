@@ -201,6 +201,7 @@ def _render_runtime_env_dict(cfg: DeployConfig) -> dict[str, str]:
     }
     _pass_prefixes = (
         "DET_CONFIG_FILE",
+        "DET_LARGE_POP",
         "DET_MUJOCO_WASM_URL",
         "DET_CROWD_",
         "DET_EXECUTION_POLICY_",

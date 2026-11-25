@@ -107,7 +107,7 @@ def main() -> None:
         "--min-votes",
         type=int,
         default=None,
-        help="Quick local override for required votes per round across all rooms/goals (1-256)",
+        help="Quick local override for required votes per round across all rooms/goals (1-1024)",
     )
     parser.add_argument(
         "--countdown-ms",
@@ -119,7 +119,7 @@ def main() -> None:
         "--max-votes-per-user",
         type=int,
         default=int(os.getenv("MUMMY_MAX_VOTES", "20")),
-        help="Max active votes per user per round in public rooms and default for private rooms (1-64, default: 20)",
+        help="Max active votes per user per round in public rooms and default for private rooms (1-256, default: 20)",
     )
     parser.add_argument(
         "--mutation-sigma",
@@ -292,7 +292,7 @@ def main() -> None:
                 pop_size=pop_size,
                 pop_size_override=eff_pop_override,
                 min_votes=eff_min_votes,
-                min_votes_override=min_votes_override,
+                min_votes_override=min_votes_override or det_settings.MIN_VOTES_OVERRIDE,
                 countdown_ms=countdown_ms,
                 max_votes=max_votes,
                 mut_sigma=mut_sigma,

@@ -33,6 +33,7 @@ def main() -> None:
         port=settings.WS_PORT,
         seed=True,
         pop_size=settings.POPULATION_SIZE,
+        pop_size_override=settings.POPULATION_SIZE_OVERRIDE,
         min_votes=settings.MIN_VOTES if settings.MIN_VOTES_EXPLICIT else None,
         min_votes_override=settings.MIN_VOTES_OVERRIDE,
         countdown_ms=settings.COUNTDOWN_MS,

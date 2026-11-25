@@ -1343,3 +1343,36 @@
   border-color: rgba(56, 189, 248, 0.32);
   background: rgba(56, 189, 248, 0.06);
 }
+
+@media (max-width: 640px) {
+  .private-goal-row {
+    flex-direction: column;
+  }
+  .private-goal-row .task-select {
+    flex: 1 1 auto !important;
+    width: 100%;
+  }
+  .worker-banner {
+    padding: 0.55rem 0.65rem;
+    gap: 0.5rem;
+  }
+  .worker-banner-actions {
+    width: 100%;
+  }
+  .worker-banner-actions button {
+    flex: 1 1 auto;
+    text-align: center;
+    padding: 0.3rem 0.48rem;
+    font-size: 0.71rem;
+  }
+  .fs-overlay {
+    padding: 0.55rem;
+  }
+  .fs-dialog {
+    padding: 0.72rem 0.75rem 0.82rem;
+  }
+  .fs-nav-btn {
+    width: 28px;
+    height: 38px;
+  }
+}

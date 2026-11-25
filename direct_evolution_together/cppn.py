@@ -336,15 +336,6 @@ def _sample_parents_batch(
     ]
 
 
-def _sample_parents(
-    pool: list[int],
-    scores: list[int],
-    crossover_rate: float = DEFAULT_CROSSOVER_RATE,
-) -> tuple[int, int, bool]:
-    """Sample parent indices using PopuLoRA's tournament parent selector."""
-    return _sample_parents_batch(pool, scores, 1, crossover_rate=crossover_rate)[0]
-
-
 def _evolve_population_slots(
     genome_dicts: Iterable[dict],
     scores: list[int],
@@ -617,42 +608,6 @@ def evolve_population(
     )
     ordered = sorted(fixed, key=lambda item: int(item["slot"]))
     return [item["genome"] for item in ordered[:pop_size]], top_score  # type: ignore[misc]
-
-
-def resize_population(
-    genome_dicts: Iterable[dict],
-    target_size: int,
-    scores: list[int],
-    up_counts: list[int],
-    mut_sigma: float = 0.35,
-) -> list[dict]:
-    """Resize a population while keeping existing genomes (growing via breeding or shrinking by rank)."""
-    existing = list(genome_dicts)
-    if target_size <= len(existing):
-        return existing[:target_size]
-
-    parents = [CPPN.from_dict(g) for g in existing]
-    ranked = sorted(
-        range(len(parents)),
-        key=lambda i: (-scores[i], -up_counts[i], i),
-    )
-    liked = [i for i in ranked if scores[i] > 0]
-    pool = liked or [i for i in ranked if scores[i] >= 0]
-
-    need_extra = target_size - len(existing)
-    extra: list[dict] = []
-    if pool:
-        for idx_a, idx_b, use_cross in _sample_parents_batch(pool, scores, need_extra):
-            child = CPPN.crossover_and_mutate(
-                parents[idx_a],
-                parents[idx_b],
-                use_crossover=use_cross,
-                mut_sigma=mut_sigma,
-            )
-            extra.append(child.to_dict())
-    else:
-        extra = [CPPN.random().to_dict() for _ in range(need_extra)]
-    return existing + extra
 
 
 def slugify_policy_name(goal: str, generation: int, index: int) -> str:
